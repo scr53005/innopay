@@ -1,0 +1,35 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model bip39seedandaccount {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @unique(map: "bip39seedandaccount_userid_key")
+  seed        String
+  accountName String   @unique(map: "bip39seedandaccount_accountname_key") @db.VarChar(16)
+  hivetxid    String?  @unique
+  innouser    innouser @relation(fields: [userId], references: [id], map: "bip39seedandaccount_userid_fkey")
+}
+
+model innouser {
+  id                  Int                  @id @default(autoincrement())
+  email               String               @unique
+  phoneNumber         String?
+  createdAt           DateTime             @default(now())
+  verified            Boolean              @default(false)
+  bip39seedandaccount bip39seedandaccount?
+  topup               topup[]
+}
+
+model topup {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  amountEuro Decimal  @db.Decimal(65, 2)
+  topupAt    DateTime @default(now())
+  innouser   innouser @relation(fields: [userId], references: [id], map: "topup_userid_fkey")
+}

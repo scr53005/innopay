@@ -6,10 +6,10 @@ type Locale = 'en' | 'fr' | 'de' | 'lb';
 
 // Translations object for the button text
 const translations: Record<Locale, string> = { // Explicitly type translations object
-  en: "Create / Top-up your wallet",
-  fr: "Créez / Alimentez votre portefeuille",
-  de: "Wallet erstellen / aufladen", // German translation
-  lb: "Portemonnaie erstellen / oplueden" // Luxembourgish translation
+  en: "Create and top-up your wallet",
+  fr: "Créez et alimentez votre portefeuille",
+  de: "Wallet erstellen und aufladen", // German translation
+  lb: "Portemonnaie erstellen an oplueden" // Luxembourgish translation
 };
 
 // Create a context for the locale with a default value
