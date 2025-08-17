@@ -6,6 +6,30 @@ import { formatAccountName } from './utils';
 // Configure the Hive client to connect to a public node.
 const hiveClient = new Client(['https://api.hive.blog', 'https://api.syncad.com', 'https://api.openhive.network']);
 
+/**
+ * Defines the structure for a Keychain object, containing all necessary
+ * Hive account keys derived from a seed.
+ */
+export type Keychain = {
+  masterPassword: string;
+  owner: {
+    privateKey: string;
+    publicKey: string;
+  };
+  active: {
+    privateKey: string;
+    publicKey: string;
+  };
+  posting: {
+    privateKey: string;
+    publicKey: string;
+  };
+  memo: {
+    privateKey: string;
+    publicKey: string;
+  };
+};
+
 export function getSeed(accountName?: string): string {
   const seed = bip39.generateMnemonic(128); // 12-word seed
   console.log("For account name '"+accountName+"' generated BIP-39 seed phrase: "+seed);
@@ -53,6 +77,43 @@ export async function findNextAvailableAccountName(lastAccountName: string | nul
   return availableAccountName;
 }
 
+export function generateHiveKeys(accountName: string, seed: string): Keychain {
+  const masterKey = 'P' + PrivateKey.fromSeed(seed).toString();
+  console.log(`Using master key for account ${accountName} with seed ${seed}: ${masterKey}`);
+
+  const owner = PrivateKey.fromLogin(accountName, masterKey, 'owner');
+  const active = PrivateKey.fromLogin(accountName, masterKey, 'active'); 
+  const posting = PrivateKey.fromLogin(accountName, masterKey, 'posting');
+  const memo = PrivateKey.fromLogin(accountName, masterKey, 'memo');
+
+  const ownerPublic = owner.createPublic().toString()
+  const activePublic = active.createPublic().toString();
+  const postingPublic = posting.createPublic().toString();
+  const memoPublic = memo.createPublic().toString();
+
+  let keychain: Keychain = {
+    masterPassword: masterKey,
+    owner: {
+      privateKey: owner.toString(),
+      publicKey: ownerPublic,
+    },
+    active: {
+      privateKey: active.toString(),
+      publicKey: activePublic,
+    },
+    posting: {
+      privateKey: posting.toString(),
+      publicKey: postingPublic,
+    },
+    memo: {
+      privateKey: memo.toString(),
+      publicKey: memoPublic,
+    },
+  };
+  console.log(`Generated Hive keys for account ${accountName}:`, keychain);
+  return keychain;
+}
+
 // This function handles the blockchain transaction creation and broadcasting.
 // It tries to create a new account using a "claim token" from `creatorAccount`.
 // If that fails, it falls back to creating the account by paying 3 HIVE from `fallbackAccount`.
@@ -69,21 +130,8 @@ export async function createAndBroadcastHiveAccount(accountName: string, seed: s
     throw new Error('Neither ticket holder nor innopay keys found in the environment.');
   }
 
-  // const seed = getSeed(accountName);
-  const masterKey = 'P' + PrivateKey.fromSeed(seed).toString();
-  console.log(`Using master key for account ${accountName} with seed ${seed}: ${masterKey}`);
-
-  const owner = PrivateKey.fromLogin(accountName, masterKey, 'owner');
-  const active = PrivateKey.fromLogin(accountName, masterKey, 'active'); 
-  const posting = PrivateKey.fromLogin(accountName, masterKey, 'posting');
-  const memo = PrivateKey.fromLogin(accountName, masterKey, 'memo');
-
-  const publicKeys = {
-    owner: owner.createPublic().toString(),
-    active: active.createPublic().toString(),
-    posting: posting.createPublic().toString(),
-    memo: memo.createPublic().toString(),
-  };
+  const keychain = generateHiveKeys(accountName, seed);
+ 
 
   // --- Step 2: Get current blockchain block details for transaction validity ---
   const dynamicGlobalProperties = await hiveClient.database.getDynamicGlobalProperties();
@@ -123,7 +171,7 @@ export async function createAndBroadcastHiveAccount(accountName: string, seed: s
               [fallbackAccount, 1]
             ], // Add fallback account as active authority
             key_auths: [
-              [publicKeys.owner, 1]
+              [keychain.owner.publicKey, 1]
             ],
           },
           active: {
@@ -132,7 +180,7 @@ export async function createAndBroadcastHiveAccount(accountName: string, seed: s
               [fallbackAccount, 1] // Add the fallback account as active authority for innopay
             ],
             key_auths: [
-              [publicKeys.active, 1]
+              [keychain.active.publicKey, 1]
             ],
           },
           posting: {
@@ -141,10 +189,10 @@ export async function createAndBroadcastHiveAccount(accountName: string, seed: s
               [fallbackAccount, 1]
             ], // Add fallback account as active authority
             key_auths: [
-              [publicKeys.posting, 1]
+              [keychain.posting.publicKey, 1]
             ],
           },
-          memo_key: publicKeys.memo,
+          memo_key: keychain.memo.publicKey,
           json_metadata: '{}',
           extensions: [],
         },
@@ -180,7 +228,7 @@ export async function createAndBroadcastHiveAccount(accountName: string, seed: s
                   [fallbackAccount, 1]
                 ], // Add fallback account as active authority
                 key_auths: [
-                  [publicKeys.owner, 1]
+                  [keychain.owner.publicKey, 1]
                 ],
               },
               active: {
@@ -189,7 +237,7 @@ export async function createAndBroadcastHiveAccount(accountName: string, seed: s
                   [fallbackAccount, 1]
                 ], // Add fallback account as active authority
                 key_auths: [
-                  [publicKeys.active, 1]
+                  [keychain.active.publicKey, 1]
                 ],
               },
               posting: {
@@ -198,10 +246,10 @@ export async function createAndBroadcastHiveAccount(accountName: string, seed: s
                   [fallbackAccount, 1]
                 ], // Add fallback account as active authority
                 key_auths: [
-                  [publicKeys.posting, 1]
+                  [keychain.posting.publicKey, 1]
                 ],
               },
-              memo_key: publicKeys.memo,
+              memo_key: keychain.memo.publicKey,
               json_metadata: '{}',
               extensions: [],
             },

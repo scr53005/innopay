@@ -12,6 +12,8 @@ import {
   nextAccountName
 } from '@/services/database'; 
 import { 
+  Keychain,
+  generateHiveKeys,
   createAndBroadcastHiveAccount,
   findNextAvailableAccountName,
   getSeed,
@@ -63,10 +65,10 @@ export async function POST(req: NextRequest) {
           object: {
             id: 'cs_mock_session_123',
             object: 'checkout.session',
-            amount_total: 4000, // amount in EUR expressed in cents
+            amount_total: 250, // amount in EUR expressed in cents
             currency: 'eur',
             customer_details: {
-              email: 'tester@innopay.eu',
+              email: 'sorin@offchain.lu',
               // ... other customer details as needed
             },
             payment_status: 'paid',
@@ -168,6 +170,9 @@ export async function POST(req: NextRequest) {
           seed = innoUser.bip39seedandaccount.seed
           console.log(`Using existing account name: ${accountName} and seed for user ${seed}`);
 
+          // const userKeychain = generateHiveKeys(accountName, innoUser.bip39seedandaccount.seed);
+          // console.log(`Regenerated keychain for user: ${customerEmail}`, userKeychain);
+
           // Transfer EURO tokens after the account creation transaction is confirmed
           const tokenTxId = await transferEuroTokens(accountName, amountInEuro);
           console.log(`EURO token transfer to ${accountName} with transaction ID: ${tokenTxId}`);          
@@ -177,9 +182,6 @@ export async function POST(req: NextRequest) {
             userId: innoUser.id,
           }, { status: 200 });
         }
-        
-
-
       } catch (error: any) {
         console.error('Error processing checkout session (business process failed):', error);
         return NextResponse.json({ message: 'Business process failed' }, { status: 500 });
