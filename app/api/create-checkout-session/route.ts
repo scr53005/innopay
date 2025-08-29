@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 
+// Debug: Testing Preview deployment
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   // IMPORTANT: The API version '2025-06-30.basil' is unusual.
   // This is set to resolve a specific TypeScript error in your environment.
