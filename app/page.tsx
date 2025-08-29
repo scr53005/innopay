@@ -6,10 +6,10 @@ type Locale = 'en' | 'fr' | 'de' | 'lb';
 
 // Translations object for the button text
 const translations: Record<Locale, string> = { // Explicitly type translations object
-  en: "Create and top-up your wallet",
-  fr: "Créez et alimentez votre portefeuille",
-  de: "Wallet erstellen und aufladen", // German translation
-  lb: "Portemonnaie erstellen an oplueden" // Luxembourgish translation
+  en: "Top-up your wallet",
+  fr: "Alimentez votre portefeuille",
+  de: "Wallet aufladen", // German translation
+  lb: "Portemonnaie oplueden" // Luxembourgish translation
 };
 
 // Create a context for the locale with a default value
@@ -51,7 +51,7 @@ const App = () => {
 
   // Function to handle button click and redirect
   const handleButtonClick = () => {
-    window.open("https://donate.stripe.com/3cIdR81Zsg3Hay7cG13cc01", "_blank");
+    window.open("https://donate.stripe.com/test_3cI5kDcOffdWbR33BLf3a00", "_blank");
   };
 
   // Placeholder for the Innopay SVG.
