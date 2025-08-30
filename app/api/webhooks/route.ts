@@ -32,20 +32,16 @@ export const config = {
 };
 
 export async function POST(req: NextRequest) {
-  // const buf = await req.text(); // Get the raw body as text
-  // const sig = req.headers.get('stripe-signature');
-  // const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
-
   let event: Stripe.Event;
+  const buf = await req.text(); // Get the raw body as text
+  const sig = req.headers.get('stripe-signature');
 
   // --- START TEMPORARY MOCKING LOGIC ---
   // For local testing, you can mock the event directly.
   // In production, you MUST use stripe.webhooks.constructEvent.
   try {
     // Attempt to verify if signature is present (for more robust local testing)
-    const sig = req.headers.get('stripe-signature');
     if (sig) {
-      const buf = await req.text();
       const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
       event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
     } else {
@@ -89,7 +85,7 @@ export async function POST(req: NextRequest) {
   switch (event.type) {
     case 'checkout.session.completed':
       const checkoutSession = event.data.object as Stripe.Checkout.Session;
-      console.log('Mocked Checkout Session Completed!', checkoutSession.id);
+      console.log('Checkout Session Completed!', checkoutSession.id);
       console.log('Customer Email:', checkoutSession.customer_details?.email);
       console.log('Amount Total:', checkoutSession.amount_total);
       
@@ -189,7 +185,14 @@ export async function POST(req: NextRequest) {
     case 'payment_intent.succeeded':
       const paymentIntent = event.data.object as Stripe.PaymentIntent;
       console.log('Mocked Payment Intent Succeeded!', paymentIntent.id);
+      // Then define and call a method to handle the successful payment intent.
+      // handlePaymentIntentSucceeded(paymentIntent);
       break;
+    case 'payment_method.attached':
+      const paymentMethod = event.data.object;
+      // Then define and call a method to handle the successful attachment of a PaymentMethod.
+      // handlePaymentMethodAttached(paymentMethod);
+      break;      
     default:
       console.warn(`Unhandled event type ${event.type}`);
   }
