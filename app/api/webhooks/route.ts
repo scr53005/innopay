@@ -34,6 +34,7 @@ export const config = {
 export async function POST(req: NextRequest) {
   let event: Stripe.Event;
   const buf = await req.text(); // Get the raw body as text
+  console.log('Webhook received, headers:', req.headers);
   const sig = req.headers.get('stripe-signature');
 
   // --- START TEMPORARY MOCKING LOGIC ---
@@ -190,6 +191,7 @@ export async function POST(req: NextRequest) {
       break;
     case 'payment_method.attached':
       const paymentMethod = event.data.object;
+      console.log('Mocked Payment attached Succeeded!', paymentMethod.id);
       // Then define and call a method to handle the successful attachment of a PaymentMethod.
       // handlePaymentMethodAttached(paymentMethod);
       break;      
