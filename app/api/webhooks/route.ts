@@ -1,4 +1,4 @@
-// app/api/webhooks/route.ts (TEMPORARY MODIFICATION FOR LOCAL TESTING)
+// app/api/webhooks/route.ts (Moving to actual stripe integration with webhook handling)
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 
@@ -34,7 +34,7 @@ export const config = {
 export async function POST(req: NextRequest) {
   let event: Stripe.Event;
   const buf = await req.text(); // Get the raw body as text
-  console.log('Webhook received, headers:', req.headers);
+  console.log('If we are here, the webhook was received, headers:', req.headers);
   const sig = req.headers.get('stripe-signature');
 
   // --- START TEMPORARY MOCKING LOGIC ---
