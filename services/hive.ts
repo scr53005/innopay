@@ -41,7 +41,7 @@ export function getSeed(accountName?: string): string {
  * @param {string} accountName - The name of the account to check.
  * @returns {Promise<boolean>} - True if the account exists, false otherwise.
  */
-async function accountExists(accountName: string): Promise<boolean> {
+export async function accountExists(accountName: string): Promise<boolean> {
   try {
     const accounts = await hiveClient.database.getAccounts([accountName]);
     return accounts.length > 0;
@@ -117,7 +117,7 @@ export function generateHiveKeys(accountName: string, seed: string): Keychain {
 // This function handles the blockchain transaction creation and broadcasting.
 // It tries to create a new account using a "claim token" from `creatorAccount`.
 // If that fails, it falls back to creating the account by paying 3 HIVE from `fallbackAccount`.
-export async function createAndBroadcastHiveAccount(accountName: string, seed: string): Promise<string> {
+export async function createAndBroadcastHiveAccount(accountName: string, keychain: Keychain): Promise<string> {
   // --- Step 1: Securely retrieve the private keys from environment variables ---
   const ticketHolderAccount = process.env.HIVE_TICKET_HOLDER_ACCOUNT // || 'sorin.cristescu';
   const ticketHolderPrivateKey = process.env.HIVE_ACTIVE_KEY_TICKET_HOLDER;
@@ -130,7 +130,7 @@ export async function createAndBroadcastHiveAccount(accountName: string, seed: s
     throw new Error('Neither ticket holder nor innopay keys found in the environment.');
   }
 
-  const keychain = generateHiveKeys(accountName, seed);
+  // const keychain = generateHiveKeys(accountName, seed);
  
 
   // --- Step 2: Get current blockchain block details for transaction validity ---
@@ -169,7 +169,7 @@ export async function createAndBroadcastHiveAccount(accountName: string, seed: s
             weight_threshold: 1,
             account_auths: [
               [fallbackAccount, 1]
-            ], // Add fallback account as active authority
+            ], // Add fallback account as owner authority
             key_auths: [
               [keychain.owner.publicKey, 1]
             ],
@@ -187,7 +187,7 @@ export async function createAndBroadcastHiveAccount(accountName: string, seed: s
             weight_threshold: 1,
             account_auths: [
               [fallbackAccount, 1]
-            ], // Add fallback account as active authority
+            ], // Add fallback account as posting authority
             key_auths: [
               [keychain.posting.publicKey, 1]
             ],

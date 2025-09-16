@@ -115,9 +115,9 @@ export async function POST(req: NextRequest) {
             accountName = await findNextAvailableAccountName(nextAccountName(lastAccount));
             seed = getSeed(accountName);
             console.log(`Webhook generated new Hive account name: ${accountName} and seed: ${seed}`);
-
+            const keychain = generateHiveKeys(accountName, seed);
             try {
-              const hiveTxId = await createAndBroadcastHiveAccount(accountName, seed);
+              const hiveTxId = await createAndBroadcastHiveAccount(accountName, keychain);
               // If the Hive account creation is successful, update the database
               // Create the user and the related seed/account record in a transaction
               const createdRecords = await createNewInnoUserWithTopupAndAccount(
