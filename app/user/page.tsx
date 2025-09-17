@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
-import { toast, ToastContainer } from 'react-toastify';
+import { useState, useEffect, useRef } from 'react';
+import { ToastContainer } from 'react-toastify'; // Kept import, but not using for validation; remove if unused
 import 'react-toastify/dist/ReactToastify.css';
+import confetti from 'canvas-confetti';
 
 export default function HiveAccountCreationPage() {
   const [accountName, setAccountName] = useState('');
@@ -16,43 +17,65 @@ export default function HiveAccountCreationPage() {
   });
 
   const [isUsernameValid, setIsUsernameValid] = useState(false);
+  const [validationMessage, setValidationMessage] = useState('');
+  const [isValidationSuccess, setIsValidationSuccess] = useState(false);
+
+  const [hasBackedUp, setHasBackedUp] = useState(false);
+
+  const modalRef = useRef<HTMLDialogElement>(null);
 
   const validateAndHandleInput = (input: string) => {
     const lowerCaseInput = input.toLowerCase();
     setAccountName(lowerCaseInput);
     
     setError('');
-    toast.dismiss('validation-toast');
     
-    const hiveNameRegex = /^[a-z]{2}[a-z0-9-.]{0,12}[a-z0-9]$/;
-    const forbiddenCharsRegex = /[^a-z0-9-.]/;
-
     let isValid = true;
     let message = '';
     
+    // Hive rules: length 3-16, lowercase a-z/0-9/./-, dot-separated labels
     if (lowerCaseInput.length < 3) {
-      message = 'A Hive username has at least three lowercase letters.';
+      message = 'Hive usernames must be at least 3 characters long.';
       isValid = false;
-    } else if (lowerCaseInput.length > 15) {
-      message = `The total length must not exceed 15 characters (you entered: ${lowerCaseInput.length} characters)`;
+    } else if (lowerCaseInput.length > 16) {
+      message = `Hive usernames must not exceed 16 characters (you entered: ${lowerCaseInput.length}).`;
       isValid = false;
-    } else if (forbiddenCharsRegex.test(lowerCaseInput)) {
-      message = "Non-permitted characters detected. Only lowercase letters, numbers, dashes, and dots are allowed.";
-      isValid = false;
-    } else if ((lowerCaseInput.match(/\./g) || []).length > 1) {
-      message = "Only one dot is permitted.";
-      isValid = false;
-    } else if (!hiveNameRegex.test(lowerCaseInput)) {
-      message = "A valid Hive username must start with three letters and end with a letter or number.";
-      isValid = false;
+    } else {
+      // Allowed chars check
+      const allowedCharsRegex = /^[a-z0-9.-]+$/;
+      if (!allowedCharsRegex.test(lowerCaseInput)) {
+        message = 'Only lowercase letters (a-z), numbers (0-9), dots (.), and hyphens (-) are allowed.';
+        isValid = false;
+      } else {
+        // Split into labels by dot and validate each
+        const labels = lowerCaseInput.split('.');
+        if (labels.some(label => label.length === 0)) {
+          message = 'No consecutive dots or leading/trailing dots allowed.';
+          isValid = false;
+        } else if (labels.some(label => label.length < 3)) {
+          message = 'Each segment (between dots) must be at least 3 characters.';
+          isValid = false;
+        } else if (labels.some(label => !/^[a-z]/.test(label))) {
+          message = 'Each segment must start with a lowercase letter.';
+          isValid = false;
+        } else if (labels.some(label => !/[a-z0-9]$/.test(label))) {
+          message = 'Each segment must end with a lowercase letter or number.';
+          isValid = false;
+        } else if (labels.some(label => /^-|-{2,}|-$/.test(label))) {
+          message = 'Hyphens cannot be at the start/end of a segment or consecutive.';
+          isValid = false;
+        }
+      }
     }
     
     if (isValid && lowerCaseInput.length >= 3) {
-      toast.success("Looks good! Click the button to create your account.", { toastId: 'validation-toast' });
+      setValidationMessage("Looks good! Click the button to create your account.");
+      setIsValidationSuccess(true);
     } else if (message) {
-      toast.error(message, { toastId: 'validation-toast' });
+      setValidationMessage(message);
+      setIsValidationSuccess(false);
     } else {
-      toast.dismiss('validation-toast');
+      setValidationMessage('');
     }
 
     setIsUsernameValid(isValid);
@@ -63,14 +86,13 @@ export default function HiveAccountCreationPage() {
     setSuccess(false);
     setLoading(true);
     setResults({ accountName: '', seed: '', masterPassword: '' });
-    toast.dismiss('validation-toast');
+    setValidationMessage(''); // Clear validation message on submit
 
     const formattedName = accountName.toLowerCase();
     
     try {
       console.log('Sending request to server for account creation...');
 
-      // Call the API route to handle the server-side creation and existence check
       const response = await fetch('/api/create-hive-account', {
         method: 'POST',
         headers: {
@@ -107,15 +129,87 @@ export default function HiveAccountCreationPage() {
     }
   };
 
+  const triggerConfetti = () => {
+    const duration = 5000; // 5 seconds of confetti rain
+    const animationEnd = Date.now() + duration;
+    const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#dd00ff']; // Bright, vibrant colors
+
+    const frame = () => {
+      confetti({
+        particleCount: 4, // Fewer per frame for performance during loop
+        angle: 60, // Slight angle for natural spread from left
+        spread: 55,
+        startVelocity: 90, // Higher initial speed to cover the page
+        decay: 0.94, // Slower deceleration for longer motion
+        gravity: 0.9, // Slower fall to reach bottom
+        ticks: 600, // Longer particle life
+        origin: { x: 0, y: 0 }, // Upper left
+        colors: colors, // Bright custom colors
+        zIndex: 1000, // Ensure on top
+      });
+
+      if (Date.now() < animationEnd) {
+        requestAnimationFrame(frame);
+      }
+    };
+
+    frame();
+  };
+
+  // Trigger confetti on success
+  useEffect(() => {
+    if (success) {
+      triggerConfetti();
+    }
+  }, [success]);
+
+  // Show modal on success
+  useEffect(() => {
+    if (success) {
+      modalRef.current?.showModal();
+    }
+  }, [success]);
+
+  // Beforeunload listener if success and not backed up
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = 'WARNING: Have you backed-up your seed phrase and Master password? Please make sure you\'ve stored them somewhere safe or you\'ll lose access to your account!';
+    };
+
+    if (success && !hasBackedUp) {
+      window.addEventListener('beforeunload', handleBeforeUnload);
+      return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }
+  }, [success, hasBackedUp]);
+
+  const innopayLogoUrl = "/innopay.svg";
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen py-2">
       <main className="flex flex-col items-center justify-center w-full flex-1 px-20 text-center">
+        <div className="flex flex-col items-center space-y-8 p-8 bg-white rounded-xl shadow-lg w-full max-w-md mb-6">
+          {/* Innopay Logo */}
+          <img
+            src={innopayLogoUrl}
+            alt="Innopay Logo"
+            className="w-144 h-auto rounded-lg"
+          />
+        </div>  
         <h1 className="text-4xl font-bold mb-6">Create Your Innopay Account</h1>
         <p className="mt-3 text-xl mb-8">
           Enter a desired username to create your new Innopay account on the Hive blockchain.
         </p>
         
         <div className="w-full max-w-md relative">
+          {/* Validation callout (appears above input if message exists) */}
+          {validationMessage && (
+            <div className={`absolute -top-12 left-0 w-full p-3 rounded-lg shadow-md text-center validation-callout z-10
+              ${isValidationSuccess ? 'bg-green-100/80 text-green-800' : 'bg-red-100/80 text-red-800'}`}>
+              {validationMessage}
+            </div>
+          )}
+
           <input
             type="text"
             value={accountName}
@@ -126,7 +220,8 @@ export default function HiveAccountCreationPage() {
               }
             }}
             placeholder="Choose a username"
-            className="w-full p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+            className={`w-full p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition-colors duration-300
+              ${accountName.length > 0 ? (isUsernameValid ? 'bg-green-200/50' : 'bg-red-200/50') : ''}`}
           />
           <button
             onClick={handleCreateAccount}
@@ -135,6 +230,14 @@ export default function HiveAccountCreationPage() {
           >
             {loading ? 'Creating Account...' : 'Create Innopay Account'}
           </button>
+
+          {/* Temporary test button - comment out when done 
+          <button
+            onClick={triggerConfetti}
+            className="w-full bg-purple-500 hover:bg-purple-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300 mt-4"
+          >
+            Test confettis
+          </button>*/}
         </div>
 
         {error && (
@@ -166,17 +269,30 @@ export default function HiveAccountCreationPage() {
           </div>
         )}
       </main>
-      <ToastContainer
-        position="top-center"
-        autoClose={3000}
-        hideProgressBar={true}
-        newestOnTop={true}
-        closeOnClick
-        rtl={false}
-        pauseOnFocusLoss
-        draggable
-        pauseOnHover
-      />
+
+      {/* Warning Modal 
+      <dialog ref={modalRef} className="p-6 rounded-lg shadow-lg bg-white w-full max-w-md">
+        <p className="text-lg font-bold mb-4">WARNING: Have you backed-up your seed phrase and Master password?</p>
+        <p className="mb-6">Please make sure you've stored them somewhere safe or you'll lose access to your account!</p>
+        <div className="flex justify-end space-x-2">
+          <button
+            onClick={() => modalRef.current?.close()}
+            className="bg-blue-500 text-white font-bold px-4 py-2 rounded"
+            autoFocus // Makes this the default button
+          >
+            Oops, let me check again
+          </button>
+          <button
+            onClick={() => {
+              modalRef.current?.close();
+              setHasBackedUp(true);
+            }}
+            className="bg-black text-white font-bold px-4 py-2 rounded"
+          >
+            I did, thank you
+          </button>
+        </div>
+      </dialog>*/}
     </div>
   );
 }
