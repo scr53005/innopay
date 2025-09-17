@@ -1,27 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { getSeed, generateHiveKeys, accountExists, Keychain } from '@/services/hive';
-
-// A separate API route will handle the actual account creation to keep private keys server-side.
-// We'll create this route in the next step.
-async function createHiveAccount(accountName: string, keychain: Keychain): Promise<string> {
-  const response = await fetch('/api/create-hive-account', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ accountName, keychain }),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.error || 'Failed to create Hive account.');
-  }
-
-  const data = await response.json();
-  return data.transactionId;
-}
+import { toast, ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 
 export default function HiveAccountCreationPage() {
   const [accountName, setAccountName] = useState('');
@@ -34,50 +15,88 @@ export default function HiveAccountCreationPage() {
     masterPassword: '',
   });
 
+  const [isUsernameValid, setIsUsernameValid] = useState(false);
+
+  const validateAndHandleInput = (input: string) => {
+    const lowerCaseInput = input.toLowerCase();
+    setAccountName(lowerCaseInput);
+    
+    setError('');
+    toast.dismiss('validation-toast');
+    
+    const hiveNameRegex = /^[a-z]{2}[a-z0-9-.]{0,12}[a-z0-9]$/;
+    const forbiddenCharsRegex = /[^a-z0-9-.]/;
+
+    let isValid = true;
+    let message = '';
+    
+    if (lowerCaseInput.length < 3) {
+      message = 'A Hive username has at least three lowercase letters.';
+      isValid = false;
+    } else if (lowerCaseInput.length > 15) {
+      message = `The total length must not exceed 15 characters (you entered: ${lowerCaseInput.length} characters)`;
+      isValid = false;
+    } else if (forbiddenCharsRegex.test(lowerCaseInput)) {
+      message = "Non-permitted characters detected. Only lowercase letters, numbers, dashes, and dots are allowed.";
+      isValid = false;
+    } else if ((lowerCaseInput.match(/\./g) || []).length > 1) {
+      message = "Only one dot is permitted.";
+      isValid = false;
+    } else if (!hiveNameRegex.test(lowerCaseInput)) {
+      message = "A valid Hive username must start with three letters and end with a letter or number.";
+      isValid = false;
+    }
+    
+    if (isValid && lowerCaseInput.length >= 3) {
+      toast.success("Looks good! Click the button to create your account.", { toastId: 'validation-toast' });
+    } else if (message) {
+      toast.error(message, { toastId: 'validation-toast' });
+    } else {
+      toast.dismiss('validation-toast');
+    }
+
+    setIsUsernameValid(isValid);
+  };
+  
   const handleCreateAccount = async () => {
     setError('');
     setSuccess(false);
     setLoading(true);
     setResults({ accountName: '', seed: '', masterPassword: '' });
+    toast.dismiss('validation-toast');
 
-    // Step 1: Hive account name validation
     const formattedName = accountName.toLowerCase();
-    const hiveNameRegex = /^[a-z]{3,15}[0-9-.]*[a-z0-9]$/;
-
-    if (formattedName.length < 3 || formattedName.length > 15) {
-      setError('Username must be between 3 and 15 characters.');
-      setLoading(false);
-      return;
-    }
-
-    if (!hiveNameRegex.test(formattedName)) {
-      setError('Invalid username format. Must start with three letters and contain only lowercase letters, numbers, and at most one dot or dash.');
-      setLoading(false);
-      return;
-    }
-
+    
     try {
-      // Step 2: Check if the account name exists on the blockchain
-      const exists = await accountExists(formattedName);
-      if (exists) {
-        setError("This account exists already, is it yours? If it is, do you still have its keys? If it's not, you'll need to pick a different account name as account names are unique.");
-        setLoading(false);
-        return;
+      console.log('Sending request to server for account creation...');
+
+      // Call the API route to handle the server-side creation and existence check
+      const response = await fetch('/api/create-hive-account', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ accountName: formattedName }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to create Hive account.');
       }
 
-      // Step 3: Generate seed and keys
-      const seed = getSeed(formattedName);
-      const keychain = generateHiveKeys(formattedName, seed);
+      const data = await response.json();
+      const { accountName: returnedAccountName, seed, masterPassword } = data;
       
-      // Step 4: Call the API route to create and broadcast the account transaction
-      const transactionId = await createHiveAccount(formattedName, keychain);
-
-      // Step 5: Display the results
-      const formattedSeed = seed.split(' ').map((word, index) => `${index + 1}.${word}`).join(' ');
+      if (returnedAccountName !== formattedName) {
+        console.error('Data Mismatch Error: The account name returned from the server does not match the one sent.');
+        throw new Error('Server returned an unexpected account name. Please try again.');
+      }
+      
+      const formattedSeed = seed.split(' ').map((word: string, index: number) => `${index + 1}.${word}`).join(' ');
       setResults({
-        accountName: formattedName,
+        accountName: returnedAccountName,
         seed: formattedSeed,
-        masterPassword: keychain.masterPassword,
+        masterPassword: masterPassword,
       });
       setSuccess(true);
     } catch (err: any) {
@@ -91,22 +110,27 @@ export default function HiveAccountCreationPage() {
   return (
     <div className="flex flex-col items-center justify-center min-h-screen py-2">
       <main className="flex flex-col items-center justify-center w-full flex-1 px-20 text-center">
-        <h1 className="text-4xl font-bold mb-6">Create Your Hive Account</h1>
+        <h1 className="text-4xl font-bold mb-6">Create Your Innopay Account</h1>
         <p className="mt-3 text-xl mb-8">
           Enter a desired username to create your new Innopay account on the Hive blockchain.
         </p>
         
-        <div className="w-full max-w-md">
+        <div className="w-full max-w-md relative">
           <input
             type="text"
             value={accountName}
-            onChange={(e) => setAccountName(e.target.value)}
+            onChange={(e) => validateAndHandleInput(e.target.value)}
+            onFocus={() => {
+              if (accountName.length > 0) {
+                validateAndHandleInput(accountName);
+              }
+            }}
             placeholder="Choose a username"
             className="w-full p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
           />
           <button
             onClick={handleCreateAccount}
-            disabled={loading}
+            disabled={loading || !isUsernameValid}
             className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? 'Creating Account...' : 'Create Innopay Account'}
@@ -142,6 +166,17 @@ export default function HiveAccountCreationPage() {
           </div>
         )}
       </main>
+      <ToastContainer
+        position="top-center"
+        autoClose={3000}
+        hideProgressBar={true}
+        newestOnTop={true}
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+      />
     </div>
   );
 }

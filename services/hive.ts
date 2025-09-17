@@ -5,6 +5,8 @@ import { formatAccountName } from './utils';
 
 // Configure the Hive client to connect to a public node.
 const hiveClient = new Client(['https://api.hive.blog', 'https://api.syncad.com', 'https://api.openhive.network']);
+// Use a single, known-good node for better reliability.
+// const hiveClient = new Client('https://api.deathwing.me');
 
 /**
  * Defines the structure for a Keychain object, containing all necessary
@@ -43,11 +45,28 @@ export function getSeed(accountName?: string): string {
  */
 export async function accountExists(accountName: string): Promise<boolean> {
   try {
+    console.log('In accountExists function, checking for account:', accountName);
     const accounts = await hiveClient.database.getAccounts([accountName]);
+    console.log('Received response from Hive:', accounts);
     return accounts.length > 0;
   } catch (error) {
     console.error(`Error checking for account existence on Hive: ${error}`);
     // Assume the account does not exist if the check fails to avoid false positives.
+    return false;
+  }
+}
+
+/**
+ * Test function to ensure a connection can be made to the Hive blockchain.
+ */
+export async function testHiveConnection() {
+  console.log('Attempting to connect to the Hive blockchain...');
+  try {
+    const properties = await hiveClient.database.getDynamicGlobalProperties();
+    console.log('Successfully connected to Hive! Current head block is:', properties.head_block_number);
+    return true;
+  } catch (error) {
+    console.error('Failed to connect to the Hive blockchain. Error:', error);
     return false;
   }
 }
@@ -119,7 +138,7 @@ export function generateHiveKeys(accountName: string, seed: string): Keychain {
 // If that fails, it falls back to creating the account by paying 3 HIVE from `fallbackAccount`.
 export async function createAndBroadcastHiveAccount(accountName: string, keychain: Keychain): Promise<string> {
   // --- Step 1: Securely retrieve the private keys from environment variables ---
-  const ticketHolderAccount = process.env.HIVE_TICKET_HOLDER_ACCOUNT // || 'sorin.cristescu';
+  const ticketHolderAccount = process.env.HIVE_TICKET_HOLDER_ACCOUNT;
   const ticketHolderPrivateKey = process.env.HIVE_ACTIVE_KEY_TICKET_HOLDER;
   
   // Fallback account if the claimed account method fails
