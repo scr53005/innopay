@@ -133,26 +133,50 @@ export function generateHiveKeys(accountName: string, seed: string): Keychain {
   return keychain;
 }
 
-// This function handles the blockchain transaction creation and broadcasting.
-// It tries to create a new account using a "claim token" from `creatorAccount`.
-// If that fails, it falls back to creating the account by paying 3 HIVE from `fallbackAccount`.
-export async function createAndBroadcastHiveAccount(accountName: string, keychain: Keychain): Promise<string> {
-  // --- Step 1: Securely retrieve the private keys from environment variables ---
-  const ticketHolderAccount = process.env.HIVE_TICKET_HOLDER_ACCOUNT;
-  const ticketHolderPrivateKey = process.env.HIVE_ACTIVE_KEY_TICKET_HOLDER;
-  
-  // Fallback account if the claimed account method fails
-  const fallbackAccount = 'innopay';
-  const fallbackPrivateKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
+// Utility function to build the common account authority structures.
+// This factors out the shared JSON parts for easier maintenance.
+function buildAccountAuthorities(
+  keychain: Keychain,
+  fallbackAccount: string
+) {
+  const commonAuthorities = {
+    owner: {
+      weight_threshold: 1,
+      account_auths: [
+        [fallbackAccount, 1]
+      ],
+      key_auths: [
+        [keychain.owner.publicKey, 1]
+      ],
+    },
+    active: {
+      weight_threshold: 1,
+      account_auths: [
+        [fallbackAccount, 1]
+      ],
+      key_auths: [
+        [keychain.active.publicKey, 1]
+      ],
+    },
+    posting: {
+      weight_threshold: 1,
+      account_auths: [
+        [fallbackAccount, 1]
+      ],
+      key_auths: [
+        [keychain.posting.publicKey, 1]
+      ],
+    },
+    memo_key: keychain.memo.publicKey,
+    json_metadata: '{}',
+    extensions: [],
+  };
 
-  if ((!ticketHolderPrivateKey) && (!fallbackPrivateKey)) {
-    throw new Error('Neither ticket holder nor innopay keys found in the environment.');
-  }
+  return commonAuthorities;
+}
 
-  // const keychain = generateHiveKeys(accountName, seed);
- 
-
-  // --- Step 2: Get current blockchain block details for transaction validity ---
+// Utility function to get the base transaction object with blockchain block details.
+async function getBaseTransaction(): Promise<Transaction> {
   const dynamicGlobalProperties = await hiveClient.database.getDynamicGlobalProperties();
   const headBlockId = dynamicGlobalProperties.head_block_id;
   const headBlockNumber = dynamicGlobalProperties.head_block_number;
@@ -162,145 +186,157 @@ export async function createAndBroadcastHiveAccount(accountName: string, keychai
   const expirationTime = Math.floor(Date.now() / 1000) + 60; // 60-second expiration
   console.log(`Using block data: Block Num: ${headBlockNumber}, Ref Num: ${refBlockNum}, Prefix: ${refBlockPrefix}`);
 
-  // --- Step 3: Prepare and try to broadcast the transaction ---
-  const baseTransaction: Transaction = {
+  return {
     ref_block_num: refBlockNum,
     ref_block_prefix: refBlockPrefix,
     expiration: new Date(expirationTime * 1000).toISOString().slice(0, -5),
     operations: [],
     extensions: [],
   };
-
-  let broadcastResult;
-  let triedClaimedAccount = false;
-
-  // Attempt claimed account creation if ticketHolder credentials are available
-  if (ticketHolderPrivateKey && ticketHolderAccount) {
-    triedClaimedAccount = true;
-    try {
-      console.log(`Attempting to create account using 'create_claimed_account' via ${ticketHolderAccount}`);
-      const createClaimedOp = [
-        'create_claimed_account',
-        {
-          creator: ticketHolderAccount,
-          new_account_name: accountName,
-          owner: {
-            weight_threshold: 1,
-            account_auths: [
-              [fallbackAccount, 1]
-            ], // Add fallback account as owner authority
-            key_auths: [
-              [keychain.owner.publicKey, 1]
-            ],
-          },
-          active: {
-            weight_threshold: 1,
-            account_auths: [
-              [fallbackAccount, 1] // Add the fallback account as active authority for innopay
-            ],
-            key_auths: [
-              [keychain.active.publicKey, 1]
-            ],
-          },
-          posting: {
-            weight_threshold: 1,
-            account_auths: [
-              [fallbackAccount, 1]
-            ], // Add fallback account as posting authority
-            key_auths: [
-              [keychain.posting.publicKey, 1]
-            ],
-          },
-          memo_key: keychain.memo.publicKey,
-          json_metadata: '{}',
-          extensions: [],
-        },
-      ];
-
-      const claimedTransaction = {
-        ...baseTransaction,
-        operations: [createClaimedOp as any],
-      };
-
-      const signedClaimedTransaction = hiveClient.broadcast.sign(claimedTransaction, [PrivateKey.fromString(ticketHolderPrivateKey)]);
-      broadcastResult = await hiveClient.broadcast.send(signedClaimedTransaction);
-      console.log("Successfully broadcasted 'create_claimed_account' transaction:", broadcastResult);
-      return broadcastResult.id; // Exit if successful
-    } catch (error) {
-      console.warn(`'create_claimed_account' failed, falling back to paid account creation.`);
-      console.error(error);
-
-      // Fallback logic: Create account with a 3 HIVE payment if primary method failed or was skipped
-      if (fallbackPrivateKey && fallbackAccount) {
-        try {
-          // --- Fallback logic: Create account with a 3 HIVE payment ---
-          console.log(`Attempting to create account by paying 3 HIVE from ${fallbackAccount}`);
-          const createPaidOp = [
-            'account_create',
-            {
-              fee: '3.000 HIVE',
-              creator: fallbackAccount,
-              new_account_name: accountName,
-              owner: {
-                weight_threshold: 1,
-                account_auths: [
-                  [fallbackAccount, 1]
-                ], // Add fallback account as active authority
-                key_auths: [
-                  [keychain.owner.publicKey, 1]
-                ],
-              },
-              active: {
-                weight_threshold: 1,
-                account_auths: [
-                  [fallbackAccount, 1]
-                ], // Add fallback account as active authority
-                key_auths: [
-                  [keychain.active.publicKey, 1]
-                ],
-              },
-              posting: {
-                weight_threshold: 1,
-                account_auths: [
-                  [fallbackAccount, 1]
-                ], // Add fallback account as active authority
-                key_auths: [
-                  [keychain.posting.publicKey, 1]
-                ],
-              },
-              memo_key: keychain.memo.publicKey,
-              json_metadata: '{}',
-              extensions: [],
-            },
-          ];
-
-          const paidTransaction = {
-            ...baseTransaction,
-            operations: [createPaidOp as any],
-          };
-      
-          // Corrected call to sign the transaction using hiveClient.broadcast.sign
-          const signedPaidTransaction = hiveClient.broadcast.sign(paidTransaction, [PrivateKey.fromString(fallbackPrivateKey)]);
-          broadcastResult = await hiveClient.broadcast.send(signedPaidTransaction);
-          console.log("Successfully broadcasted paid account creation transaction:", broadcastResult);
-          return broadcastResult.id; // Exit if successful
-        } catch (error) {
-            console.error('Paid account creation failed:', error);
-            throw new Error(`Failed to create Hive account via paid method: ${error}`);
-        }
-      } 
-
-      // If neither method was successful or attempted, explicitly throw an error
-      const errorMessage = triedClaimedAccount
-        ? "Claimed account creation failed, and fallback credentials are not available."
-        : "Neither claimed account credentials nor fallback credentials are available for account creation.";
-      
-      return Promise.reject(new Error(errorMessage));      
-    } 
-  }
-  const errorMessage = "Either ticketHolderPrivateKey: ${ticketHolderPrivateKey} or ticketHolderAccount: ${ticketHolderAccounty} are undefined";
-  return Promise.reject(new Error(errorMessage));
 }
+
+// Utility function to build the claimed transaction JSON using create_claimed_account.
+// Prepares the transaction only if called; assumes ticketHolderAccount is available (checked by caller).
+function claimed_innopay_tx(
+  baseTransaction: Transaction,
+  accountName: string,
+  keychain: Keychain,
+  ticketHolderAccount: string,
+  fallbackAccount: string
+): Transaction {
+  const commonAuthorities = buildAccountAuthorities(keychain, fallbackAccount);
+
+  const createClaimedOp = [
+    'create_claimed_account',
+    {
+      creator: ticketHolderAccount,
+      new_account_name: accountName,
+      ...commonAuthorities,
+    },
+  ];
+
+  return {
+    ...baseTransaction,
+    operations: [createClaimedOp as any],
+  };
+}
+
+// Utility function to build the paid transaction JSON using account_create.
+// Prepares the transaction only if called; assumes fallbackAccount is available (checked by caller).
+function paid_innopay_tx(
+  baseTransaction: Transaction,
+  accountName: string,
+  keychain: Keychain,
+  fallbackAccount: string
+): Transaction {
+  const commonAuthorities = buildAccountAuthorities(keychain, fallbackAccount);
+
+  const createPaidOp = [
+    'account_create',
+    {
+      fee: '3.000 HIVE',
+      creator: fallbackAccount,
+      new_account_name: accountName,
+      ...commonAuthorities,
+    },
+  ];
+
+  return {
+    ...baseTransaction,
+    operations: [createPaidOp as any],
+  };
+}
+
+// Refactored main function: Orchestrates utility calls to prepare transactions,
+// then handles cascade broadcasting with optional mocking.
+// Checks are kept early in the orchestrator for quick failure if neither method is viable,
+// and lazy-prepared only when a path is taken, to avoid unnecessary computation.
+export async function createAndBroadcastHiveAccount(
+  accountName: string,
+  keychain: Keychain,
+  options: { mockBroadcast?: boolean; simulateClaimedFailure?: boolean } = {}
+): Promise<string> {
+  // --- Step 1: Securely retrieve the private keys from environment variables ---
+  const ticketHolderAccount = process.env.HIVE_TICKET_HOLDER_ACCOUNT;
+  const ticketHolderPrivateKey = process.env.HIVE_ACTIVE_KEY_TICKET_HOLDER;
+  
+  // Fallback account if the claimed account method fails
+  const fallbackAccount = 'innopay';
+  const fallbackPrivateKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
+
+  // Early check: Fail fast if neither method is viable
+  if ((!ticketHolderPrivateKey || !ticketHolderAccount) && (!fallbackPrivateKey)) {
+    throw new Error('Neither ticket holder nor innopay keys found in the environment.');
+  }
+
+  // --- Step 2: Prepare the base transaction ---
+  const baseTransaction = await getBaseTransaction();
+
+  // --- Step 3: Prepare the two transaction JSONs using utilities (lazy, only if creds available) ---
+  let claimedTransaction: Transaction | null = null;
+  if (ticketHolderPrivateKey && ticketHolderAccount) {
+    claimedTransaction = claimed_innopay_tx(baseTransaction, accountName, keychain, ticketHolderAccount, fallbackAccount);
+  }
+
+  let paidTransaction: Transaction | null = null;
+  if (fallbackPrivateKey) {
+    paidTransaction = paid_innopay_tx(baseTransaction, accountName, keychain, fallbackAccount);
+  }
+
+  // --- Step 4: Broadcast in cascade (claimed first, paid as fallback) with mocking toggle ---
+  try {
+    if (claimedTransaction) {
+      console.log(`Attempting to create account using 'create_claimed_account' via ${ticketHolderAccount}`);
+      const signedClaimedTransaction = hiveClient.broadcast.sign(claimedTransaction, [PrivateKey.fromString(ticketHolderPrivateKey!)]);
+
+      if (options.mockBroadcast) {
+        if (options.simulateClaimedFailure) {
+          throw new Error('Mock claimed account failure - triggering fallback');
+        } else {
+          console.log('Mock: Successfully broadcasted "create_claimed_account" transaction');
+          return 'mock_claimed_tx_id';
+        }
+      }
+
+      const broadcastResult = await hiveClient.broadcast.send(signedClaimedTransaction);
+      console.log('Successfully broadcasted "create_claimed_account" transaction:', broadcastResult);
+      return broadcastResult.id;
+    } else {
+      // If no claimed available, trigger fallback logic
+      throw new Error('Claimed account credentials not available - falling back to paid creation');
+    }
+  } catch (error) {
+    console.warn(`'create_claimed_account' failed, falling back to paid account creation.`);
+    console.error(error);
+
+    if (paidTransaction) {
+      try {
+        console.log(`Attempting to create account by paying 3 HIVE from ${fallbackAccount}`);
+        const signedPaidTransaction = hiveClient.broadcast.sign(paidTransaction, [PrivateKey.fromString(fallbackPrivateKey!)]);
+
+        if (options.mockBroadcast) {
+          console.log('Mock: Successfully broadcasted paid account creation transaction');
+          return 'mock_paid_tx_id';
+        }
+
+        const broadcastResult = await hiveClient.broadcast.send(signedPaidTransaction);
+        console.log('Successfully broadcasted paid account creation transaction:', broadcastResult);
+        return broadcastResult.id;
+      } catch (paidError) {
+        console.error('Paid account creation failed:', paidError);
+        throw new Error(`Failed to create Hive account via paid method: ${paidError}`);
+      }
+    }
+
+    // If neither method succeeded or was available
+    const hasClaimed = !!(ticketHolderPrivateKey && ticketHolderAccount);
+    const errorMessage = hasClaimed
+      ? 'Claimed account creation failed, and fallback credentials are not available.'
+      : 'Claimed account credentials not available, and fallback credentials are not available for account creation.';
+    throw new Error(errorMessage);
+  }
+}
+
 
 /**
  * Transfers a specified amount of 'EURO' tokens from 'innopay' to a new Hive account.

@@ -21,6 +21,9 @@ export default function HiveAccountCreationPage() {
   const [isValidationSuccess, setIsValidationSuccess] = useState(false);
 
   const [hasBackedUp, setHasBackedUp] = useState(false);
+  // New state for checkboxes
+  const [mockAccountCreation, setMockAccountCreation] = useState(false);
+  const [forcePaidCreation, setForcePaidCreation] = useState(false);
 
   const modalRef = useRef<HTMLDialogElement>(null);
 
@@ -98,7 +101,11 @@ export default function HiveAccountCreationPage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ accountName: formattedName }),
+        body: JSON.stringify({ 
+          accountName: formattedName,
+          mockBroadcast: mockAccountCreation, // Send mock flag to server
+          simulateClaimedFailure: forcePaidCreation,   // Send force paid flag to server 
+        }),
       });
 
       if (!response.ok) {
@@ -174,7 +181,8 @@ export default function HiveAccountCreationPage() {
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault();
-      e.returnValue = 'WARNING: Have you backed-up your seed phrase and Master password? Please make sure you\'ve stored them somewhere safe or you\'ll lose access to your account!';
+     // Modern browsers ignore custom messages, but setting returnValue to an empty string triggers the default dialog
+      e.returnValue = '';
     };
 
     if (success && !hasBackedUp) {
@@ -223,6 +231,28 @@ export default function HiveAccountCreationPage() {
             className={`w-full p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition-colors duration-300
               ${accountName.length > 0 ? (isUsernameValid ? 'bg-green-200/50' : 'bg-red-200/50') : ''}`}
           />
+          {/* Checkboxes for mocking and forcing HIVE creation */}
+          <div className="flex flex-col space-y-2 mb-4">
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={mockAccountCreation}
+                onChange={(e) => setMockAccountCreation(e.target.checked)}
+                className="h-4 w-4 text-blue-500 focus:ring-blue-500 border-gray-300 rounded"
+              />
+              <span className="text-sm text-gray-700">Mock account creation</span>
+            </label>
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={forcePaidCreation}
+                onChange={(e) => setForcePaidCreation(e.target.checked)}
+                className="h-4 w-4 text-blue-500 focus:ring-blue-500 border-gray-300 rounded"
+              />
+              <span className="text-sm text-gray-700">Force creation with HIVE</span>
+            </label>
+          </div>
+
           <button
             onClick={handleCreateAccount}
             disabled={loading || !isUsernameValid}
@@ -264,7 +294,7 @@ export default function HiveAccountCreationPage() {
               </p>
             </div>
             <p>
-              Your new Hive account is now live on the blockchain.
+              Your new Hive account is now live on the blockchain{mockAccountCreation ? ' (mocked)' : ''}.
             </p>
           </div>
         )}

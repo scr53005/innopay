@@ -5,9 +5,9 @@ import { accountExists, getSeed, generateHiveKeys, createAndBroadcastHiveAccount
 
 export async function POST(request: Request) {
   try {
-    const { accountName } = await request.json();
+    const { accountName, mockBroadcast, simulateClaimedFailure } = await request.json();
 
-    if (!accountName) {
+    if (!accountName || typeof accountName !== 'string') {
       return NextResponse.json({ error: 'Missing accountName' }, { status: 400 });
     }
     console.log('Received request to create Hive account:', accountName);
@@ -29,7 +29,10 @@ export async function POST(request: Request) {
     // console.log(`Generated keychain for account ${accountName}:`, keychain);
 
     // Create and broadcast the Hive account, returning the transaction ID      
-    const transactionId = await createAndBroadcastHiveAccount(accountName, keychain);
+    const transactionId = await createAndBroadcastHiveAccount(accountName, keychain, {
+      mockBroadcast: !!mockBroadcast, // Ensure boolean
+      simulateClaimedFailure: !!simulateClaimedFailure, // Ensure boolean
+    });
     console.log(`Hive account ${accountName} created with transaction ID: ${transactionId}`);
 
     // Return the generated data to the client for the user to save
