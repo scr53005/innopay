@@ -96,6 +96,11 @@ export async function findNextAvailableAccountName(lastAccountName: string | nul
   return availableAccountName;
 }
 
+export function getPostingKey(accountName: string, masterKey: string): PrivateKey {
+  const postingPrivateKey = PrivateKey.fromLogin(accountName, masterKey, 'posting');
+  return postingPrivateKey;
+}
+
 export function generateHiveKeys(accountName: string, seed: string): Keychain {
   const masterKey = 'P' + PrivateKey.fromSeed(seed).toString();
   console.log(`Using master key for account ${accountName} with seed ${seed}: ${masterKey}`);
@@ -337,6 +342,51 @@ export async function createAndBroadcastHiveAccount(
   }
 }
 
+export async function updateHiveAccountMetadata(
+  accountName: string,
+  postingKey: PrivateKey,
+  metadata: { name: string; about: string; website: string; avatarUri: string; backgroundUri: string }
+): Promise<{ txid: string; metadata: any }> {
+  // Get base transaction (reuse your existing getBaseTransaction)
+  const baseTransaction = await getBaseTransaction();
+  // Build JSON metadata (Hive format: profile object)
+  const postingJsonMetadata = JSON.stringify({
+    profile: {
+      name: metadata.name,
+      about: metadata.about,
+      website: metadata.website,
+      profile_image: metadata.avatarUri,
+      cover_image: metadata.backgroundUri,
+    },
+  });  
+  console.log(`Prepared posting JSON metadata for account ${accountName}:`, postingJsonMetadata);
+   // Account update operation
+  const updateOp = [
+    'account_update2',
+    {
+      account: accountName,
+      json_metadata: '', // Required as empty string to satisfy serialization (general metadata)
+      posting_json_metadata: postingJsonMetadata,
+    },
+  ];
+
+  const updateTransaction = {
+    ...baseTransaction,
+    operations: [updateOp as any],
+  };
+
+  // Sign with posting key (standard for metadata updates)
+  const signedTransaction = hiveClient.broadcast.sign(updateTransaction, postingKey); // Assume private keys in keychain
+
+  try {
+    const broadcastResult = await hiveClient.broadcast.send(signedTransaction);
+    console.log('Successfully updated Hive account metadata:', broadcastResult);
+    return { txid: broadcastResult.id, metadata };
+  } catch (error) {
+    console.error('Failed to update Hive account metadata:', error);
+    throw new Error(`Failed to update Hive account metadata: ${error}`);
+  }
+}
 
 /**
  * Transfers a specified amount of 'EURO' tokens from 'innopay' to a new Hive account.

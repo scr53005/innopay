@@ -9,18 +9,26 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@bunny.net/storage-sdk": "^0.3.0",
     "@hiveio/dhive": "^1.3.2",
     "@hiveio/hive-js": "^2.0.8",
-    "@prisma/client": "^6.13.0",
+    "@prisma/client": "^6.16.2",
+    "@storacha/blob-index": "^1.2.0",
+    "@storacha/capabilities": "^1.8.0",
+    "@storacha/client": "^1.7.10",
+    "@storacha/did-mailto": "^1.0.2",
+    "@storacha/filecoin-client": "^1.0.11",
+    "@storacha/indexing-service-client": "^2.5.0",
+    "@storacha/upload-client": "^1.3.2",
     "@stripe/stripe-js": "^7.7.0",
     "bip39": "^3.1.0",
     "canvas-confetti": "^1.9.3",
     "dotenv": "^17.2.1",
     "next": "^15.5.3",
-    "prisma": "^6.13.0",
     "randombytes": "^2.1.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
+    "react-dropzone": "^14.3.8",
     "react-toastify": "^11.0.5",
     "stripe": "^18.3.0"
   },
@@ -30,6 +38,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "prisma": "^6.16.2",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

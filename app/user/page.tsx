@@ -1,9 +1,44 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { ToastContainer } from 'react-toastify'; // Kept import, but not using for validation; remove if unused
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { toast, ToastContainer } from 'react-toastify'; // Kept import, but not using for validation; remove if unused
 import 'react-toastify/dist/ReactToastify.css';
+import { useDropzone } from 'react-dropzone'; // For image picker
 import confetti from 'canvas-confetti';
+import Image from 'next/image';
+
+// Check if in dev/test environment
+const isDevOrTest = process.env.NEXT_PUBLIC_ENV !== 'production';
+const innopayLogoUrl = "/innopay.svg";
+const defaultAvatarUrl = "/images/Koala-BlueBg.png";
+
+export type Metadata = { 
+  name: string;
+  about: string;
+  location: string;
+  website: string;
+  avatarUri: string;
+  backgroundUri: string;
+}
+
+// Temporary, for demonstration purposes
+const mockCreateMetadata = (data: Metadata ) =>
+  new Promise((resolve) =>
+    setTimeout(() => {
+      console.log('Mocking metadata creation with:', data);
+      resolve({ success: true });
+    }, 1500),
+  );
+
+// Helper function to check if any string field is non-empty
+const isFormFilled = (metadata: Metadata) => {
+  return (
+    metadata.name.trim() !== '' ||
+    metadata.about.trim() !== '' ||
+    metadata.location.trim() !== '' ||
+    metadata.website.trim() !== ''
+  );
+};
 
 export default function HiveAccountCreationPage() {
   const [accountName, setAccountName] = useState('');
@@ -16,16 +51,97 @@ export default function HiveAccountCreationPage() {
     masterPassword: '',
   });
 
+  // State for metadata form
+  const [metadata, setMetadata] = useState({
+    name: '',
+    about: '',
+    location: '',
+    website: '',
+    avatarUri: '',
+    backgroundUri: '',
+  });
+  const [metadataLoading, setMetadataLoading] = useState(false);
+  const [metadataSuccess, setMetadataSuccess] = useState(false);
+
+  // State for storage strategy (default 'fast' for Bunny CDN)
+  const [storageStrategy, setStorageStrategy] = useState<'fast' | 'pure'>('fast');
+
+  // State for image uploads
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [backgroundFile, setBackgroundFile] = useState<File | null>(null);
+  const [backgroundPreviewUrl, setBackgroundPreviewUrl] = useState<string | null>(null);
+  const [backgroundUploading, setBackgroundUploading] = useState(false);
+
+  // New state for existing account from localStorage
+  const [existingAccount, setExistingAccount] = useState<{ accountName: string; masterPassword: string; seed: string } | null>(null);
+  const [showUpdateForm, setShowUpdateForm] = useState(false);
+
   const [isUsernameValid, setIsUsernameValid] = useState(false);
   const [validationMessage, setValidationMessage] = useState('');
   const [isValidationSuccess, setIsValidationSuccess] = useState(false);
 
-  const [hasBackedUp, setHasBackedUp] = useState(false);
-  // New state for checkboxes
   const [mockAccountCreation, setMockAccountCreation] = useState(false);
   const [forcePaidCreation, setForcePaidCreation] = useState(false);
 
-  const modalRef = useRef<HTMLDialogElement>(null);
+  // Refs for revoking object URLs
+  const avatarPreviewRef = useCallback((url: string | null) => {
+    if (avatarPreviewUrl && url !== avatarPreviewUrl) {
+      URL.revokeObjectURL(avatarPreviewUrl);
+    }
+  }, [avatarPreviewUrl]);
+  const backgroundPreviewRef = useCallback((url: string | null) => {
+    if (backgroundPreviewUrl && url !== backgroundPreviewUrl) {
+      URL.revokeObjectURL(backgroundPreviewUrl);
+    }
+  }, [backgroundPreviewUrl]);
+
+  // Load existing account from localStorage on mount
+  useEffect(() => {
+    console.log('Checking localStorage for existing account...');
+    const acc = localStorage.getItem('innopayAccountName');
+    const pass = localStorage.getItem('innopayMasterPassword');
+    const seed = localStorage.getItem('innopaySeed');
+    if (acc && pass && seed) {
+      setExistingAccount({ accountName: acc, masterPassword: pass, seed });
+      // Set results state for rendering welcome message
+      setResults({ accountName: acc, masterPassword: pass, seed });
+
+      // Fetch metadata for existing account
+      const fetchMetadata = async () => {
+        try {
+          const response = await fetch('/api/fetch-hive-metadata', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accountName: acc }),
+          });
+          if (response.ok) {
+            const data = await response.json();
+            setMetadata(data.metadata || metadata); // Use fetched data or default state
+            if (data.metadata?.avatarUri) {
+                setMetadataSuccess(true);
+            }
+          }
+        } catch (e) {
+          console.error("Failed to fetch existing account metadata:", e);
+        }
+      };
+      fetchMetadata();      
+
+      console.log('Existing account found in localStorage:', acc);
+    } else {
+      console.log('No existing account found in localStorage.');
+    }
+  }, []);
+
+  // Cleanup object URLs on unmount or change
+  useEffect(() => {
+    return () => {
+      if (avatarPreviewUrl) URL.revokeObjectURL(avatarPreviewUrl);
+      if (backgroundPreviewUrl) URL.revokeObjectURL(backgroundPreviewUrl);
+    };
+  }, [avatarPreviewUrl, backgroundPreviewUrl]);
 
   const validateAndHandleInput = (input: string) => {
     const lowerCaseInput = input.toLowerCase();
@@ -84,7 +200,22 @@ export default function HiveAccountCreationPage() {
     setIsUsernameValid(isValid);
   };
   
+  const handleEraseLocalStorage = () => {
+    localStorage.removeItem('innopayAccountName');
+    localStorage.removeItem('innopayMasterPassword');
+    localStorage.removeItem('innopaySeed');
+    setExistingAccount(null);
+    setShowUpdateForm(false);
+    toast.info('Local storage erased. The page will reload.');
+    window.location.reload(); // Force reload to show creation form    
+  };
+
   const handleCreateAccount = async () => {
+     // Early return if existing account is found
+    if (existingAccount) {
+      return;
+    }
+
     setError('');
     setSuccess(false);
     setLoading(true);
@@ -127,6 +258,15 @@ export default function HiveAccountCreationPage() {
         seed: formattedSeed,
         masterPassword: masterPassword,
       });
+
+      // Save to localStorage upon success
+      localStorage.setItem('innopayAccountName', returnedAccountName);
+      localStorage.setItem('innopayMasterPassword', masterPassword);
+      localStorage.setItem('innopaySeed', seed);
+
+      // Set existing account state for UI display
+      setExistingAccount({ accountName: returnedAccountName, masterPassword, seed });
+
       setSuccess(true);
     } catch (err: any) {
       console.error(err);
@@ -170,68 +310,211 @@ export default function HiveAccountCreationPage() {
     }
   }, [success]);
 
-  // Show modal on success
-  useEffect(() => {
-    if (success) {
-      modalRef.current?.showModal();
+  // Image upload helper (abstraction for avatar/background)
+  const uploadImage = async (file: File, type: 'avatar' | 'background') => {
+    if (!file) return null;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('strategy', storageStrategy);
+
+    try {
+      const response = await fetch('/api/storage', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Upload failed');
+      }
+
+      const { uri } = await response.json();
+      return uri;
+    } catch (err: any) {
+      toast.error(`${type} upload failed: ${err.message}`);
+      return null;
     }
-  }, [success]);
+  };
 
-  // Beforeunload listener if success and not backed up
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-     // Modern browsers ignore custom messages, but setting returnValue to an empty string triggers the default dialog
-      e.returnValue = '';
-    };
+  const handleSkip = useCallback(async () => {
+    if (metadataLoading) return;
+    setMetadataLoading(true);
+    toast.info('Skipping profile setup...');
 
-    if (success && !hasBackedUp) {
-      window.addEventListener('beforeunload', handleBeforeUnload);
-      return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    try {
+      const response = await fetch('/api/storage', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          accountName: results.accountName,
+          storageStrategy: storageStrategy,
+        }),
+      });
+
+      const result = await response.json();
+      if (response.ok) {
+        setMetadata((prev) => ({
+          ...prev,
+          avatarUri: result.updatedAvatarUrl || defaultAvatarUrl
+        }));
+        setMetadataSuccess(true);
+        setShowUpdateForm(false);
+        toast.success("Profile skipped successfully!");
+      } else {
+        toast.error(`Error skipping profile: ${result.error}`);
+      }
+    } catch (error: any) {
+      console.error('Failed to skip profile:', error);
+      toast.error('Failed to connect to the server.');
+    } finally {
+      setMetadataLoading(false);
     }
-  }, [success, hasBackedUp]);
+  }, [results, storageStrategy, metadataLoading]);
+  
+  const handleMetadataSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (metadataLoading) return;
 
-  const innopayLogoUrl = "/innopay.svg";
+    if (!isFormFilled(metadata)) {
+      handleSkip();
+      return;
+    }
 
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen py-2">
-      <main className="flex flex-col items-center justify-center w-full flex-1 px-20 text-center">
-        <div className="flex flex-col items-center space-y-8 p-8 bg-white rounded-xl shadow-lg w-full max-w-md mb-6">
-          {/* Innopay Logo */}
-          <img
+    setMetadataLoading(true);
+
+    try {
+      // Upload avatar if selected
+      const avatarUri = avatarFile ? await uploadImage(avatarFile, 'avatar') : metadata.avatarUri;
+      if (!avatarUri && avatarFile) {
+        throw new Error('Avatar upload required');
+      }
+
+      // Upload background if selected
+      const backgroundUri = backgroundFile ? await uploadImage(backgroundFile, 'background') : metadata.backgroundUri;
+      if (!backgroundUri && backgroundFile) {
+        throw new Error('Background upload required');
+      }
+
+      // Build full metadata object
+      const fullMetadata = {
+        name: metadata.name.trim(),
+        about: metadata.about.trim(),
+        location: metadata.location.trim(),
+        website: metadata.website.trim(),
+        avatarUri: avatarUri || '',
+        backgroundUri: backgroundUri || '',
+      };
+
+      // Call Hive update API
+      const response = await fetch('/api/update-hive-account', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          accountName: results.accountName,
+          masterKey: results.masterPassword,
+          metadata: fullMetadata,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to update Hive account');
+      }
+
+      const updateResult = await response.json();
+      setMetadata((prev) => ({
+        ...prev,
+        avatarUri,
+        backgroundUri,
+      }));
+      setMetadataSuccess(true);
+      setShowUpdateForm(false);
+      toast.success("Profile updated successfully!");
+    } catch (err: any) {
+      console.error(err);
+      toast.error("Failed to update profile.");
+    } finally {
+      setMetadataLoading(false);
+    }
+  }, [metadataLoading, metadata, avatarFile, backgroundFile, handleSkip, results, storageStrategy]);
+
+  // Dropzone for avatar
+  const onDropAvatar = useCallback(async (acceptedFiles: File[]) => {
+    const file = acceptedFiles[0];
+    if (file) {
+      setAvatarFile(file);
+      const previewUrl = URL.createObjectURL(file);
+      setAvatarPreviewUrl(previewUrl);
+    }
+  }, []);
+
+  const { getRootProps: getAvatarRootProps, getInputProps: getAvatarInputProps, isDragActive: isAvatarDragActive } = useDropzone({
+    onDrop: onDropAvatar,
+    accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.gif'] },
+    maxFiles: 1,
+  });
+
+  // Dropzone for background
+  const onDropBackground = useCallback(async (acceptedFiles: File[]) => {
+    const file = acceptedFiles[0];
+    if (file) {
+      setBackgroundFile(file);
+      const previewUrl = URL.createObjectURL(file);
+      setBackgroundPreviewUrl(previewUrl);
+    }
+  }, []);
+
+  const { getRootProps: getBackgroundRootProps, getInputProps: getBackgroundInputProps, isDragActive: isBackgroundDragActive } = useDropzone({
+    onDrop: onDropBackground,
+    accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.gif'] },
+    maxFiles: 1,
+  });
+
+  const renderAccountCreationForm = () => (
+    <>
+      <div className="flex flex-col items-center justify-center space-y-8 p-6 lg:p-8 bg-white rounded-xl shadow-lg w-full max-w-xl sm:max-w-2xl mb-6">
+        <div className="relative w-4/5 sm:w-3/5 h-28 sm:h-48">
+          <Image
             src={innopayLogoUrl}
             alt="Innopay Logo"
-            className="w-144 h-auto rounded-lg"
+            fill
+            className="object-contain rounded-lg"
           />
-        </div>  
-        <h1 className="text-4xl font-bold mb-6">Create Your Innopay Account</h1>
-        <p className="mt-3 text-xl mb-8">
-          Enter a desired username to create your new Innopay account on the Hive blockchain.
-        </p>
-        
-        <div className="w-full max-w-md relative">
-          {/* Validation callout (appears above input if message exists) */}
-          {validationMessage && (
-            <div className={`absolute -top-12 left-0 w-full p-3 rounded-lg shadow-md text-center validation-callout z-10
-              ${isValidationSuccess ? 'bg-green-100/80 text-green-800' : 'bg-red-100/80 text-red-800'}`}>
-              {validationMessage}
-            </div>
-          )}
+        </div>
+      </div>
+      <h1 className="text-4xl font-bold mb-2">Create Your Innopay Account</h1>
+      <p className="mt-2 text-xl mb-4 text-center px-4">
+        Enter a desired username to create your new Innopay account on the Hive blockchain.
+      </p>
 
-          <input
-            type="text"
-            value={accountName}
-            onChange={(e) => validateAndHandleInput(e.target.value)}
-            onFocus={() => {
-              if (accountName.length > 0) {
-                validateAndHandleInput(accountName);
-              }
-            }}
-            placeholder="Choose a username"
-            className={`w-full p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition-colors duration-300
-              ${accountName.length > 0 ? (isUsernameValid ? 'bg-green-200/50' : 'bg-red-200/50') : ''}`}
-          />
-          {/* Checkboxes for mocking and forcing HIVE creation */}
+      <div className="w-full max-w-md relative px-4">
+        {validationMessage && (
+          <div className={`absolute -top-12 left-0 w-full p-3 rounded-lg shadow-md text-center validation-callout z-10
+            ${isValidationSuccess ? 'bg-green-100/80 text-green-800' : 'bg-red-100/80 text-red-800'}`}>
+            {validationMessage}
+          </div>
+        )}
+
+        <input
+          type="text"
+          value={accountName}
+          onChange={(e) => validateAndHandleInput(e.target.value)}
+          onFocus={() => {
+            if (accountName.length > 0) {
+              validateAndHandleInput(accountName);
+            }
+          }}
+          placeholder="Choose a username"
+          className={`w-full p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition-colors duration-300
+            ${accountName.length > 0 ? (isUsernameValid ? 'bg-green-200/50' : 'bg-red-200/50') : ''}`}
+        />
+        {/* Dev/Test Controls: Checkboxes and Erase Button */}
+        {isDevOrTest && (
           <div className="flex flex-col space-y-2 mb-4">
             <label className="flex items-center space-x-2">
               <input
@@ -252,77 +535,216 @@ export default function HiveAccountCreationPage() {
               <span className="text-sm text-gray-700">Force creation with HIVE</span>
             </label>
           </div>
-
-          <button
-            onClick={handleCreateAccount}
-            disabled={loading || !isUsernameValid}
-            className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loading ? 'Creating Account...' : 'Create Innopay Account'}
-          </button>
-
-          {/* Temporary test button - comment out when done 
-          <button
-            onClick={triggerConfetti}
-            className="w-full bg-purple-500 hover:bg-purple-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300 mt-4"
-          >
-            Test confettis
-          </button>*/}
-        </div>
-
-        {error && (
-          <div className="mt-6 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg max-w-md">
-            <p className="font-bold">Error:</p>
-            <p>{error}</p>
-          </div>
         )}
 
-        {success && (
-          <div className="mt-6 p-6 bg-green-100 border border-green-400 text-green-700 rounded-lg max-w-xl text-left">
-            <h2 className="text-2xl font-bold mb-2">🎉 Account Created Successfully!</h2>
-            <p className="mb-4">
-              <span className="font-bold">Account Name:</span> {results.accountName}
-            </p>
-            <div className="mb-4 bg-gray-50 p-4 rounded-lg border border-dashed border-gray-300">
-              <p className="font-bold text-lg mb-2">IMPORTANT: Save Your Seed Phrase and Master Password</p>
-              <p className="text-sm">
-                Write down the following 12-word seed phrase and master password and store them in a secure place. This is the only way to recover your account.
-              </p>
-              <p className="mt-2 text-blue-800 font-mono break-all">{results.seed}</p>
-              <p className="mt-2 text-red-800 font-mono break-all">
-                <span className="font-bold text-red-900">Master Password:</span> {results.masterPassword}
-              </p>
+        <button
+          onClick={handleCreateAccount}
+          disabled={loading || !isUsernameValid}
+          className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {loading ? 'Creating Account...' : 'Create Innopay Account'}
+        </button>
+      </div>
+
+      {error && (
+        <div className="mt-6 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg max-w-md">
+          <p className="font-bold">Error:</p>
+          <p>{error}</p>
+        </div>
+      )}
+    </>
+  );
+
+  const renderExistingAccountView = () => (
+    <>
+      <header className="fixed top-4 right-4 z-10 flex items-center space-x-2">
+          <button onClick={() => setShowUpdateForm(!showUpdateForm)}>
+            <img
+              src={metadata.avatarUri || defaultAvatarUrl}
+              alt="User Avatar"
+              className="w-10 h-10 rounded-full border-2 border-white shadow-md"
+            />
+          </button>
+      </header>
+      <div className="flex flex-col items-center justify-center min-h-screen py-2">
+        <main className="flex flex-col items-center justify-center w-full flex-1 text-center">
+          <div className="flex flex-col items-center space-y-8 p-4 sm:p-6 lg:p-8 bg-white rounded-xl shadow-lg w-full max-w-xl mb-6">
+            <div className="relative w-4/5 h-auto aspect-video mb-6">
+              <Image
+                src={innopayLogoUrl}
+                alt="Innopay Logo"
+                fill
+                className="object-contain"
+              />
             </div>
-            <p>
-              Your new Hive account is now live on the blockchain{mockAccountCreation ? ' (mocked)' : ''}.
-            </p>
-          </div>
-        )}
-      </main>
+            {!showUpdateForm ? (
+              <>
+                <div className="mt-6 px-4 py-6 w-full bg-yellow-100 border border-yellow-400 text-yellow-700 rounded-lg text-left">
+                  <h2 className="text-xl font-bold mb-2">Account Reminder</h2>
+                  <p className="mb-4 text-sm leading-snug break-words">
+                    Your Innopay account is <span className="font-mono font-bold text-yellow-800 break-all">{existingAccount?.accountName}</span> and your master password is <span className="font-mono font-bold text-yellow-800 break-all">{existingAccount?.masterPassword}</span>.
+                  </p>
+                  <p className="text-sm">
+                    Please use these credentials to access your account.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowUpdateForm(true)}
+                  className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300"
+                >
+                  Update Profile
+                </button>
+              </>
+            ) : (
+              <div className="w-full">
+                <h1 className="text-4xl font-bold mb-6">Welcome, {existingAccount?.accountName}!</h1>
+                <p className="mt-3 text-xl mb-8">
+                  Your account is live! Now, let's create your profile.
+                </p>
 
-      {/* Warning Modal 
-      <dialog ref={modalRef} className="p-6 rounded-lg shadow-lg bg-white w-full max-w-md">
-        <p className="text-lg font-bold mb-4">WARNING: Have you backed-up your seed phrase and Master password?</p>
-        <p className="mb-6">Please make sure you've stored them somewhere safe or you'll lose access to your account!</p>
-        <div className="flex justify-end space-x-2">
-          <button
-            onClick={() => modalRef.current?.close()}
-            className="bg-blue-500 text-white font-bold px-4 py-2 rounded"
-            autoFocus // Makes this the default button
-          >
-            Oops, let me check again
-          </button>
-          <button
-            onClick={() => {
-              modalRef.current?.close();
-              setHasBackedUp(true);
-            }}
-            className="bg-black text-white font-bold px-4 py-2 rounded"
-          >
-            I did, thank you
-          </button>
-        </div>
-      </dialog>*/}
+                {/* Storage Strategy Selector (Dev/Test only) */}
+                {isDevOrTest && (
+                  <div className="w-full mb-6">
+                    <label htmlFor="strategy" className="block text-sm font-medium text-gray-700 mb-2">
+                      Storage Strategy
+                    </label>
+                    <select
+                      id="strategy"
+                      value={storageStrategy}
+                      onChange={(e) => setStorageStrategy(e.target.value as 'fast' | 'pure')}
+                      className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="fast">Fast (Bunny CDN)</option>
+                      <option value="pure">Pure (IPFS/Storacha)</option>
+                    </select>
+                  </div>
+                )}
+                <form onSubmit={handleMetadataSubmit} className="space-y-6">
+                  <div>
+                    <label htmlFor="name" className="block text-sm font-medium text-gray-700">Full Name</label>
+                    <input
+                      type="text"
+                      id="name"
+                      value={metadata.name}
+                      onChange={(e) => setMetadata({ ...metadata, name: e.target.value })}
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="avatar" className="block text-sm font-medium text-gray-700">Avatar (Drag & Drop or Click)</label>
+                    <div
+                      {...getAvatarRootProps()}
+                      className={`mt-1 p-6 border-2 border-dashed rounded-md text-center cursor-pointer ${
+                        isAvatarDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'
+                      }`}
+                    >
+                      <input {...getAvatarInputProps()} />
+                      {isAvatarDragActive ? (
+                        <p className="text-sm text-blue-600">Drop the image here...</p>
+                      ) : avatarFile ? (
+                        <p className="text-sm text-green-600">Image selected: {avatarFile.name}</p>
+                      ) : (
+                        <p className="text-sm text-gray-500">Click or drag an image (JPG, PNG, GIF)</p>
+                      )}
+                    </div>
+                    {avatarPreviewUrl && (
+                      <div className="mt-2 w-24 h-24 relative rounded-full overflow-hidden border border-gray-300 mx-auto">
+                        <Image src={avatarPreviewUrl} alt="Avatar Preview" fill objectFit="cover" />
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label htmlFor="about" className="block text-sm font-medium text-gray-700">About (Bio)</label>
+                    <textarea
+                      id="about"
+                      rows={4}
+                      value={metadata.about}
+                      onChange={(e) => setMetadata({ ...metadata, about: e.target.value })}
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    ></textarea>
+                  </div>
+                  <div>
+                    <label htmlFor="website" className="block text-sm font-medium text-gray-700">Website</label>
+                    <input
+                      type="url"
+                      id="website"
+                      value={metadata.website}
+                      onChange={(e) => setMetadata({ ...metadata, website: e.target.value })}
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="location" className="block text-sm font-medium text-gray-700">Location</label>
+                    <input
+                      type="text"
+                      id="location"
+                      value={metadata.location}
+                      onChange={(e) => setMetadata({ ...metadata, location: e.target.value })}
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="background" className="block text-sm font-medium text-gray-700">Background (Drag & Drop or Click)</label>
+                    <div
+                      {...getBackgroundRootProps()}
+                      className={`mt-1 p-6 border-2 border-dashed rounded-md text-center cursor-pointer ${
+                        isBackgroundDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'
+                      }`}
+                    >
+                      <input {...getBackgroundInputProps()} />
+                      {isBackgroundDragActive ? (
+                        <p className="text-sm text-blue-600">Drop the image here...</p>
+                      ) : backgroundFile ? (
+                        <p className="text-sm text-green-600">Image selected: {backgroundFile.name}</p>
+                      ) : (
+                        <p className="text-sm text-gray-500">Click or drag an image (JPG, PNG, GIF)</p>
+                      )}
+                    </div>
+                    {backgroundPreviewUrl && (
+                      <div className="mt-2 w-full h-24 relative border border-gray-300">
+                        <Image src={backgroundPreviewUrl} alt="Background Preview" fill objectFit="cover" />
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={metadataLoading}
+                    className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {metadataLoading ? 'Saving Profile...' : isFormFilled(metadata) ? 'Submit' : 'Skip'}
+                  </button>
+                </form>
+              </div>
+            )}
+            {isDevOrTest && (
+              <button
+                onClick={handleEraseLocalStorage}
+                type="button"
+                className="w-full text-xs text-red-600 hover:text-red-800 underline mt-4"
+              >
+                Erase local storage and create a new account
+              </button>
+            )}
+          </div>
+        </main>
+      </div>
+    </>
+  );
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen py-2">
+      {existingAccount ? renderExistingAccountView() : renderAccountCreationForm()}
+      <ToastContainer
+        position="top-center"
+        autoClose={3000}
+        hideProgressBar={true}
+        newestOnTop={true}
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+      />
     </div>
   );
 }

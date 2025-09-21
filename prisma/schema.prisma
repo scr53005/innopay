@@ -33,3 +33,16 @@ model topup {
   topupAt    DateTime @default(now())
   innouser   innouser @relation(fields: [userId], references: [id], map: "topup_userid_fkey")
 }
+
+model walletuser {
+  id            Int      @id @default(autoincrement())
+  accountName   String   @unique
+  creationDate  DateTime @default(now())
+  hivetxid      String   @db.Char(40)
+  profileName   String?  @db.VarChar(64)
+  profileAvatar String?  @db.VarChar(255)
+  profileBckgrd String?  @db.VarChar(255)
+  profileAbout  String?  @db.VarChar(255)
+  profileLoc    String?  @db.VarChar(255)
+  profileWeb    String?  @db.VarChar(255)
+}

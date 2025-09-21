@@ -2,6 +2,7 @@
 
 import { NextResponse } from 'next/server';
 import { accountExists, getSeed, generateHiveKeys, createAndBroadcastHiveAccount  } from '@/services/hive';
+import { createWalletUser } from '@/services/database';
 
 export async function POST(request: Request) {
   try {
@@ -34,6 +35,10 @@ export async function POST(request: Request) {
       simulateClaimedFailure: !!simulateClaimedFailure, // Ensure boolean
     });
     console.log(`Hive account ${accountName} created with transaction ID: ${transactionId}`);
+    const savedUser = await createWalletUser(accountName, transactionId);
+    if (savedUser && savedUser.id) {
+      console.log(`New user ${savedUser.accountName} created at ${savedUser.creationDate} with ID: ${savedUser.id}`);
+    }
 
     // Return the generated data to the client for the user to save
     return NextResponse.json({
