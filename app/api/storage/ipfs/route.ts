@@ -5,7 +5,13 @@ import * as Proof from '@storacha/client/proof';
 import { Signer } from '@storacha/client/principal/ed25519';
 
 export async function POST(request: NextRequest) {
-  try {
+    // Minimal stub/mock: Returns success without any dependencies or operations
+  return NextResponse.json({ 
+    success: true, 
+    uri: 'mock://ipfs/empty', 
+    cid: 'mock-cid' 
+  });
+  /* try {
     // Load client with specific private key
     if (process.env.STORACHA_KEY === undefined) {
       throw new Error('STORACHA_KEY not set');
@@ -41,4 +47,5 @@ export async function POST(request: NextRequest) {
     console.error('Storacha upload error:', error);
     return NextResponse.json({ error: error.message || 'Upload failed' }, { status: 500 });
   }
+    */
 }
