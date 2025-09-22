@@ -404,7 +404,7 @@ export default function HiveAccountCreationPage() {
         about: metadata.about.trim(),
         location: metadata.location.trim(),
         website: metadata.website.trim(),
-        avatarUri: avatarUri || '',
+        avatarUri: avatarUri || 'https://cdn.innopay.lu/Koala-BlueBg.png', // Default avatar if none
         backgroundUri: backgroundUri || '',
       };
 
@@ -477,8 +477,8 @@ export default function HiveAccountCreationPage() {
 
   const renderAccountCreationForm = () => (
     <>
-      <div className="flex flex-col items-center justify-center space-y-8 p-6 lg:p-8 bg-white rounded-xl shadow-lg w-full max-w-xl sm:max-w-2xl mb-6">
-        <div className="relative w-4/5 sm:w-3/5 h-28 sm:h-48">
+      <div className="flex flex-col items-center space-y-8 p-4 sm:p-6 lg:p-8 bg-white rounded-xl shadow-lg w-4/5 max-w-md mb-6 mx-auto">
+        <div className="relative w-[80%] max-w-[300px] h-auto aspect-video">
           <Image
             src={innopayLogoUrl}
             alt="Innopay Logo"
@@ -487,73 +487,71 @@ export default function HiveAccountCreationPage() {
           />
         </div>
       </div>
-      <h1 className="text-4xl font-bold mb-2">Create Your Innopay Account</h1>
-      <p className="mt-2 text-xl mb-4 text-center px-4">
+      <h1 className="text-3xl sm:text-4xl font-bold mb-2 text-center w-4/5">Create Your Innopay Account</h1>
+      <p className="mt-2 text-lg sm:text-xl mb-4 text-center px-4 sm:px-0">
         Enter a desired username to create your new Innopay account on the Hive blockchain.
-      </p>
-
-      <div className="w-full max-w-md relative px-4">
-        {validationMessage && (
-          <div className={`absolute -top-12 left-0 w-full p-3 rounded-lg shadow-md text-center validation-callout z-10
-            ${isValidationSuccess ? 'bg-green-100/80 text-green-800' : 'bg-red-100/80 text-red-800'}`}>
-            {validationMessage}
-          </div>
-        )}
-
-        <input
-          type="text"
-          value={accountName}
-          onChange={(e) => validateAndHandleInput(e.target.value)}
-          onFocus={() => {
-            if (accountName.length > 0) {
-              validateAndHandleInput(accountName);
-            }
-          }}
-          placeholder="Choose a username"
-          className={`w-full p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition-colors duration-300
-            ${accountName.length > 0 ? (isUsernameValid ? 'bg-green-200/50' : 'bg-red-200/50') : ''}`}
-        />
-        {/* Dev/Test Controls: Checkboxes and Erase Button */}
-        {isDevOrTest && (
-          <div className="flex flex-col space-y-2 mb-4">
-            <label className="flex items-center space-x-2">
-              <input
-                type="checkbox"
-                checked={mockAccountCreation}
-                onChange={(e) => setMockAccountCreation(e.target.checked)}
-                className="h-4 w-4 text-blue-500 focus:ring-blue-500 border-gray-300 rounded"
-              />
-              <span className="text-sm text-gray-700">Mock account creation</span>
-            </label>
-            <label className="flex items-center space-x-2">
-              <input
-                type="checkbox"
-                checked={forcePaidCreation}
-                onChange={(e) => setForcePaidCreation(e.target.checked)}
-                className="h-4 w-4 text-blue-500 focus:ring-blue-500 border-gray-300 rounded"
-              />
-              <span className="text-sm text-gray-700">Force creation with HIVE</span>
-            </label>
-          </div>
-        )}
-
-        <button
-          onClick={handleCreateAccount}
-          disabled={loading || !isUsernameValid}
-          className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {loading ? 'Creating Account...' : 'Create Innopay Account'}
-        </button>
+      </p>  <div className="w-full max-w-md relative px-4 sm:px-0">
+    {validationMessage && (
+      <div className={`absolute -top-12 left-0 w-full p-3 rounded-lg shadow-md text-center validation-callout z-10
+        ${isValidationSuccess ? 'bg-green-100/80 text-green-800' : 'bg-red-100/80 text-red-800'}`}>
+        {validationMessage}
       </div>
+    )}
 
-      {error && (
-        <div className="mt-6 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg max-w-md">
-          <p className="font-bold">Error:</p>
-          <p>{error}</p>
-        </div>
-      )}
-    </>
-  );
+    <input
+      type="text"
+      value={accountName}
+      onChange={(e) => validateAndHandleInput(e.target.value)}
+      onFocus={() => {
+        if (accountName.length > 0) {
+          validateAndHandleInput(accountName);
+        }
+      }}
+      placeholder="Choose a username"
+      className={`w-4/5 p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition-colors duration-300
+        ${accountName.length > 0 ? (isUsernameValid ? 'bg-green-200/50' : 'bg-red-200/50') : ''}`}
+    />
+    {/* Dev/Test Controls: Checkboxes and Erase Button */}
+    {isDevOrTest && (
+      <div className="flex flex-col space-y-2 mb-4">
+        <label className="flex items-center space-x-2">
+          <input
+            type="checkbox"
+            checked={mockAccountCreation}
+            onChange={(e) => setMockAccountCreation(e.target.checked)}
+            className="h-4 w-4 text-blue-500 focus:ring-blue-500 border-gray-300 rounded"
+          />
+          <span className="text-sm text-gray-700">Mock account creation</span>
+        </label>
+        <label className="flex items-center space-x-2">
+          <input
+            type="checkbox"
+            checked={forcePaidCreation}
+            onChange={(e) => setForcePaidCreation(e.target.checked)}
+            className="h-4 w-4 text-blue-500 focus:ring-blue-500 border-gray-300 rounded"
+          />
+          <span className="text-sm text-gray-700">Force creation with HIVE</span>
+        </label>
+      </div>
+    )}
+
+    <button
+      onClick={handleCreateAccount}
+      disabled={loading || !isValidationSuccess}
+      className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      {loading ? 'Creating Account...' : 'Create Innopay Account'}
+    </button>
+  </div>
+
+  {error && (
+    <div className="mt-6 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg max-w-md">
+      <p className="font-bold">Error:</p>
+      <p>{error}</p>
+    </div>
+  )}
+</>  
+);
 
   const renderExistingAccountView = () => (
     <>
@@ -582,7 +580,7 @@ export default function HiveAccountCreationPage() {
                 <div className="mt-6 px-4 py-6 w-full bg-yellow-100 border border-yellow-400 text-yellow-700 rounded-lg text-left">
                   <h2 className="text-xl font-bold mb-2">Account Reminder</h2>
                   <p className="mb-4 text-sm leading-snug break-words">
-                    Your Innopay account is <span className="font-mono font-bold text-yellow-800 break-all">{existingAccount?.accountName}</span> and your master password is <span className="font-mono font-bold text-yellow-800 break-all">{existingAccount?.masterPassword}</span>.
+                    Your Innopay account is <span className="font-mono font-bold text-yellow-800 break-all">{existingAccount?.accountName}</span> and your master password is <br/><span className="font-mono font-bold text-yellow-800 break-all">{existingAccount?.masterPassword}</span>.
                   </p>
                   <p className="text-sm">
                     Please use these credentials to access your account.

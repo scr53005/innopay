@@ -4,6 +4,30 @@ import { formatAccountName } from './utils';
 
 const prisma = new PrismaClient();
 
+// Define the DbMetadata type to match the structure used in the database
+export type DbMetadata = {
+  name: string;
+  about: string;
+  location: string;
+  website: string;
+  avatarUri: string;
+  backgroundUri: string;
+};
+
+export const setWalletUserMetadata = async (accountName: string, metadata: DbMetadata) => {
+  return prisma.walletuser.update({
+    where: { accountName },
+    data: {
+      profileName: metadata.name,
+      profileAvatar: metadata.avatarUri,
+      profileBckgrd: metadata.backgroundUri,
+      profileAbout: metadata.about,
+      profileLoc: metadata.location,
+      profileWeb: metadata.website,
+    },
+  });
+}
+
 // This function now specifically queries the walletuser table for metadata
 export const getWalletUserMetadata = async (accountName: string) => {
   try {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPostingKey, updateHiveAccountMetadata } from '@/services/hive'; // New function in services/hive.ts
+import { DbMetadata, setWalletUserMetadata } from '@/services/database';
 // import { getKeychainFromLocalStorage } from '../../../utils/keychain'; // Assume helper to load keychain from localStorage (adapt as needed)
 
 export async function POST(request: NextRequest) {
@@ -10,6 +11,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing accountName or masterKey or metadata' }, { status: 400 });
     }
 
+    let dbMetadata: DbMetadata;
+    dbMetadata = {
+      name: metadata.name || '',
+      about: metadata.about || '',
+      location: metadata.location || '',
+      website: metadata.website || '',
+      avatarUri: metadata.avatarUri || '',
+      backgroundUri: metadata.backgroundUri || '',
+    };
+    await setWalletUserMetadata(accountName, dbMetadata);
+    
     // Load keychain (adapt based on your localStorage structure)
     const posting = getPostingKey(accountName, masterKey); // Returns posting key
 

@@ -345,7 +345,7 @@ export async function createAndBroadcastHiveAccount(
 export async function updateHiveAccountMetadata(
   accountName: string,
   postingKey: PrivateKey,
-  metadata: { name: string; about: string; website: string; avatarUri: string; backgroundUri: string }
+  metadata: { name: string; about: string; website: string; location: string; avatarUri: string; backgroundUri: string }
 ): Promise<{ txid: string; metadata: any }> {
   // Get base transaction (reuse your existing getBaseTransaction)
   const baseTransaction = await getBaseTransaction();
@@ -355,6 +355,7 @@ export async function updateHiveAccountMetadata(
       name: metadata.name,
       about: metadata.about,
       website: metadata.website,
+      location: metadata.location,
       profile_image: metadata.avatarUri,
       cover_image: metadata.backgroundUri,
     },
@@ -367,6 +368,7 @@ export async function updateHiveAccountMetadata(
       account: accountName,
       json_metadata: '', // Required as empty string to satisfy serialization (general metadata)
       posting_json_metadata: postingJsonMetadata,
+      extensions: [],
     },
   ];
 
