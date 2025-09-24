@@ -577,10 +577,10 @@ export default function HiveAccountCreationPage() {
             </div>
             {!showUpdateForm ? (
               <>
-                <div className="mt-6 px-4 py-6 w-full bg-yellow-100 border border-yellow-400 text-yellow-700 rounded-lg text-left">
+                <div className="mt-6 px-4 py-6 w-full bg-yellow-100 border border-yellow-400 text-blue-800 rounded-lg text-left">
                   <h2 className="text-xl font-bold mb-2">Account Reminder</h2>
                   <p className="mb-4 text-sm leading-snug break-words">
-                    Your Innopay account is <span className="font-mono font-bold text-yellow-800 break-all">{existingAccount?.accountName}</span> and your master password is <br/><span className="font-mono font-bold text-yellow-800 break-all">{existingAccount?.masterPassword}</span>.
+                    Your Innopay account is <span className="font-mono font-bold text-blue-900 break-all">{existingAccount?.accountName}</span> and your master password is <br/><span className="font-mono font-bold text-blue-900 break-all">{existingAccount?.masterPassword}</span>.
                   </p>
                   <p className="text-sm">
                     Please use these credentials to access your account.
