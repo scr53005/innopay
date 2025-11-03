@@ -452,3 +452,188 @@ export async function transferEuroTokens(toAccount: string, amountInEuro: number
   console.log("Successfully broadcasted Hive-Engine transfer transaction:", broadcastResult);
   return broadcastResult.id;
 }
+
+/**
+ * Transfers HBD from 'innopay' account to a recipient
+ * Used for guest checkout flow where user pays in EUR and innopay sends HBD to restaurant
+ * @param {string} toAccount - The recipient's Hive account name (e.g., 'indies.cafe')
+ * @param {number} amountHbd - The amount of HBD to transfer
+ * @param {string} memo - The memo for the transfer (includes table info, order details)
+ * @returns {Promise<string>} The transaction ID of the transfer
+ */
+export async function transferHbd(toAccount: string, amountHbd: number, memo: string): Promise<string> {
+  // --- Step 1: Securely retrieve the private key from environment variables ---
+  const innopayPrivateKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
+  const innopayAccount = 'innopay';
+
+  if (!innopayPrivateKey) {
+    throw new Error("Missing HIVE_ACTIVE_KEY_INNOPAY environment variable.");
+  }
+
+  // --- Step 2: Construct the HBD transfer operation ---
+  const transferOperation = [
+    'transfer',
+    {
+      from: innopayAccount,
+      to: toAccount,
+      amount: `${amountHbd.toFixed(3)} HBD`, // HBD uses 3 decimal places
+      memo: memo,
+    },
+  ];
+
+  // --- Step 3: Get current blockchain block details for transaction validity ---
+  const dynamicGlobalProperties = await hiveClient.database.getDynamicGlobalProperties();
+  const headBlockNumber = dynamicGlobalProperties.head_block_number;
+  const headBlockId = dynamicGlobalProperties.head_block_id;
+  const refBlockNum = headBlockNumber & 0xffff;
+  const refBlockPrefix = Buffer.from(headBlockId, 'hex').readUInt32LE(4);
+  const expirationTime = Math.floor(Date.now() / 1000) + 60; // 60-second expiration
+
+  const baseTransaction: Transaction = {
+    ref_block_num: refBlockNum,
+    ref_block_prefix: refBlockPrefix,
+    expiration: new Date(expirationTime * 1000).toISOString().slice(0, -5),
+    operations: [transferOperation as any],
+    extensions: [],
+  };
+
+  // --- Step 4: Sign and broadcast the transaction ---
+  console.log(`Broadcasting HBD transfer of ${amountHbd.toFixed(3)} to account '${toAccount}' with memo: ${memo}`);
+  const signedTransaction = hiveClient.broadcast.sign(baseTransaction, [PrivateKey.fromString(innopayPrivateKey)]);
+  const broadcastResult = await hiveClient.broadcast.send(signedTransaction);
+
+  console.log("Successfully broadcasted HBD transfer transaction:", broadcastResult);
+  return broadcastResult.id;
+}
+
+/**
+ * Transfers EURO tokens from a specified account (using innopay authority)
+ * Used when a newly created account needs to pay for their order using their EURO balance
+ * @param {string} fromAccount - The sender's Hive account name (newly created account)
+ * @param {string} toAccount - The recipient's Hive account name (e.g., 'indies.cafe')
+ * @param {number} amountInEuro - The amount of EURO to transfer
+ * @param {string} memo - The memo for the transfer (includes order details)
+ * @returns {Promise<string>} The transaction ID of the transfer
+ */
+export async function transferEuroTokensFromAccount(
+  fromAccount: string,
+  toAccount: string,
+  amountInEuro: number,
+  memo: string
+): Promise<string> {
+  // --- Step 1: Securely retrieve the innopay private key (has active authority over new accounts) ---
+  const innopayPrivateKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
+
+  if (!innopayPrivateKey) {
+    throw new Error("Missing HIVE_ACTIVE_KEY_INNOPAY environment variable.");
+  }
+
+  // --- Step 2: Construct the Hive-Engine transfer payload ---
+  const transferPayload = {
+    contractName: 'tokens',
+    contractAction: 'transfer',
+    contractPayload: {
+      symbol: 'EURO',
+      to: toAccount,
+      quantity: amountInEuro.toFixed(2),
+      memo: memo,
+    },
+  };
+
+  const transferOperation = [
+    'custom_json',
+    {
+      required_auths: [fromAccount], // Transfer FROM the new account
+      required_posting_auths: [],
+      id: 'ssc-mainnet-hive',
+      json: JSON.stringify(transferPayload),
+    },
+  ];
+
+  // --- Step 3: Get current blockchain block details for transaction validity ---
+  const dynamicGlobalProperties = await hiveClient.database.getDynamicGlobalProperties();
+  const headBlockNumber = dynamicGlobalProperties.head_block_number;
+  const headBlockId = dynamicGlobalProperties.head_block_id;
+  const refBlockNum = headBlockNumber & 0xffff;
+  const refBlockPrefix = Buffer.from(headBlockId, 'hex').readUInt32LE(4);
+  const expirationTime = Math.floor(Date.now() / 1000) + 60; // 60-second expiration
+
+  const baseTransaction: Transaction = {
+    ref_block_num: refBlockNum,
+    ref_block_prefix: refBlockPrefix,
+    expiration: new Date(expirationTime * 1000).toISOString().slice(0, -5),
+    operations: [transferOperation as any],
+    extensions: [],
+  };
+
+  // --- Step 4: Sign and broadcast the transaction using innopay's authority ---
+  console.log(`Broadcasting EURO token transfer of ${amountInEuro} from '${fromAccount}' to '${toAccount}'.`);
+  const signedTransaction = hiveClient.broadcast.sign(baseTransaction, [PrivateKey.fromString(innopayPrivateKey)]);
+  const broadcastResult = await hiveClient.broadcast.send(signedTransaction);
+
+  console.log("Successfully broadcasted EURO transfer from account:", broadcastResult);
+  return broadcastResult.id;
+}
+
+/**
+ * Transfers RUBIS tokens to incentivize profile completion
+ * RUBIS is another Hive-Engine token issued by innopay
+ * @param {string} toAccount - The recipient's Hive account name
+ * @param {number} amountInRubis - The amount of RUBIS to transfer
+ * @returns {Promise<string>} The transaction ID of the transfer
+ */
+export async function transferRubisTokens(toAccount: string, amountInRubis: number): Promise<string> {
+  // --- Step 1: Securely retrieve the private key from environment variables ---
+  const innopayPrivateKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
+  const innopayAccount = 'innopay';
+
+  if (!innopayPrivateKey) {
+    throw new Error("Missing HIVE_ACTIVE_KEY_INNOPAY environment variable.");
+  }
+
+  // --- Step 2: Construct the Hive-Engine transfer payload ---
+  const transferPayload = {
+    contractName: 'tokens',
+    contractAction: 'transfer',
+    contractPayload: {
+      symbol: 'RUBIS',
+      to: toAccount,
+      quantity: amountInRubis.toFixed(2),
+      memo: `Profile completion bonus - thank you for completing your Innopay profile!`,
+    },
+  };
+
+  const transferOperation = [
+    'custom_json',
+    {
+      required_auths: [innopayAccount],
+      required_posting_auths: [],
+      id: 'ssc-mainnet-hive',
+      json: JSON.stringify(transferPayload),
+    },
+  ];
+
+  // --- Step 3: Get current blockchain block details for transaction validity ---
+  const dynamicGlobalProperties = await hiveClient.database.getDynamicGlobalProperties();
+  const headBlockNumber = dynamicGlobalProperties.head_block_number;
+  const headBlockId = dynamicGlobalProperties.head_block_id;
+  const refBlockNum = headBlockNumber & 0xffff;
+  const refBlockPrefix = Buffer.from(headBlockId, 'hex').readUInt32LE(4);
+  const expirationTime = Math.floor(Date.now() / 1000) + 60; // 60-second expiration
+
+  const baseTransaction: Transaction = {
+    ref_block_num: refBlockNum,
+    ref_block_prefix: refBlockPrefix,
+    expiration: new Date(expirationTime * 1000).toISOString().slice(0, -5),
+    operations: [transferOperation as any],
+    extensions: [],
+  };
+
+  // --- Step 4: Sign and broadcast the transaction ---
+  console.log(`Broadcasting RUBIS token transfer of ${amountInRubis} to account '${toAccount}'.`);
+  const signedTransaction = hiveClient.broadcast.sign(baseTransaction, [PrivateKey.fromString(innopayPrivateKey)]);
+  const broadcastResult = await hiveClient.broadcast.send(signedTransaction);
+
+  console.log("Successfully broadcasted RUBIS transfer transaction:", broadcastResult);
+  return broadcastResult.id;
+}

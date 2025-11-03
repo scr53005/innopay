@@ -143,6 +143,30 @@ export default function HiveAccountCreationPage() {
     };
   }, [avatarPreviewUrl, backgroundPreviewUrl]);
 
+  // Send credentials to opener window (e.g., indiesmenu) after successful account creation
+  useEffect(() => {
+    if (success && results.accountName && results.masterPassword && window.opener && !window.opener.closed) {
+      console.log('Sending wallet credentials to opener window...');
+
+      // Determine target origin (production vs local testing)
+      const targetOrigin = window.location.hostname === 'localhost'
+        ? '*' // Allow any origin during local testing
+        : 'https://indies.innopay.lu';
+
+      // Send message to the opener (indiesmenu)
+      window.opener.postMessage(
+        {
+          type: 'INNOPAY_WALLET_CREATED',
+          username: results.accountName,
+          activeKey: results.masterPassword, // For now, sending masterPassword as activeKey
+        },
+        targetOrigin
+      );
+
+      console.log(`Credentials sent for ${results.accountName} to ${targetOrigin}`);
+    }
+  }, [success, results]);
+
   const validateAndHandleInput = (input: string) => {
     const lowerCaseInput = input.toLowerCase();
     setAccountName(lowerCaseInput);

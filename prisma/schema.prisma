@@ -24,6 +24,7 @@ model innouser {
   verified            Boolean              @default(false)
   bip39seedandaccount bip39seedandaccount?
   topup               topup[]
+  bonus               bonus[]
 }
 
 model topup {
@@ -45,4 +46,55 @@ model walletuser {
   profileAbout  String?  @db.VarChar(255)
   profileLoc    String?  @db.VarChar(255)
   profileWeb    String?  @db.VarChar(255)
+  bonus         bonus[]
+}
+
+model campaign {
+  id           Int       @id @default(autoincrement())
+  name         String    @db.VarChar(64)
+  startDate    DateTime  @default(now())
+  endDate      DateTime?
+  minAmount50  Decimal   @db.Decimal(10, 2)
+  bonus50      Decimal   @db.Decimal(10, 2)
+  maxUsers50   Int
+  minAmount100 Decimal   @db.Decimal(10, 2)
+  bonus100     Decimal   @db.Decimal(10, 2)
+  maxUsers100  Int
+  active       Boolean   @default(true)
+  bonus        bonus[]
+}
+
+model bonus {
+  id           Int         @id @default(autoincrement())
+  campaignId   Int
+  userId       Int?
+  walletUserId Int?
+  accountName  String      @db.VarChar(16)
+  bonusAmount  Decimal     @db.Decimal(10, 2)
+  grantedAt    DateTime    @default(now())
+  campaign     campaign    @relation(fields: [campaignId], references: [id])
+  innouser     innouser?   @relation(fields: [userId], references: [id])
+  walletuser   walletuser? @relation(fields: [walletUserId], references: [id])
+}
+
+model guestCheckout {
+  id              Int       @id @default(autoincrement())
+  stripeSessionId String    @unique
+  amountEuro      Decimal   @db.Decimal(10, 2)
+  amountHbd       Decimal   @db.Decimal(10, 4)
+  recipient       String    @db.VarChar(16)
+  memo            String    @db.Text
+  hiveTxId        String?   @db.Char(40)
+  status          String    @db.VarChar(20)
+  createdAt       DateTime  @default(now())
+  completedAt     DateTime?
+}
+
+model currencyConversion {
+  id             Int      @id @default(autoincrement())
+  date           DateTime @unique
+  conversionRate Decimal  @db.Decimal(10, 6)
+  createdAt      DateTime @default(now())
+
+  @@map("currency_conversion")
 }
