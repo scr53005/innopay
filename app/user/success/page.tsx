@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Stripe from 'stripe';
 
@@ -12,7 +12,7 @@ interface AccountDetails {
   bonusAmount?: number;
 }
 
-export default function AccountSuccessPage() {
+function AccountSuccessContent() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get('session_id');
   const token = searchParams.get('token'); // For postMessage security
@@ -334,5 +334,20 @@ Generated with Innopay - https://innopay.lu
         )}
       </div>
     </div>
+  );
+}
+
+export default function AccountSuccessPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Loading...</p>
+        </div>
+      </div>
+    }>
+      <AccountSuccessContent />
+    </Suspense>
   );
 }
