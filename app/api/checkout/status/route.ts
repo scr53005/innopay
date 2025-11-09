@@ -59,13 +59,13 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(
       {
-        sessionId: checkout.stripesessionid,
+        sessionId: checkout.stripeSessionId,
         status: checkout.status,
         isComplete,
         isPending,
-        hiveTxId: checkout.hivetxid || null,
-        euroTxId: checkout.eurotxid || null,
-        amount: checkout.amount,
+        hiveTxId: checkout.hiveTxId || null,
+        euroTxId: checkout.hiveTxId || null, // Using hiveTxId as fallback - adjust if you have separate euroTxId field
+        amount: checkout.amountEuro,
         recipient: checkout.recipient,
       },
       {
