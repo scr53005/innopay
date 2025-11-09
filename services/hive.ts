@@ -16,7 +16,14 @@ const hiveClient = new Client(['https://api.hive.blog', 'https://api.syncad.com'
  * @returns {string} The recipient to use (overridden if in dev)
  */
 export function getRecipientForEnvironment(recipient: string): string {
-  // Check if we're in dev environment by checking DATABASE_URL
+  // Priority 1: Explicit recipient override for testing (e.g., acceptance environment)
+  const recipientOverride = process.env.RECIPIENT_OVERRIDE;
+  if (recipientOverride && recipient === 'indies.cafe') {
+    console.log(`[OVERRIDE] Redirecting 'indies.cafe' to '${recipientOverride}' (RECIPIENT_OVERRIDE env var)`);
+    return recipientOverride;
+  }
+
+  // Priority 2: Check if we're in dev environment by checking DATABASE_URL
   const databaseUrl = process.env.DATABASE_URL || '';
   const isDev = databaseUrl.includes('innopaydb');
 
