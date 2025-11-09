@@ -188,7 +188,7 @@ async function handleGuestCheckout(session: Stripe.Checkout.Session) {
       console.warn('[GUEST] Insufficient HBD, transferring EURO tokens instead');
       try {
         // Use the original EUR amount from Stripe (EURO tokens represent EUR 1:1)
-        const euroTxId = await transferEuroTokens(recipient, amountEuro);
+        const euroTxId = await transferEuroTokens(recipient, amountEuro, memo);
         console.log(`[GUEST] EURO tokens transferred successfully: ${euroTxId}`);
 
         // Try to update DB, but don't fail if it errors

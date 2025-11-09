@@ -423,9 +423,10 @@ export async function updateHiveAccountMetadata(
  * This function uses a custom_json operation to interact with the Hive-Engine smart contract.
  * @param {string} toAccount - The recipient's Hive account name.
  * @param {number} amountInEuro - The amount of EURO to transfer.
+ * @param {string} memo - Optional custom memo for the transfer. Defaults to generic top-up message.
  * @returns {Promise<string>} The transaction ID of the transfer.
  */
-export async function transferEuroTokens(toAccount: string, amountInEuro: number): Promise<string> {
+export async function transferEuroTokens(toAccount: string, amountInEuro: number, memo?: string): Promise<string> {
   // --- Step 1: Override recipient for dev environment ---
   const recipient = getRecipientForEnvironment(toAccount);
 
@@ -445,7 +446,7 @@ export async function transferEuroTokens(toAccount: string, amountInEuro: number
       symbol: 'EURO',
       to: recipient,
       quantity: amountInEuro.toFixed(2), // Hive-Engine amounts are typically fixed-point with 8 decimals
-      memo: `Top-up via Innopay for ${amountInEuro} EUR.`,
+      memo: memo || `Top-up via Innopay for ${amountInEuro} EUR.`,
     },
   };
 
