@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { generateHiveKeys, getSeed } from '@/services/hive';
+import { findWalletUserByAccountName } from '@/services/database';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-06-30.basil',
@@ -53,18 +54,33 @@ export async function GET(
       );
     }
 
-    // Regenerate the seed and keys (same as webhook did)
-    // NOTE: In a real production system, you'd want to retrieve this from a secure database
-    // instead of regenerating. This is only safe because the seed generation is deterministic.
-    const seed = getSeed(accountName);
-    const keychain = generateHiveKeys(accountName, seed);
+    // Retrieve account details from database
+    const walletUser = await findWalletUserByAccountName(accountName);
+
+    if (!walletUser) {
+      return NextResponse.json(
+        { error: 'Account not found in database' },
+        { status: 404 }
+      );
+    }
+
+    // If seed or masterPassword is missing (shouldn't happen for new accounts), regenerate
+    let seed = walletUser.seed;
+    let masterPassword = walletUser.masterPassword;
+
+    if (!seed || !masterPassword) {
+      console.warn(`[SESSION] Missing seed/masterPassword for ${accountName}, regenerating...`);
+      seed = getSeed(accountName);
+      const keychain = generateHiveKeys(accountName, seed);
+      masterPassword = keychain.masterPassword;
+    }
 
     // Return account details
     return NextResponse.json({
       accountName,
       seed,
-      masterPassword: keychain.masterPassword,
-      hiveTxId: session.metadata.hiveTxId || 'pending',
+      masterPassword,
+      hiveTxId: walletUser.hivetxid,
       bonusAmount: session.metadata.bonusAmount ? parseFloat(session.metadata.bonusAmount) : 0,
     });
 

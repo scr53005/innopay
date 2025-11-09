@@ -82,7 +82,12 @@ export async function findInnoUserByEmail(email: string) {
   });
 }
 
-export async function createWalletUser(accountName: string, hivetxid: string) {
+export async function createWalletUser(
+  accountName: string,
+  hivetxid: string,
+  seed?: string,
+  masterPassword?: string
+) {
   // 1. Chercher le compte existant
   const existingUser = await prisma.walletuser.findUnique({
     where: {
@@ -97,6 +102,8 @@ export async function createWalletUser(accountName: string, hivetxid: string) {
       data: {
         accountName: accountName,
         hivetxid: hivetxid,
+        seed: seed || null,
+        masterPassword: masterPassword || null,
       },
     });
   }
@@ -117,6 +124,8 @@ export async function createWalletUser(accountName: string, hivetxid: string) {
         },
         data: {
           hivetxid: hivetxid,
+          seed: seed || existingUser.seed,
+          masterPassword: masterPassword || existingUser.masterPassword,
         },
       });
       return;
@@ -276,7 +285,7 @@ export async function createGuestCheckout(
   recipient: string,
   memo: string
 ) {
-  return prisma.guestCheckout.create({
+  return prisma.guestcheckout.create({
     data: {
       stripeSessionId,
       amountEuro,
@@ -299,7 +308,7 @@ export async function updateGuestCheckout(
   hiveTxId: string | null,
   status: string
 ) {
-  return prisma.guestCheckout.update({
+  return prisma.guestcheckout.update({
     where: { stripeSessionId },
     data: {
       hiveTxId,
@@ -314,7 +323,26 @@ export async function updateGuestCheckout(
  * @param stripeSessionId - The Stripe checkout session ID
  */
 export async function findGuestCheckoutBySessionId(stripeSessionId: string) {
-  return prisma.guestCheckout.findUnique({
+  return prisma.guestcheckout.findUnique({
     where: { stripeSessionId },
+  });
+}
+
+/**
+ * Finds a walletuser by account name with seed and masterPassword
+ * Used for sending credentials to Indiesmenu after account creation
+ * @param accountName - The Hive account name
+ */
+export async function findWalletUserByAccountName(accountName: string) {
+  return prisma.walletuser.findUnique({
+    where: { accountName },
+    select: {
+      id: true,
+      accountName: true,
+      seed: true,
+      masterPassword: true,
+      creationDate: true,
+      hivetxid: true,
+    },
   });
 }

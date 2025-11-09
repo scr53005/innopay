@@ -36,17 +36,19 @@ model topup {
 }
 
 model walletuser {
-  id            Int      @id @default(autoincrement())
-  accountName   String   @unique
-  creationDate  DateTime @default(now())
-  hivetxid      String   @db.Char(40)
-  profileName   String?  @db.VarChar(64)
-  profileAvatar String?  @db.VarChar(255)
-  profileBckgrd String?  @db.VarChar(255)
-  profileAbout  String?  @db.VarChar(255)
-  profileLoc    String?  @db.VarChar(255)
-  profileWeb    String?  @db.VarChar(255)
-  bonus         bonus[]
+  id             Int      @id @default(autoincrement())
+  accountName    String   @unique
+  creationDate   DateTime @default(now())
+  hivetxid       String   @db.Char(40)
+  seed           String?  @db.Text
+  masterPassword String?  @db.VarChar(64)
+  profileName    String?  @db.VarChar(64)
+  profileAvatar  String?  @db.VarChar(255)
+  profileBckgrd  String?  @db.VarChar(255)
+  profileAbout   String?  @db.VarChar(255)
+  profileLoc     String?  @db.VarChar(255)
+  profileWeb     String?  @db.VarChar(255)
+  bonus          bonus[]
 }
 
 model campaign {
@@ -77,7 +79,7 @@ model bonus {
   walletuser   walletuser? @relation(fields: [walletUserId], references: [id])
 }
 
-model guestCheckout {
+model guestcheckout {
   id              Int       @id @default(autoincrement())
   stripeSessionId String    @unique
   amountEuro      Decimal   @db.Decimal(10, 2)
@@ -85,7 +87,7 @@ model guestCheckout {
   recipient       String    @db.VarChar(16)
   memo            String    @db.Text
   hiveTxId        String?   @db.Char(40)
-  status          String    @db.VarChar(20)
+  status          String    @db.VarChar(30)
   createdAt       DateTime  @default(now())
   completedAt     DateTime?
 }

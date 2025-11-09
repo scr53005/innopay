@@ -14,6 +14,7 @@ import {
   createBonus,
   findGuestCheckoutBySessionId,
   updateGuestCheckout,
+  createWalletUser,
 } from '@/services/database';
 
 // Import Hive functions
@@ -122,8 +123,15 @@ export async function POST(req: NextRequest) {
     case 'payment_method.attached':
       console.log('Payment Method Attached:', event.data.object.id);
       break;
+    case 'charge.updated':
+    case 'charge.succeeded':
+    case 'payment_intent.created':
+    case 'payment_intent.payment_failed':
+      // Informational events - acknowledge but don't process
+      console.log(`Stripe event received (no action needed): ${event.type}`);
+      break;
     default:
-      console.warn(`Unhandled event type: ${event.type}`);
+      console.log(`Unhandled event type (ignored): ${event.type}`);
   }
 
   return NextResponse.json({ received: true }, { status: 200 });
@@ -157,8 +165,14 @@ async function handleGuestCheckout(session: Stripe.Checkout.Session) {
     const hiveTxId = await transferHbd(recipient, hbdAmountNum, memo);
     console.log(`[GUEST] HBD transfer successful: ${hiveTxId}`);
 
-    // Update guest checkout record
-    await updateGuestCheckout(session.id, hiveTxId, 'completed');
+    // Try to update DB, but don't fail if it errors
+    try {
+      await updateGuestCheckout(session.id, hiveTxId, 'completed');
+      console.log('[GUEST] Database updated successfully');
+    } catch (dbError) {
+      console.error('[GUEST] WARNING: Database update failed, but HBD transfer succeeded:', dbError);
+      // Don't throw - the payment went through, just log the DB issue
+    }
 
     return NextResponse.json({
       message: 'Guest checkout completed successfully',
@@ -173,9 +187,18 @@ async function handleGuestCheckout(session: Stripe.Checkout.Session) {
       // Transfer EURO tokens instead (unlimited supply)
       console.warn('[GUEST] Insufficient HBD, transferring EURO tokens instead');
       try {
-        const euroAmount = convertHbdToEur(hbdAmountNum, 1.0); // Approximate conversion
-        const euroTxId = await transferEuroTokens(recipient, euroAmount);
-        await updateGuestCheckout(session.id, euroTxId, 'completed_euro_fallback');
+        // Use the original EUR amount from Stripe (EURO tokens represent EUR 1:1)
+        const euroTxId = await transferEuroTokens(recipient, amountEuro);
+        console.log(`[GUEST] EURO tokens transferred successfully: ${euroTxId}`);
+
+        // Try to update DB, but don't fail if it errors
+        try {
+          await updateGuestCheckout(session.id, euroTxId, 'completed_euro_fallback');
+          console.log('[GUEST] Database updated successfully');
+        } catch (dbError) {
+          console.error('[GUEST] WARNING: Database update failed, but EURO transfer succeeded:', dbError);
+          // Don't throw - the payment went through, just log the DB issue
+        }
 
         return NextResponse.json({
           message: 'Guest checkout completed with EURO tokens (HBD insufficient)',
@@ -184,13 +207,21 @@ async function handleGuestCheckout(session: Stripe.Checkout.Session) {
         }, { status: 200 });
       } catch (euroError) {
         console.error('[GUEST] EURO token transfer also failed:', euroError);
-        await updateGuestCheckout(session.id, null, 'failed');
+        try {
+          await updateGuestCheckout(session.id, null, 'failed');
+        } catch (dbError) {
+          console.error('[GUEST] DB update failed (transfer also failed):', dbError);
+        }
         throw new Error('Both HBD and EURO transfers failed');
       }
     }
 
     // For other errors, mark as failed
-    await updateGuestCheckout(session.id, null, 'failed');
+    try {
+      await updateGuestCheckout(session.id, null, 'failed');
+    } catch (dbError) {
+      console.error('[GUEST] DB update failed (HBD transfer failed):', dbError);
+    }
     throw hiveError;
   }
 }
@@ -233,7 +264,11 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
   const hiveTxId = await createAndBroadcastHiveAccount(accountName, keychain);
   console.log(`[ACCOUNT] Account created successfully: ${hiveTxId}`);
 
-  // Save to database
+  // Save to walletuser table with seed and masterPassword
+  console.log(`[ACCOUNT] Saving to walletuser table with seed and masterPassword`);
+  await createWalletUser(accountName, hiveTxId, seed, keychain.masterPassword);
+
+  // Save to database (legacy innouser table if email provided)
   let userId: number | null = null;
   if (customerEmail) {
     const createdRecords = await createNewInnoUserWithTopupAndAccount(

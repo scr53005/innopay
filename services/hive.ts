@@ -9,6 +9,27 @@ const hiveClient = new Client(['https://api.hive.blog', 'https://api.syncad.com'
 // const hiveClient = new Client('https://api.deathwing.me');
 
 /**
+ * Override recipient for testing in dev environment
+ * Convention: 1 HBD = 1 USD (never fetch from external APIs)
+ * Dev environment uses 'indies-test' instead of 'indies.cafe'
+ * @param {string} recipient - The original recipient
+ * @returns {string} The recipient to use (overridden if in dev)
+ */
+export function getRecipientForEnvironment(recipient: string): string {
+  // Check if we're in dev environment by checking DATABASE_URL
+  const databaseUrl = process.env.DATABASE_URL || '';
+  const isDev = databaseUrl.includes('innopaydb');
+
+  // In dev, override indies.cafe with indies-test
+  if (isDev && recipient === 'indies.cafe') {
+    console.log(`[DEV] Overriding recipient from 'indies.cafe' to 'indies-test'`);
+    return 'indies-test';
+  }
+
+  return recipient;
+}
+
+/**
  * Defines the structure for a Keychain object, containing all necessary
  * Hive account keys derived from a seed.
  */
@@ -398,7 +419,10 @@ export async function updateHiveAccountMetadata(
  * @returns {Promise<string>} The transaction ID of the transfer.
  */
 export async function transferEuroTokens(toAccount: string, amountInEuro: number): Promise<string> {
-  // --- Step 1: Securely retrieve the private key from environment variables ---
+  // --- Step 1: Override recipient for dev environment ---
+  const recipient = getRecipientForEnvironment(toAccount);
+
+  // --- Step 2: Securely retrieve the private key from environment variables ---
   const innopayPrivateKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
   const innopayAccount = 'innopay';
 
@@ -406,13 +430,13 @@ export async function transferEuroTokens(toAccount: string, amountInEuro: number
     throw new Error("Missing HIVE_ACTIVE_KEY_INNOPAY environment variable.");
   }
 
-  // --- Step 2: Construct the Hive-Engine transfer payload ---
+  // --- Step 3: Construct the Hive-Engine transfer payload ---
   const transferPayload = {
     contractName: 'tokens',
     contractAction: 'transfer',
     contractPayload: {
       symbol: 'EURO',
-      to: toAccount,
+      to: recipient,
       quantity: amountInEuro.toFixed(2), // Hive-Engine amounts are typically fixed-point with 8 decimals
       memo: `Top-up via Innopay for ${amountInEuro} EUR.`,
     },
@@ -428,7 +452,7 @@ export async function transferEuroTokens(toAccount: string, amountInEuro: number
     },
   ];
 
-  // --- Step 3: Get current blockchain block details for transaction validity ---
+  // --- Step 4: Get current blockchain block details for transaction validity ---
   const dynamicGlobalProperties = await hiveClient.database.getDynamicGlobalProperties();
   const headBlockNumber = dynamicGlobalProperties.head_block_number;
   const headBlockId = dynamicGlobalProperties.head_block_id;
@@ -444,8 +468,8 @@ export async function transferEuroTokens(toAccount: string, amountInEuro: number
     extensions: [],
   };
 
-  // --- Step 4: Sign and broadcast the transaction ---
-  console.log(`Broadcasting EURO token transfer of ${amountInEuro} to account '${toAccount}'.`);
+  // --- Step 5: Sign and broadcast the transaction ---
+  console.log(`Broadcasting EURO token transfer of ${amountInEuro} to account '${recipient}' (original: ${toAccount}).`);
   const signedTransaction = hiveClient.broadcast.sign(baseTransaction, [PrivateKey.fromString(innopayPrivateKey)]);
   const broadcastResult = await hiveClient.broadcast.send(signedTransaction);
 
@@ -462,7 +486,10 @@ export async function transferEuroTokens(toAccount: string, amountInEuro: number
  * @returns {Promise<string>} The transaction ID of the transfer
  */
 export async function transferHbd(toAccount: string, amountHbd: number, memo: string): Promise<string> {
-  // --- Step 1: Securely retrieve the private key from environment variables ---
+  // --- Step 1: Override recipient for dev environment ---
+  const recipient = getRecipientForEnvironment(toAccount);
+
+  // --- Step 2: Securely retrieve the private key from environment variables ---
   const innopayPrivateKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
   const innopayAccount = 'innopay';
 
@@ -470,18 +497,18 @@ export async function transferHbd(toAccount: string, amountHbd: number, memo: st
     throw new Error("Missing HIVE_ACTIVE_KEY_INNOPAY environment variable.");
   }
 
-  // --- Step 2: Construct the HBD transfer operation ---
+  // --- Step 3: Construct the HBD transfer operation ---
   const transferOperation = [
     'transfer',
     {
       from: innopayAccount,
-      to: toAccount,
+      to: recipient,
       amount: `${amountHbd.toFixed(3)} HBD`, // HBD uses 3 decimal places
       memo: memo,
     },
   ];
 
-  // --- Step 3: Get current blockchain block details for transaction validity ---
+  // --- Step 4: Get current blockchain block details for transaction validity ---
   const dynamicGlobalProperties = await hiveClient.database.getDynamicGlobalProperties();
   const headBlockNumber = dynamicGlobalProperties.head_block_number;
   const headBlockId = dynamicGlobalProperties.head_block_id;
@@ -497,8 +524,8 @@ export async function transferHbd(toAccount: string, amountHbd: number, memo: st
     extensions: [],
   };
 
-  // --- Step 4: Sign and broadcast the transaction ---
-  console.log(`Broadcasting HBD transfer of ${amountHbd.toFixed(3)} to account '${toAccount}' with memo: ${memo}`);
+  // --- Step 5: Sign and broadcast the transaction ---
+  console.log(`Broadcasting HBD transfer of ${amountHbd.toFixed(3)} to account '${recipient}' with memo: ${memo}`);
   const signedTransaction = hiveClient.broadcast.sign(baseTransaction, [PrivateKey.fromString(innopayPrivateKey)]);
   const broadcastResult = await hiveClient.broadcast.send(signedTransaction);
 
@@ -521,20 +548,23 @@ export async function transferEuroTokensFromAccount(
   amountInEuro: number,
   memo: string
 ): Promise<string> {
-  // --- Step 1: Securely retrieve the innopay private key (has active authority over new accounts) ---
+  // --- Step 1: Override recipient for dev environment ---
+  const recipient = getRecipientForEnvironment(toAccount);
+
+  // --- Step 2: Securely retrieve the innopay private key (has active authority over new accounts) ---
   const innopayPrivateKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
 
   if (!innopayPrivateKey) {
     throw new Error("Missing HIVE_ACTIVE_KEY_INNOPAY environment variable.");
   }
 
-  // --- Step 2: Construct the Hive-Engine transfer payload ---
+  // --- Step 3: Construct the Hive-Engine transfer payload ---
   const transferPayload = {
     contractName: 'tokens',
     contractAction: 'transfer',
     contractPayload: {
       symbol: 'EURO',
-      to: toAccount,
+      to: recipient,
       quantity: amountInEuro.toFixed(2),
       memo: memo,
     },
@@ -550,7 +580,7 @@ export async function transferEuroTokensFromAccount(
     },
   ];
 
-  // --- Step 3: Get current blockchain block details for transaction validity ---
+  // --- Step 4: Get current blockchain block details for transaction validity ---
   const dynamicGlobalProperties = await hiveClient.database.getDynamicGlobalProperties();
   const headBlockNumber = dynamicGlobalProperties.head_block_number;
   const headBlockId = dynamicGlobalProperties.head_block_id;
@@ -566,8 +596,8 @@ export async function transferEuroTokensFromAccount(
     extensions: [],
   };
 
-  // --- Step 4: Sign and broadcast the transaction using innopay's authority ---
-  console.log(`Broadcasting EURO token transfer of ${amountInEuro} from '${fromAccount}' to '${toAccount}'.`);
+  // --- Step 5: Sign and broadcast the transaction using innopay's authority ---
+  console.log(`Broadcasting EURO token transfer of ${amountInEuro} from '${fromAccount}' to '${recipient}'.`);
   const signedTransaction = hiveClient.broadcast.sign(baseTransaction, [PrivateKey.fromString(innopayPrivateKey)]);
   const broadcastResult = await hiveClient.broadcast.send(signedTransaction);
 

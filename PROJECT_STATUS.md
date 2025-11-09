@@ -1,8 +1,8 @@
 # INNOPAY REFACTORING - PROJECT STATUS
 
-**Last Updated**: 2025-11-03
-**Session ID**: [Your Claude Code session ID if available]
-**Status**: Phase 1 Complete (Backend Infrastructure) ✅
+**Last Updated**: 2025-11-08
+**Session ID**: Refactoring continuation session
+**Status**: Phase 1 Complete + Clarifications Applied ✅
 
 ---
 
@@ -21,7 +21,7 @@ Both flows integrate with **indiesmenu** restaurant app for seamless ordering.
 ### Database Schema Evolution
 - ✅ Added `campaign` table for promotional campaigns
 - ✅ Added `bonus` table for tracking user bonuses
-- ✅ Added `guestCheckout` table for guest transactions
+- ✅ Added `guestcheckout` table for guest transactions (all lowercase for PostgreSQL compatibility)
 - ✅ Added `currencyConversion` table for EUR/USD rate caching
 - ✅ Migration: `20251103114536_add_campaign_bonus_guest_currency_tables`
 
@@ -37,7 +37,7 @@ Both flows integrate with **indiesmenu** restaurant app for seamless ordering.
 
 ### Database Helpers
 - ✅ Campaign functions: `getActiveCampaign()`, `getBonusCountForCampaign()`, `createBonus()`
-- ✅ Guest checkout functions: `createGuestCheckout()`, `updateGuestCheckout()`
+- ✅ Guest checkout functions: `createGuestCheckout()`, `updateGuestCheckout()`, `findGuestCheckoutBySessionId()`
 
 ### API Routes
 - ✅ `/app/api/checkout/guest/route.ts` - Guest checkout
@@ -49,6 +49,17 @@ Both flows integrate with **indiesmenu** restaurant app for seamless ordering.
 ### Success Pages
 - ✅ `/app/guest/success/page.tsx` - Guest payment confirmation
 - ✅ `/app/user/success/page.tsx` - Account credentials display
+
+### Recent Updates (2025-11-08)
+- ✅ **HBD = USD Convention Verified** - No external API calls for HBD conversion
+- ✅ **walletuser Enhancement** - Added `seed` and `masterPassword` fields for Indiesmenu integration
+- ✅ **Database Migration** - `20251108182945_add_seed_masterpassword_to_walletuser`
+- ✅ **Webhook Update** - Account creation now saves credentials to walletuser table
+- ✅ **Session API Fix** - Retrieves credentials from database (no more regeneration)
+- ✅ **Environment-Based Recipients** - Dev mode auto-redirects to 'indies-test' account
+- ✅ **Testing Commands** - Added Windows PowerShell alternatives to curl examples
+- ✅ **Guest Checkout Implementation** - Complete flow from Indiesmenu to Stripe to HBD/EURO transfer
+- ✅ **PostgreSQL Compatibility** - All table names lowercase (guestcheckout, not guestCheckout)
 
 ---
 
@@ -118,6 +129,26 @@ Both flows integrate with **indiesmenu** restaurant app for seamless ordering.
 - Provides meaningful initial balance
 - Aligns with bonus campaign tiers (50/100 EUR)
 
+### HBD = USD Convention
+- **Convention**: 1 HBD = 1 USD throughout the application
+- **Never fetch** HBD/USD rate from CoinGecko or any external API
+- Only EUR/USD rate is fetched from ECB for credit card payments
+- This simplifies conversions and aligns with HBD's stablecoin peg
+
+### Development vs Production Recipients
+- **Dev Environment** (DATABASE_URL contains "innopaydb"):
+  - Transfers go to `indies-test` account
+  - Automatically overrides `indies.cafe` → `indies-test`
+- **Production Environment**:
+  - Transfers go to actual recipients (e.g., `indies.cafe`)
+- Override handled in `getRecipientForEnvironment()` (services/hive.ts)
+
+### Walletuser Credentials Storage
+- **For Indiesmenu integration**: After account creation with ≥30€ payment
+- `walletuser` table stores `seed` and `masterPassword`
+- Enables postMessage to send credentials back to Indiesmenu
+- Session API retrieves from database (no regeneration needed)
+
 ---
 
 ## 📦 NEW PACKAGES INSTALLED
@@ -157,19 +188,44 @@ NEXT_PUBLIC_BASE_URL=https://innopay.lu
 
 ## 🧪 TESTING COMMANDS
 
+> **Note for Windows users**: PowerShell's `curl` alias doesn't work the same as Unix curl. Use the PowerShell examples below.
+
 ### Test Currency API
+
+**Bash/curl (Unix/Mac/Git Bash):**
 ```bash
 curl http://localhost:3000/api/currency
 ```
 
+**PowerShell (Windows):**
+```powershell
+Invoke-RestMethod -Uri "http://localhost:3000/api/currency" -Method Get
+```
+
 ### Test Username Availability
+
+**Bash/curl (Unix/Mac/Git Bash):**
 ```bash
 curl -X POST http://localhost:3000/api/haf-accounts/check \
   -H "Content-Type: application/json" \
   -d '{"accountName":"testuser"}'
 ```
 
+**PowerShell (Windows):**
+```powershell
+$body = @{
+    accountName = "testuser"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:3000/api/haf-accounts/check" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $body
+```
+
 ### Test Guest Checkout
+
+**Bash/curl (Unix/Mac/Git Bash):**
 ```bash
 curl -X POST http://localhost:3000/api/checkout/guest \
   -H "Content-Type: application/json" \
@@ -181,7 +237,24 @@ curl -X POST http://localhost:3000/api/checkout/guest \
   }'
 ```
 
+**PowerShell (Windows):**
+```powershell
+$body = @{
+    hbdAmount = 15.50
+    eurUsdRate = 1.10
+    recipient = "indies.cafe"
+    memo = "Table 5"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:3000/api/checkout/guest" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $body
+```
+
 ### Test Account Creation
+
+**Bash/curl (Unix/Mac/Git Bash):**
 ```bash
 curl -X POST http://localhost:3000/api/checkout/account \
   -H "Content-Type: application/json" \
@@ -191,16 +264,30 @@ curl -X POST http://localhost:3000/api/checkout/account \
   }'
 ```
 
+**PowerShell (Windows):**
+```powershell
+$body = @{
+    accountName = "testaccount"
+    amount = 50
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:3000/api/checkout/account" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $body
+```
+
 ---
 
 ## 📚 KEY FILES REFERENCE
 
 ### Database
-- `prisma/schema.prisma` - Updated with 4 new tables
-- `services/database.ts` - Campaign, bonus, guest checkout functions
+- `prisma/schema.prisma` - Updated with 4 new tables + walletuser enhancement
+- `services/database.ts` - Campaign, bonus, guest checkout functions, walletuser helpers
+- `prisma/migrations/20251108182945_add_seed_masterpassword_to_walletuser/` - New migration
 
 ### Hive Operations
-- `services/hive.ts` - Added HBD, EURO, RUBIS transfer functions
+- `services/hive.ts` - HBD, EURO, RUBIS transfer functions + environment-based recipient override
 
 ### Currency
 - `services/currency.ts` - EUR/USD conversion utilities
@@ -209,7 +296,8 @@ curl -X POST http://localhost:3000/api/checkout/account \
 ### Checkout Flows
 - `app/api/checkout/guest/route.ts` - Guest checkout
 - `app/api/checkout/account/route.ts` - Account creation checkout
-- `app/api/webhooks/route.ts` - Main webhook handler (3 flows)
+- `app/api/webhooks/route.ts` - Main webhook handler (3 flows) + walletuser credentials storage
+- `app/api/session/[sessionId]/route.ts` - Session details retrieval (now from database)
 
 ### Frontend
 - `app/user/success/page.tsx` - Account creation success
@@ -219,7 +307,7 @@ curl -X POST http://localhost:3000/api/checkout/account \
 
 ## 🚨 KNOWN ISSUES / NOTES
 
-1. **Seed regeneration in `/api/session/[sessionId]`**: Currently regenerates seed instead of retrieving from database. This works because generation is deterministic, but in production should retrieve from DB for better security.
+1. ~~**Seed regeneration in `/api/session/[sessionId]`**~~: ✅ **FIXED** - Now retrieves from database (walletuser table)
 
 2. **No Stripe refunds implemented**: If account creation fails (username taken), webhook throws error but doesn't trigger refund. Need to implement this for production.
 
