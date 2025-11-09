@@ -10,12 +10,14 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 
 // Handle CORS preflight
 export async function OPTIONS(req: NextRequest) {
+  const origin = req.headers.get('origin') || '*';
   return new NextResponse(null, {
     status: 204,
     headers: {
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': origin,
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Max-Age': '86400', // 24 hours
     },
   });
 }
@@ -41,9 +43,15 @@ export async function POST(req: NextRequest) {
 
     // Validate required fields
     if (!amountEuro || !recipient || !memo) {
+      const origin = req.headers.get('origin') || '*';
       return NextResponse.json(
         { error: 'Missing required fields: amountEuro, recipient, memo' },
-        { status: 400 }
+        {
+          status: 400,
+          headers: {
+            'Access-Control-Allow-Origin': origin,
+          },
+        }
       );
     }
 
@@ -60,9 +68,15 @@ export async function POST(req: NextRequest) {
 
     // Validate amount
     if (amountEuro <= 0) {
+      const origin = req.headers.get('origin') || '*';
       return NextResponse.json(
         { error: 'Amount must be greater than 0' },
-        { status: 400 }
+        {
+          status: 400,
+          headers: {
+            'Access-Control-Allow-Origin': origin,
+          },
+        }
       );
     }
 
@@ -114,6 +128,7 @@ export async function POST(req: NextRequest) {
 
     console.log(`Created guest checkout session: ${session.id}`);
 
+    const origin = req.headers.get('origin') || '*';
     return NextResponse.json(
       {
         sessionId: session.id,
@@ -121,7 +136,7 @@ export async function POST(req: NextRequest) {
       },
       {
         headers: {
-          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Origin': origin,
           'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type',
         },
@@ -131,6 +146,7 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     console.error('[GUEST CHECKOUT API] Error creating session:', error);
     console.error('[GUEST CHECKOUT API] Error stack:', error.stack);
+    const origin = req.headers.get('origin') || '*';
     return NextResponse.json(
       {
         error: 'Failed to create checkout session',
@@ -139,7 +155,9 @@ export async function POST(req: NextRequest) {
       {
         status: 500,
         headers: {
-          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Origin': origin,
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type',
         },
       }
     );
