@@ -1,8 +1,8 @@
 # INNOPAY REFACTORING - PROJECT STATUS
 
-**Last Updated**: 2025-11-08
-**Session ID**: Refactoring continuation session
-**Status**: Phase 1 Complete + Clarifications Applied ✅
+**Last Updated**: 2025-11-09
+**Session ID**: Discount/Fee System + Safari UX Enhancement
+**Status**: Guest Checkout Complete + Full Indiesmenu Integration ✅
 
 ---
 
@@ -61,11 +61,77 @@ Both flows integrate with **indiesmenu** restaurant app for seamless ordering.
 - ✅ **Guest Checkout Implementation** - Complete flow from Indiesmenu to Stripe to HBD/EURO transfer
 - ✅ **PostgreSQL Compatibility** - All table names lowercase (guestcheckout, not guestCheckout)
 
+### Major Updates (2025-11-09)
+
+#### Discount & Fee System (Indiesmenu)
+- ✅ **Discount Tracking** - Menu items now carry discount values from database to cart
+  - Dishes: `discount` field added to FormattedDish type
+  - Drinks: `discount` field per size in FormattedDrink type
+  - Default: 1.0 (no discount), 0.9 = 10% off
+- ✅ **Dual Price Calculation** - CartContext calculates two totals:
+  - `getTotalEurPrice()` - With discounts (for account creation)
+  - `getTotalEurPriceNoDiscount()` - Without discounts (for guest checkout)
+  - `getDiscountAmount()` - Total forfeiture = (no-discount × 1.05) - with-discount
+- ✅ **Guest Checkout Fee** - 5% processing fee added to guest orders
+  - Communicated clearly in warning modal before payment
+  - Covers Stripe credit card fees
+
+#### Warning Modal (Indiesmenu)
+- ✅ **Guest Checkout Warning** - Modal displays before guest payment:
+  - Shows 5% processing fee notice (red, bold)
+  - Shows discount forfeiture amount if applicable (red, bold)
+  - "Continuer et payer X.XX €" button with final price
+  - "Revenir pour bénéficier" button to create account instead
+  - Dark grey "sad looking" aesthetic to discourage guest checkout
+
+#### Safari/iOS UX Improvements (Indiesmenu)
+- ✅ **Proactive Banner** - Safari/iOS users see blue banner on page load
+  - Custom message: "Si vous n'avez pas de portefeuille compatible Innopay..."
+  - Acknowledges some users might have Hive Keychain/Ecency installed
+  - Reduces "Safari cannot open the page" errors
+- ✅ **Draggable Banner** - Blue wallet notification banner can be repositioned
+  - Touch and drag support (mobile + desktop)
+  - "⋮⋮" drag handle indicator
+  - Prevents covering cart content
+  - Buttons (Créer un compte, Commandez sans compte, ✕) don't trigger drag
+- ✅ **Smart Cart Clearing** - Prevents accidental cart loss
+  - Measures blur duration to detect real app switches vs Safari errors
+  - <2 seconds (Safari alert) = cart preserved
+  - >2 seconds (Keychain opened) = cart cleared
+  - Banner re-shows after failed protocol handler attempt
+
+#### Payment Success Flow
+- ✅ **Success Banner** - Green banner after successful Stripe payment
+  - Message: "Le paiement a réussi. Votre commande est en route"
+  - "OK" button to dismiss (white background, green text)
+  - Auto-dismisses after 10 seconds
+  - Cart cleared on success
+- ✅ **URL Parameter Fix** - Stripe redirect URL corrected
+  - Changed `?table=X?payment=success` → `?table=X&payment=success`
+  - Proper query string concatenation with `&`
+
+#### Bug Fixes (Innopay)
+- ✅ **EURO Token Amount** - Fixed incorrect conversion in guest checkout fallback
+  - Now transfers exact EUR amount (1:1 with EURO tokens)
+  - Previously was double-converting through HBD
+- ✅ **Environment Override** - Added to `transferEuroTokens()` function
+  - Was missing recipient override for dev environment
+  - Now all transfers (HBD + EURO) respect dev/prod recipient logic
+- ✅ **Database Status Column** - Expanded from VARCHAR(20) to VARCHAR(30)
+  - Migration: `20251109013347_expand_status_column`
+  - Supports 'completed_euro_fallback' status (22 chars)
+
 ---
 
 ## ⏳ TODO (Phase 2 - Frontend Integration)
 
 ### Priority 1: Critical Path
+- [x] ~~**Indiesmenu Guest Checkout Integration**~~ ✅ COMPLETE
+  - Discount/fee system implemented
+  - Warning modal with forfeiture calculation
+  - Safari/iOS UX improvements
+  - Success flow working end-to-end
+
 - [ ] **Refactor `/app/user/page.tsx`** (4-6 hours)
   - Add HAF username availability check
   - Add amount input (min 30 EUR)
@@ -77,10 +143,10 @@ Both flows integrate with **indiesmenu** restaurant app for seamless ordering.
   - Token validation before sending credentials
   - Timestamp expiry (5-minute window)
 
-- [ ] **indiesmenu Integration** (3-4 hours)
-  - Add "Créer un compte" button with token
-  - Add "Commandez sans compte" button
-  - Implement postMessage listeners
+- [ ] **Complete Account Creation Flow from Indiesmenu** (2-3 hours)
+  - "Créer un compte" button with postMessage flow
+  - Receive and store wallet credentials
+  - Auto-order after account creation
 
 ### Priority 2: Enhancement
 - [ ] **Profile Completion RUBIS Incentive** (2-3 hours)
@@ -403,4 +469,27 @@ INSERT INTO campaign (
 
 ---
 
-**Next Session**: Start with Priority 1 tasks (refactor `/app/user/page.tsx`, implement postMessage security, integrate with indiesmenu)
+## 📂 FILES MODIFIED (2025-11-09 Session)
+
+### Innopay Repository
+```
+app/api/checkout/guest/route.ts    - Fixed URL parameter concatenation (?→&)
+app/api/webhooks/route.ts           - Fixed EURO token amount (removed double conversion)
+services/hive.ts                    - Added environment override to transferEuroTokens()
+prisma/schema.prisma                - STATUS column VARCHAR(20)→VARCHAR(30)
+prisma/migrations/20251109013347_expand_status_column/ - New migration
+PROJECT_STATUS.md                   - Updated with 2025-11-09 changes
+```
+
+### Indiesmenu Repository
+```
+lib/data/menu.ts                    - Added discount field to dishes and drinks
+app/context/CartContext.tsx         - Added getTotalEurPriceNoDiscount(), getDiscountAmount()
+app/menu/page.tsx                   - Safari detection, draggable banner, smart cart clearing,
+                                     guest warning modal, success banner, payment flow
+app/globals.css                     - Cart header styling update
+```
+
+---
+
+**Next Session**: Focus on account creation flow from Indiesmenu with postMessage security
