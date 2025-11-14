@@ -1,6 +1,6 @@
 // app/api/wallet-payment/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { Client, PrivateKey, Operation } from '@hiveio/dhive';
+import { Client, PrivateKey, Transaction } from '@hiveio/dhive';
 
 const client = new Client([
   'https://api.hive.blog',
@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
 
       const hbdAmount = requiredHbd.toFixed(3);
 
-      const operation: Operation = [
+      const transferOperation = [
         'transfer',
         {
           from: innopayAccount,
@@ -100,9 +100,26 @@ export async function POST(req: NextRequest) {
         }
       ];
 
-      const key = PrivateKey.fromString(innopayActiveKey);
-      const result = await client.broadcast.sendOperations([operation], key);
-      transferTxId = result.id;
+      // Get current blockchain block details for transaction validity
+      const dynamicGlobalProperties = await client.database.getDynamicGlobalProperties();
+      const headBlockNumber = dynamicGlobalProperties.head_block_number;
+      const headBlockId = dynamicGlobalProperties.head_block_id;
+      const refBlockNum = headBlockNumber & 0xffff;
+      const refBlockPrefix = Buffer.from(headBlockId, 'hex').readUInt32LE(4);
+      const expirationTime = Math.floor(Date.now() / 1000) + 60; // 60-second expiration
+
+      const baseTransaction: Transaction = {
+        ref_block_num: refBlockNum,
+        ref_block_prefix: refBlockPrefix,
+        expiration: new Date(expirationTime * 1000).toISOString().slice(0, -5),
+        operations: [transferOperation as any],
+        extensions: [],
+      };
+
+      // Sign and broadcast the transaction
+      const signedTransaction = client.broadcast.sign(baseTransaction, [PrivateKey.fromString(innopayActiveKey)]);
+      const broadcastResult = await client.broadcast.send(signedTransaction);
+      transferTxId = broadcastResult.id;
 
       console.log('[WALLET PAYMENT] HBD transfer successful! TX:', transferTxId);
 
@@ -112,28 +129,47 @@ export async function POST(req: NextRequest) {
 
       const euroAmount = parseFloat(amountEuro).toFixed(2);
 
-      const euroOperation: Operation = [
+      const transferPayload = {
+        contractName: 'tokens',
+        contractAction: 'transfer',
+        contractPayload: {
+          symbol: 'EURO',
+          to: recipient,
+          quantity: euroAmount,
+          memo: finalMemo,
+        },
+      };
+
+      const transferOperation = [
         'custom_json',
         {
-          required_auths: [],
-          required_posting_auths: [innopayAccount],
+          required_auths: [innopayAccount],
+          required_posting_auths: [],
           id: 'ssc-mainnet-hive',
-          json: JSON.stringify({
-            contractName: 'tokens',
-            contractAction: 'transfer',
-            contractPayload: {
-              symbol: 'EURO',
-              to: recipient,
-              quantity: euroAmount,
-              memo: finalMemo
-            }
-          })
-        }
+          json: JSON.stringify(transferPayload),
+        },
       ];
 
-      const key = PrivateKey.fromString(innopayActiveKey);
-      const result = await client.broadcast.sendOperations([euroOperation], key);
-      transferTxId = result.id;
+      // Get current blockchain block details for transaction validity
+      const dynamicGlobalProperties = await client.database.getDynamicGlobalProperties();
+      const headBlockNumber = dynamicGlobalProperties.head_block_number;
+      const headBlockId = dynamicGlobalProperties.head_block_id;
+      const refBlockNum = headBlockNumber & 0xffff;
+      const refBlockPrefix = Buffer.from(headBlockId, 'hex').readUInt32LE(4);
+      const expirationTime = Math.floor(Date.now() / 1000) + 60; // 60-second expiration
+
+      const baseTransaction: Transaction = {
+        ref_block_num: refBlockNum,
+        ref_block_prefix: refBlockPrefix,
+        expiration: new Date(expirationTime * 1000).toISOString().slice(0, -5),
+        operations: [transferOperation as any],
+        extensions: [],
+      };
+
+      // Sign and broadcast the transaction
+      const signedTransaction = client.broadcast.sign(baseTransaction, [PrivateKey.fromString(innopayActiveKey)]);
+      const broadcastResult = await client.broadcast.send(signedTransaction);
+      transferTxId = broadcastResult.id;
 
       console.log('[WALLET PAYMENT] EURO transfer successful! TX:', transferTxId);
     }
