@@ -11,19 +11,33 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
  * Creates a Stripe checkout session for account creation with top-up
  * Body: {
  *   accountName: string,
- *   amount: number,  // EUR amount
+ *   amount: number,  // EUR amount (default/suggested)
  *   email?: string,  // Optional customer email
- *   hbdTransfer?: {  // Optional: if coming from indiesmenu order
- *     recipient: string,
- *     hbdAmount: number,
- *     eurUsdRate: number,
- *     memo: string
- *   }
+ *   campaign?: {     // Optional: active campaign info to display
+ *     id: number,
+ *     name: string,
+ *     minAmount50: number,
+ *     bonus50: number,
+ *     remainingSlots50: number,
+ *     minAmount100: number,
+ *     bonus100: number,
+ *     remainingSlots100: number
+ *   },
+ *   orderAmountEuro?: number,  // Optional: if coming from indiesmenu order
+ *   orderMemo?: string  // Optional: memo for restaurant transfer
  * }
  */
 export async function POST(req: NextRequest) {
   try {
-    const { accountName, amount, email, hbdTransfer } = await req.json();
+    const { accountName, amount, email, campaign, orderAmountEuro, orderMemo } = await req.json();
+
+    console.log(`[${new Date().toISOString()}] [CHECKOUT API] Received request:`, {
+      accountName,
+      amount,
+      orderAmountEuro,
+      orderMemo,
+      orderMemoLength: orderMemo?.length
+    });
 
     // Validate required fields
     if (!accountName || !amount) {
@@ -32,6 +46,12 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Determine base URL from request or environment
+    const host = req.headers.get('host');
+    const protocol = req.headers.get('x-forwarded-proto') || 'http';
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || `${protocol}://${host}`;
+    console.log(`[${new Date().toISOString()}] [CHECKOUT API] Using base URL: ${baseUrl}`);
 
     // Validate account name format (basic Hive rules)
     if (accountName.length < 3 || accountName.length > 16) {
@@ -66,12 +86,42 @@ export async function POST(req: NextRequest) {
       accountName,
     };
 
-    // Add HBD transfer info if provided (for indiesmenu orders)
-    if (hbdTransfer) {
-      metadata.hbdTransfer = JSON.stringify(hbdTransfer);
+    // Add campaign ID if provided (to track bonus eligibility)
+    if (campaign) {
+      metadata.campaignId = campaign.id.toString();
     }
 
-    // Create Stripe checkout session
+    // Add order info if provided (for indiesmenu orders)
+    if (orderAmountEuro) {
+      metadata.orderAmountEuro = orderAmountEuro.toString();
+      metadata.orderMemo = orderMemo || 'Table order';
+      console.log(`[${new Date().toISOString()}] [CHECKOUT API] Adding order metadata:`, {
+        orderAmountEuro: metadata.orderAmountEuro,
+        orderMemo: metadata.orderMemo,
+        memoLength: metadata.orderMemo.length
+      });
+      if (!orderMemo) {
+        console.warn(`[${new Date().toISOString()}] [CHECKOUT API] ⚠️ WARNING: No orderMemo provided, using fallback 'Table order'`);
+      }
+    }
+
+    // Build product description with campaign bonus info
+    let productDescription = `Create Innopay account "${accountName}" and top-up with ${amount} EUR `;
+    productDescription += `\n\n Please provide a valid e-mail during checkout to receive account details. `;
+
+    if (campaign) {
+      productDescription += `\n\n 🎁 ${campaign.name}`;
+
+      if (campaign.remainingSlots50 > 0) {
+        productDescription += `\n • Pay ${campaign.minAmount50}€ or more → Get ${campaign.bonus50}€ bonus (${campaign.remainingSlots50} slots left)`;
+      }
+
+      if (campaign.remainingSlots100 > 0) {
+        productDescription += `\n • Pay ${campaign.minAmount100}€ or more → Get ${campaign.bonus100}€ bonus (${campaign.remainingSlots100} slots left)`;
+      }
+    }
+
+    // Create Stripe checkout session with custom amount enabled
     const sessionConfig: Stripe.Checkout.SessionCreateParams = {
       payment_method_types: ['card'],
       line_items: [
@@ -80,16 +130,23 @@ export async function POST(req: NextRequest) {
             currency: 'eur',
             product_data: {
               name: 'Innopay Account Creation & Top-up',
-              description: `Create Hive account "${accountName}" and top-up with ${amount} EUR`,
+              description: productDescription,
             },
             unit_amount: amountCents,
           },
           quantity: 1,
+          adjustable_quantity: {
+            enabled: false, // Disable quantity adjustment
+          },
         },
       ],
       mode: 'payment',
-      success_url: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/user/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/cancel`,
+      // Allow custom amounts (minimum 30€)
+      payment_intent_data: {
+        setup_future_usage: undefined,
+      },
+      success_url: `${baseUrl}/user/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${baseUrl}/user?cancelled=true`,
       metadata,
     };
 

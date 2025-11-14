@@ -25,6 +25,7 @@ model innouser {
   bip39seedandaccount bip39seedandaccount?
   topup               topup[]
   bonus               bonus[]
+  walletuser          walletuser[]
 }
 
 model topup {
@@ -36,18 +37,20 @@ model topup {
 }
 
 model walletuser {
-  id             Int      @id @default(autoincrement())
-  accountName    String   @unique
-  creationDate   DateTime @default(now())
-  hivetxid       String   @db.Char(40)
-  seed           String?  @db.Text
-  masterPassword String?  @db.VarChar(64)
-  profileName    String?  @db.VarChar(64)
-  profileAvatar  String?  @db.VarChar(255)
-  profileBckgrd  String?  @db.VarChar(255)
-  profileAbout   String?  @db.VarChar(255)
-  profileLoc     String?  @db.VarChar(255)
-  profileWeb     String?  @db.VarChar(255)
+  id             Int       @id @default(autoincrement())
+  accountName    String    @unique
+  creationDate   DateTime  @default(now())
+  hivetxid       String    @db.Char(40)
+  seed           String?   @db.Text
+  masterPassword String?   @db.VarChar(64)
+  userId         Int?
+  profileName    String?   @db.VarChar(64)
+  profileAvatar  String?   @db.VarChar(255)
+  profileBckgrd  String?   @db.VarChar(255)
+  profileAbout   String?   @db.VarChar(255)
+  profileLoc     String?   @db.VarChar(255)
+  profileWeb     String?   @db.VarChar(255)
+  innouser       innouser? @relation(fields: [userId], references: [id])
   bonus          bonus[]
 }
 
@@ -99,4 +102,25 @@ model currencyConversion {
   createdAt      DateTime @default(now())
 
   @@map("currency_conversion")
+}
+
+model accountCredentialSession {
+  id              String   @id @default(cuid())
+  accountName     String
+  stripeSessionId String   @unique
+  masterPassword  String   @db.VarChar(64)
+  ownerPrivate    String   @db.Text
+  ownerPublic     String   @db.Text
+  activePrivate   String   @db.Text
+  activePublic    String   @db.Text
+  postingPrivate  String   @db.Text
+  postingPublic   String   @db.Text
+  memoPrivate     String   @db.Text
+  memoPublic      String   @db.Text
+  euroBalance     Decimal  @db.Decimal(10, 2) @default(0.00)
+  retrieved       Boolean  @default(false)
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+
+  @@map("account_credential_session")
 }

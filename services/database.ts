@@ -86,7 +86,8 @@ export async function createWalletUser(
   accountName: string,
   hivetxid: string,
   seed?: string,
-  masterPassword?: string
+  masterPassword?: string,
+  userId?: number | null
 ) {
   // 1. Chercher le compte existant
   const existingUser = await prisma.walletuser.findUnique({
@@ -97,13 +98,14 @@ export async function createWalletUser(
 
   // Si le compte n'existe pas, le créer normalement
   if (!existingUser) {
-    console.log('new innopay wallet user, creating:', accountName, hivetxid);
+    console.log('new innopay wallet user, creating:', accountName, hivetxid, 'userId:', userId || 'none');
     return prisma.walletuser.create({
       data: {
         accountName: accountName,
         hivetxid: hivetxid,
         seed: seed || null,
         masterPassword: masterPassword || null,
+        userId: userId || null,
       },
     });
   }

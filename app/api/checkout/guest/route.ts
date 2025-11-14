@@ -55,14 +55,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Determine base URL from request or environment (for fallback)
+    const host = req.headers.get('host');
+    const protocol = req.headers.get('x-forwarded-proto') || 'http';
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || `${protocol}://${host}`;
+
     // Determine success URL (from request or default to Innopay)
     const successUrl = returnUrl
       ? `${returnUrl}&payment=success&session_id={CHECKOUT_SESSION_ID}`
-      : `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/guest/success?session_id={CHECKOUT_SESSION_ID}`;
+      : `${baseUrl}/guest/success?session_id={CHECKOUT_SESSION_ID}`;
 
     const cancelUrl = returnUrl
       ? `${returnUrl}&payment=cancelled`
-      : `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/cancel`;
+      : `${baseUrl}/cancel`;
 
     console.log('[GUEST CHECKOUT API] Success URL:', successUrl);
 

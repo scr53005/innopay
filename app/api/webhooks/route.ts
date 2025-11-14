@@ -30,7 +30,10 @@ import {
 } from '@/services/hive';
 
 // Import currency functions
-import { convertHbdToEur } from '@/services/currency';
+import { convertHbdToEur, getEurUsdRateServerSide, convertEurToHbd } from '@/services/currency';
+
+// Import Prisma
+import prisma from '@/lib/prisma';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -230,11 +233,27 @@ async function handleGuestCheckout(session: Stripe.Checkout.Session) {
 // ACCOUNT CREATION FLOW HANDLER
 // ========================================
 async function handleAccountCreation(session: Stripe.Checkout.Session) {
-  console.log(`[ACCOUNT] Processing account creation: ${session.id}`);
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] [WEBHOOK ACCOUNT] ========================================`);
+  console.log(`[${timestamp}] [WEBHOOK ACCOUNT] Processing account creation: ${session.id}`);
+  console.log(`[${timestamp}] [WEBHOOK ACCOUNT] Full metadata:`, JSON.stringify(session.metadata, null, 2));
 
-  const { accountName, hbdTransfer } = session.metadata!;
+  const { accountName, orderAmountEuro, orderMemo } = session.metadata!;
   const amountEuro = (session.amount_total || 0) / 100;
   const customerEmail = session.customer_details?.email;
+  const orderCost = orderAmountEuro ? parseFloat(orderAmountEuro) : 0;
+
+  console.log(`[${timestamp}] [WEBHOOK ACCOUNT] Extracted order info:`, {
+    accountName,
+    orderAmountEuro,
+    orderMemo,
+    orderMemoLength: orderMemo?.length,
+    orderCost
+  });
+
+  if (!orderMemo && orderCost > 0) {
+    console.error(`[${timestamp}] [WEBHOOK ACCOUNT] ⚠️ CRITICAL: Order cost ${orderCost} but NO MEMO! Transfer will fail to match order!`);
+  }
 
   // Validate metadata
   if (!accountName) {
@@ -264,25 +283,66 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
   const hiveTxId = await createAndBroadcastHiveAccount(accountName, keychain);
   console.log(`[ACCOUNT] Account created successfully: ${hiveTxId}`);
 
-  // Save to walletuser table with seed and masterPassword
-  console.log(`[ACCOUNT] Saving to walletuser table with seed and masterPassword`);
-  await createWalletUser(accountName, hiveTxId, seed, keychain.masterPassword);
-
-  // Save to database (legacy innouser table if email provided)
+  // STEP 1: Handle innouser table (if email provided) to get userId first
   let userId: number | null = null;
   if (customerEmail) {
-    const createdRecords = await createNewInnoUserWithTopupAndAccount(
-      customerEmail,
-      amountEuro,
-      seed,
-      accountName,
-      hiveTxId
-    );
-    userId = createdRecords[0].id;
-    console.log(`[ACCOUNT] Database records created for user ID: ${userId}`);
+    // Check if user with this email already exists
+    const existingUser = await findInnoUserByEmail(customerEmail);
+
+    if (existingUser) {
+      // User already exists - create topup and update account link
+      console.log(`[ACCOUNT] Email ${customerEmail} already exists (user ID: ${existingUser.id}), creating topup and updating account link`);
+      await createTopupForExistingUser(existingUser.id, amountEuro);
+      userId = existingUser.id;
+      console.log(`[ACCOUNT] Topup created for existing user ID: ${userId}`);
+
+      // Update or create bip39seedandaccount link to new account
+      if (existingUser.bip39seedandaccount) {
+        // Update existing link to point to new account
+        await prisma.bip39seedandaccount.update({
+          where: { userId: existingUser.id },
+          data: {
+            seed,
+            accountName,
+            hivetxid: hiveTxId,
+          },
+        });
+        console.log(`[ACCOUNT] Updated bip39seedandaccount link to new account: ${accountName}`);
+      } else {
+        // Create new link (user exists but had no account linked before)
+        await prisma.bip39seedandaccount.create({
+          data: {
+            userId: existingUser.id,
+            seed,
+            accountName,
+            hivetxid: hiveTxId,
+          },
+        });
+        console.log(`[ACCOUNT] Created new bip39seedandaccount link: ${accountName}`);
+      }
+    } else {
+      // New user - create innouser with topup and account link
+      console.log(`[ACCOUNT] Creating new innouser for ${customerEmail}`);
+      const createdRecords = await createNewInnoUserWithTopupAndAccount(
+        customerEmail,
+        amountEuro,
+        seed,
+        accountName,
+        hiveTxId
+      );
+      userId = createdRecords[0].id;
+      console.log(`[ACCOUNT] Database records created for user ID: ${userId}`);
+    }
   } else {
     console.warn('[ACCOUNT] No email provided, account created but not linked to innouser');
   }
+
+  // STEP 2: Save to walletuser table with seed, masterPassword, and userId
+  console.log(`[ACCOUNT] Saving to walletuser table with userId: ${userId || 'none'}`);
+  const walletUser = await createWalletUser(accountName, hiveTxId, seed, keychain.masterPassword, userId);
+  const walletUserId = walletUser?.id || null;
+  console.log(`[ACCOUNT] Walletuser record created with ID: ${walletUserId}, linked to user ID: ${userId || 'none'}`);
+
 
   // Check for campaign eligibility and calculate bonus
   let bonusAmount = 0;
@@ -294,48 +354,96 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
 
     if (amountEuro >= parseFloat(campaign.minAmount100.toString()) && bonusCount.count100 < campaign.maxUsers100) {
       bonusAmount = parseFloat(campaign.bonus100.toString());
-      await createBonus(campaign.id, userId, null, accountName, bonusAmount);
+      await createBonus(campaign.id, userId, walletUserId, accountName, bonusAmount);
       console.log(`[ACCOUNT] Applied 100 EUR tier bonus: ${bonusAmount} EURO`);
     } else if (amountEuro >= parseFloat(campaign.minAmount50.toString()) && bonusCount.count50 < campaign.maxUsers50) {
       bonusAmount = parseFloat(campaign.bonus50.toString());
-      await createBonus(campaign.id, userId, null, accountName, bonusAmount);
+      await createBonus(campaign.id, userId, walletUserId, accountName, bonusAmount);
       console.log(`[ACCOUNT] Applied 50 EUR tier bonus: ${bonusAmount} EURO`);
     }
   }
 
-  // Transfer EURO tokens (base amount + bonus)
-  const totalEuro = amountEuro + bonusAmount;
-  console.log(`[ACCOUNT] Transferring ${totalEuro} EURO tokens (${amountEuro} + ${bonusAmount} bonus)`);
-  const euroTxId = await transferEuroTokens(accountName, totalEuro);
-  console.log(`[ACCOUNT] EURO tokens transferred: ${euroTxId}`);
+  // Calculate user balance (loaded amount + bonus - order cost)
+  const totalEuro = amountEuro + bonusAmount - orderCost;
+  console.log(`[ACCOUNT] User balance: ${totalEuro} EURO (${amountEuro} loaded + ${bonusAmount} bonus - ${orderCost} order)`);
 
-  // Handle HBD transfer if coming from indiesmenu order
-  let hbdTxId: string | undefined;
-  let euroFromAccountTxId: string | undefined;
+  // Store credentials for temporary retrieval (expires in 5 minutes)
+  // Must be done after totalEuro is calculated to include the balance
+  const credentialSession = await prisma.accountCredentialSession.create({
+    data: {
+      accountName,
+      stripeSessionId: session.id,
+      masterPassword: keychain.masterPassword,
+      ownerPrivate: keychain.owner.privateKey,
+      ownerPublic: keychain.owner.publicKey,
+      activePrivate: keychain.active.privateKey,
+      activePublic: keychain.active.publicKey,
+      postingPrivate: keychain.posting.privateKey,
+      postingPublic: keychain.posting.publicKey,
+      memoPrivate: keychain.memo.privateKey,
+      memoPublic: keychain.memo.publicKey,
+      euroBalance: totalEuro,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
+    },
+  });
+  console.log(`[ACCOUNT] Credential session created: ${credentialSession.id} with balance ${totalEuro} EURO`);
 
-  if (hbdTransfer) {
-    const transfer = JSON.parse(hbdTransfer);
-    console.log(`[ACCOUNT] Processing indiesmenu order transfer:`, transfer);
+  // Transfer EURO tokens to user (for display purposes, like casino chips)
+  const euroTxId = await transferEuroTokens(accountName, totalEuro, 'Account balance');
+  console.log(`[ACCOUNT] EURO tokens transferred to user: ${euroTxId}`);
+
+  // Transfer HBD to user (real value that user paid for)
+  let userHbdTxId: string | undefined;
+  if (totalEuro > 0) {
+    const rateData = await getEurUsdRateServerSide();
+    const eurUsdRate = rateData.conversion_rate;
+    const hbdAmount = convertEurToHbd(totalEuro, eurUsdRate);
+    userHbdTxId = await transferHbd(accountName, hbdAmount, 'Account balance');
+    console.log(`[ACCOUNT] Transferred ${hbdAmount} HBD to user (rate: ${eurUsdRate}): ${userHbdTxId}`);
+  }
+
+  // Handle restaurant payment if coming from indiesmenu order
+  let restaurantHbdTxId: string | undefined;
+  let restaurantEuroTxId: string | undefined;
+
+  if (orderCost > 0 && orderMemo) {
+    const restaurantTimestamp = new Date().toISOString();
+    console.log(`[${restaurantTimestamp}] [WEBHOOK ACCOUNT] ========================================`);
+    console.log(`[${restaurantTimestamp}] [WEBHOOK ACCOUNT] Processing restaurant order payment`);
+    console.log(`[${restaurantTimestamp}] [WEBHOOK ACCOUNT] Order details:`, {
+      orderCost,
+      orderMemo,
+      orderMemoLength: orderMemo.length,
+      recipient: 'indies.cafe'
+    });
 
     try {
-      // Transfer HBD from innopay account to recipient
-      hbdTxId = await transferHbd(transfer.recipient, transfer.hbdAmount, transfer.memo);
-      console.log(`[ACCOUNT] HBD transferred: ${hbdTxId}`);
+      // Fetch current EUR/USD rate
+      const rateData = await getEurUsdRateServerSide();
+      const eurUsdRate = rateData.conversion_rate;
+      const hbdAmountForOrder = convertEurToHbd(orderCost, eurUsdRate);
 
-      // Transfer EURO tokens from newly created account to recipient (using innopay authority)
-      const euroAmountForOrder = convertHbdToEur(transfer.hbdAmount, transfer.eurUsdRate);
-      euroFromAccountTxId = await transferEuroTokensFromAccount(
-        accountName,
-        transfer.recipient,
-        euroAmountForOrder,
-        transfer.memo
-      );
-      console.log(`[ACCOUNT] EURO tokens transferred from new account: ${euroFromAccountTxId}`);
+      console.log(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] Calculated HBD amount: ${hbdAmountForOrder} (rate: ${eurUsdRate})`);
+
+      // Try HBD transfer first (preferred) - from innopay to restaurant
+      try {
+        console.log(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] 🔄 Attempting HBD transfer to indies.cafe with memo:`, orderMemo);
+        restaurantHbdTxId = await transferHbd('indies.cafe', hbdAmountForOrder, orderMemo);
+        console.log(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] ✅ HBD transferred to restaurant: ${restaurantHbdTxId}`);
+      } catch (hbdError: any) {
+        // Fallback to EURO tokens if HBD insufficient - from innopay to restaurant
+        console.warn(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] ⚠️ HBD transfer failed, using EURO token fallback:`, hbdError.message);
+        console.log(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] 🔄 Attempting EURO token transfer with memo:`, orderMemo);
+        restaurantEuroTxId = await transferEuroTokens('indies.cafe', orderCost, orderMemo);
+        console.log(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] ✅ EURO tokens transferred to restaurant: ${restaurantEuroTxId}`);
+      }
     } catch (transferError) {
-      console.error('[ACCOUNT] Order transfer failed:', transferError);
+      console.error(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] ❌ Restaurant payment failed:`, transferError);
       // Account is created, but order payment failed - log for manual reconciliation
       // Don't throw error - account creation was successful
     }
+  } else if (orderCost > 0 && !orderMemo) {
+    console.error(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] ❌ CRITICAL ERROR: Order cost ${orderCost} EUR but NO MEMO! Skipping restaurant transfer to prevent order mismatch!`);
   }
 
   return NextResponse.json({
@@ -343,9 +451,11 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
     accountName,
     hiveTxId,
     euroTxId,
+    userHbdTxId,
     bonusAmount,
-    hbdTxId,
-    euroFromAccountTxId,
+    restaurantHbdTxId,
+    restaurantEuroTxId,
+    credentialToken: credentialSession.id,
   }, { status: 201 });
 }
 

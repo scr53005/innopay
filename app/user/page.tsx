@@ -82,8 +82,42 @@ export default function HiveAccountCreationPage() {
   const [validationMessage, setValidationMessage] = useState('');
   const [isValidationSuccess, setIsValidationSuccess] = useState(false);
 
+  // State for suggested username (lazy user flow)
+  const [suggestedUsername, setSuggestedUsername] = useState('');
+  const [usingSuggestedUsername, setUsingSuggestedUsername] = useState(true);
+  const [hasUserInteracted, setHasUserInteracted] = useState(false);
+  const [loadingSuggestedUsername, setLoadingSuggestedUsername] = useState(true);
+
+  // State for active campaign
+  const [activeCampaign, setActiveCampaign] = useState<{
+    id: number;
+    name: string;
+    minAmount50: number;
+    bonus50: number;
+    remainingSlots50: number;
+    minAmount100: number;
+    bonus100: number;
+    remainingSlots100: number;
+  } | null>(null);
+  const [loadingCampaign, setLoadingCampaign] = useState(true);
+
+  // State for amount selection
+  const [topupAmount, setTopupAmount] = useState(35); // Default 35€
+  const [minimumAmount, setMinimumAmount] = useState(30); // Will be updated based on order
+  const [orderAmount, setOrderAmount] = useState<number | null>(null); // Amount from indiesmenu order
+  const [discount, setDiscount] = useState<number | null>(null); // Discount from indiesmenu order
+  const [orderMemo, setOrderMemo] = useState<string | null>(null); // Memo from indiesmenu order (table, order details)
+
+  // State for draggable validation toast
+  const [toastPosition, setToastPosition] = useState({ x: 0, y: -60 }); // Start closer to input
+  const [isDraggingToast, setIsDraggingToast] = useState(false);
+  const [toastDragOffset, setToastDragOffset] = useState({ x: 0, y: 0 });
+
   const [mockAccountCreation, setMockAccountCreation] = useState(false);
   const [forcePaidCreation, setForcePaidCreation] = useState(false);
+
+  // Ref for debouncing HAF availability check
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Refs for revoking object URLs
   const avatarPreviewRef = useCallback((url: string | null) => {
@@ -97,8 +131,41 @@ export default function HiveAccountCreationPage() {
     }
   }, [backgroundPreviewUrl]);
 
-  // Load existing account from localStorage on mount
+  // Load existing account from localStorage on mount + check for order amount from URL
   useEffect(() => {
+    // Check URL for order amount and discount (from indiesmenu)
+    const params = new URLSearchParams(window.location.search);
+
+    const orderParam = params.get('order_amount');
+    if (orderParam) {
+      const parsedOrder = parseFloat(orderParam);
+      if (!isNaN(parsedOrder) && parsedOrder > 0) {
+        setOrderAmount(parsedOrder);
+        // Set minimum to max(30, orderAmount)
+        const calculatedMin = Math.max(30, parsedOrder);
+        setMinimumAmount(calculatedMin);
+        // Set initial topup to the minimum
+        setTopupAmount(calculatedMin);
+        console.log(`[ORDER] Detected order amount: ${parsedOrder}€, minimum set to: ${calculatedMin}€`);
+      }
+    }
+
+    const discountParam = params.get('discount');
+    if (discountParam) {
+      const parsedDiscount = parseFloat(discountParam);
+      if (!isNaN(parsedDiscount) && parsedDiscount > 0) {
+        setDiscount(parsedDiscount);
+        console.log(`[ORDER] Detected discount: ${parsedDiscount}€`);
+      }
+    }
+
+    const memoParam = params.get('memo');
+    if (memoParam) {
+      setOrderMemo(memoParam);
+      console.log(`[${new Date().toISOString()}] [ACCOUNT CREATION FRONTEND] Detected memo from URL:`, memoParam);
+      console.log(`[${new Date().toISOString()}] [ACCOUNT CREATION FRONTEND] Memo length:`, memoParam.length);
+    }
+
     console.log('Checking localStorage for existing account...');
     const acc = localStorage.getItem('innopayAccountName');
     const pass = localStorage.getItem('innopayMasterPassword');
@@ -132,6 +199,64 @@ export default function HiveAccountCreationPage() {
       console.log('Existing account found in localStorage:', acc);
     } else {
       console.log('No existing account found in localStorage.');
+
+      // Fetch suggested username for lazy users (with sessionStorage cache)
+      const fetchSuggestedUsername = async () => {
+        // Try to load from sessionStorage first (instant render on refresh)
+        const cached = sessionStorage.getItem('innopay_suggested_username');
+        if (cached) {
+          console.log('[SUGGESTED USERNAME] Using cached:', cached);
+          setSuggestedUsername(cached);
+          setAccountName(cached);
+          setIsUsernameValid(true);
+          setUsingSuggestedUsername(true);
+          setLoadingSuggestedUsername(false);
+        }
+
+        // Always fetch fresh suggestion in background
+        try {
+          const response = await fetch('/api/suggest-username');
+          if (response.ok) {
+            const data = await response.json();
+            console.log('[SUGGESTED USERNAME] Fetched:', data.suggestedUsername);
+
+            // Cache for future page loads in this session
+            sessionStorage.setItem('innopay_suggested_username', data.suggestedUsername);
+
+            // Update if different from cache (or if no cache)
+            if (!cached || cached !== data.suggestedUsername) {
+              setSuggestedUsername(data.suggestedUsername);
+              setAccountName(data.suggestedUsername);
+              setIsUsernameValid(true);
+              setUsingSuggestedUsername(true);
+            }
+
+            setLoadingSuggestedUsername(false);
+          }
+        } catch (error) {
+          console.error('[SUGGESTED USERNAME] Error fetching:', error);
+          setLoadingSuggestedUsername(false);
+        }
+      };
+      fetchSuggestedUsername();
+
+      // Fetch active campaign
+      const fetchActiveCampaign = async () => {
+        try {
+          const response = await fetch('/api/campaigns/active');
+          if (response.ok) {
+            const data = await response.json();
+            console.log('[CAMPAIGN] Fetched active campaign:', data.campaign);
+            setActiveCampaign(data.campaign);
+          }
+        } catch (e) {
+          console.error('Failed to fetch active campaign:', e);
+        } finally {
+          setLoadingCampaign(false);
+        }
+      };
+
+      fetchActiveCampaign();
     }
   }, []);
 
@@ -167,15 +292,15 @@ export default function HiveAccountCreationPage() {
     }
   }, [success, results]);
 
-  const validateAndHandleInput = (input: string) => {
+  const validateAndHandleInput = async (input: string) => {
     const lowerCaseInput = input.toLowerCase();
     setAccountName(lowerCaseInput);
-    
+
     setError('');
-    
+
     let isValid = true;
     let message = '';
-    
+
     // Hive rules: length 3-16, lowercase a-z/0-9/./-, dot-separated labels
     if (lowerCaseInput.length < 3) {
       message = 'Hive usernames must be at least 3 characters long.';
@@ -210,20 +335,108 @@ export default function HiveAccountCreationPage() {
         }
       }
     }
-    
+
+    // If format is valid, show optimistic success and check HAF in background
     if (isValid && lowerCaseInput.length >= 3) {
+      // Immediate optimistic feedback (format is valid)
       setValidationMessage("Looks good! Click the button to create your account.");
       setIsValidationSuccess(true);
+      setIsUsernameValid(true);
+
+      // Clear any existing timeout
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+
+      // Background check via HAF database (debounced 400ms)
+      debounceTimerRef.current = setTimeout(async () => {
+        try {
+          const startTime = Date.now();
+          const response = await fetch(`/api/haf-accounts/check?accountName=${encodeURIComponent(lowerCaseInput)}`);
+          const data = await response.json();
+          const duration = Date.now() - startTime;
+
+          console.log(`[HAF CHECK] Response time: ${duration}ms`, data);
+
+          // Only update if username is taken (silent success if available)
+          if (!data.available) {
+            setValidationMessage("Sorry, this username has already been taken, try another one.");
+            setIsValidationSuccess(false);
+            setIsUsernameValid(false);
+          }
+          // If available, keep the optimistic "Looks good!" message
+        } catch (error) {
+          console.error('[HAF CHECK] Error:', error);
+          // Graceful fallback: keep optimistic state, post-hoc verification will catch it
+          console.log('[HAF CHECK] Falling back to post-hoc verification');
+        }
+      }, 300); // 300ms debounce delay
     } else if (message) {
       setValidationMessage(message);
       setIsValidationSuccess(false);
+      setIsUsernameValid(false);
     } else {
       setValidationMessage('');
+      setIsUsernameValid(false);
     }
-
-    setIsUsernameValid(isValid);
   };
   
+  // Toast drag handlers
+  const handleToastMouseDown = (e: React.MouseEvent) => {
+    setIsDraggingToast(true);
+    setToastDragOffset({
+      x: e.clientX - toastPosition.x,
+      y: e.clientY - toastPosition.y,
+    });
+  };
+
+  const handleToastTouchStart = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    setIsDraggingToast(true);
+    setToastDragOffset({
+      x: touch.clientX - toastPosition.x,
+      y: touch.clientY - toastPosition.y,
+    });
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDraggingToast) {
+        setToastPosition({
+          x: e.clientX - toastDragOffset.x,
+          y: e.clientY - toastDragOffset.y,
+        });
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (isDraggingToast && e.touches[0]) {
+        const touch = e.touches[0];
+        setToastPosition({
+          x: touch.clientX - toastDragOffset.x,
+          y: touch.clientY - toastDragOffset.y,
+        });
+      }
+    };
+
+    const handleMouseUp = () => setIsDraggingToast(false);
+    const handleTouchEnd = () => setIsDraggingToast(false);
+
+    if (isDraggingToast) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.addEventListener('touchmove', handleTouchMove);
+      document.addEventListener('touchend', handleTouchEnd);
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('touchmove', handleTouchMove);
+      document.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [isDraggingToast, toastDragOffset]);
+
   const handleEraseLocalStorage = () => {
     localStorage.removeItem('innopayAccountName');
     localStorage.removeItem('innopayMasterPassword');
@@ -231,7 +444,7 @@ export default function HiveAccountCreationPage() {
     setExistingAccount(null);
     setShowUpdateForm(false);
     toast.info('Local storage erased. The page will reload.');
-    window.location.reload(); // Force reload to show creation form    
+    window.location.reload(); // Force reload to show creation form
   };
 
   const handleCreateAccount = async () => {
@@ -241,61 +454,70 @@ export default function HiveAccountCreationPage() {
     }
 
     setError('');
-    setSuccess(false);
     setLoading(true);
-    setResults({ accountName: '', seed: '', masterPassword: '' });
     setValidationMessage(''); // Clear validation message on submit
 
-    const formattedName = accountName.toLowerCase();
-    
-    try {
-      console.log('Sending request to server for account creation...');
+    //const formattedName = accountName.toLowerCase();
 
-      const response = await fetch('/api/create-hive-account', {
+    try {
+      console.log('[ACCOUNT CREATION] Starting Stripe checkout flow for:', accountName);
+      console.log('[ACCOUNT CREATION] Topup amount:', topupAmount);
+
+      // Silently enforce minimum amount (don't throw - just fix it)
+      const finalAmount = Math.max(topupAmount, minimumAmount);
+      if (finalAmount !== topupAmount) {
+        console.log(`[ACCOUNT CREATION] Amount adjusted from ${topupAmount}€ to minimum ${finalAmount}€`);
+      }
+
+      // Prepare checkout request
+      const checkoutBody: any = {
+        accountName: accountName,
+        amount: finalAmount,
+      };
+
+      // Add campaign info if available
+      if (activeCampaign) {
+        checkoutBody.campaign = activeCampaign;
+      }
+
+      // Add order info if coming from indiesmenu
+      if (orderAmount && orderAmount > 0) {
+        checkoutBody.orderAmountEuro = orderAmount;
+        checkoutBody.orderMemo = orderMemo || `Table order - ${finalAmount}€`;
+        console.log(`[${new Date().toISOString()}] [ACCOUNT CREATION FRONTEND] Including order info in checkout body:`, {
+          orderAmountEuro: orderAmount,
+          orderMemo: checkoutBody.orderMemo,
+          memoLength: checkoutBody.orderMemo?.length
+        });
+        if (!orderMemo) {
+          console.warn(`[${new Date().toISOString()}] [ACCOUNT CREATION FRONTEND] ⚠️ WARNING: No memo provided, using fallback`);
+        }
+      }
+
+      console.log('[ACCOUNT CREATION] Creating checkout session:', checkoutBody);
+
+      const response = await fetch('/api/checkout/account', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
-          accountName: formattedName,
-          mockBroadcast: mockAccountCreation, // Send mock flag to server
-          simulateClaimedFailure: forcePaidCreation,   // Send force paid flag to server 
-        }),
+        body: JSON.stringify(checkoutBody),
       });
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to create Hive account.');
+        throw new Error(errorData.error || 'Failed to create checkout session.');
       }
 
       const data = await response.json();
-      const { accountName: returnedAccountName, seed, masterPassword } = data;
-      
-      if (returnedAccountName !== formattedName) {
-        console.error('Data Mismatch Error: The account name returned from the server does not match the one sent.');
-        throw new Error('Server returned an unexpected account name. Please try again.');
-      }
-      
-      const formattedSeed = seed.split(' ').map((word: string, index: number) => `${index + 1}.${word}`).join(' ');
-      setResults({
-        accountName: returnedAccountName,
-        seed: formattedSeed,
-        masterPassword: masterPassword,
-      });
+      console.log('[ACCOUNT CREATION] Checkout session created:', data.sessionId);
 
-      // Save to localStorage upon success
-      localStorage.setItem('innopayAccountName', returnedAccountName);
-      localStorage.setItem('innopayMasterPassword', masterPassword);
-      localStorage.setItem('innopaySeed', seed);
+      // Redirect to Stripe checkout
+      window.location.href = data.url;
 
-      // Set existing account state for UI display
-      setExistingAccount({ accountName: returnedAccountName, masterPassword, seed });
-
-      setSuccess(true);
     } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'An unexpected error occurred during account creation.');
-    } finally {
+      console.error('[ACCOUNT CREATION] Error:', err);
+      setError(err.message || 'An unexpected error occurred.');
       setLoading(false);
     }
   };
@@ -499,42 +721,188 @@ export default function HiveAccountCreationPage() {
     maxFiles: 1,
   });
 
+ /* flex flex-col items-center space-y-4 p-6 sm:p-8 bg-gradient-to-r from-blue-50 to-blue-100 border-2 border-blue-500 rounded-xl shadow-lg w-full max-w-md mb-6 mx-auto
+ w-[80%] max-w-[300px] */ 
   const renderAccountCreationForm = () => (
     <>
-      <div className="flex flex-col items-center space-y-8 p-4 sm:p-6 lg:p-8 bg-white rounded-xl shadow-lg w-4/5 max-w-md mb-6 mx-auto">
-        <div className="relative w-[80%] max-w-[300px] h-auto aspect-video">
+      <div className="flex flex-col items-center mb-4 p-4 bg-gradient-to-r from-blue-50 to-blue-100 border-2 border-blue-500 rounded-lg shadow-lg w-9/10 text-center">
+        <div className="relative w-[80%] h-auto aspect-video">
           <Image
             src={innopayLogoUrl}
             alt="Innopay Logo"
             fill
-            className="object-contain rounded-lg"
+            className="object-contain"
+            priority={true}
           />
         </div>
+        <h1 className="text-3xl sm:text-4xl font-bold text-blue-900 text-center">
+          Créez votre compte Innopay
+        </h1>
       </div>
-      <h1 className="text-3xl sm:text-4xl font-bold mb-2 text-center w-4/5">Create Your Innopay Account</h1>
-      <p className="mt-2 text-lg sm:text-xl mb-4 text-center px-4 sm:px-0">
-        Enter a desired username to create your new Innopay account on the Hive blockchain.
-      </p>  <div className="w-full max-w-md relative px-4 sm:px-0">
-    {validationMessage && (
-      <div className={`absolute -top-12 left-0 w-full p-3 rounded-lg shadow-md text-center validation-callout z-10
-        ${isValidationSuccess ? 'bg-green-100/80 text-green-800' : 'bg-red-100/80 text-red-800'}`}>
-        {validationMessage}
+
+      {/* Loading state while fetching suggested username */}
+      {loadingSuggestedUsername ? (
+        <div className="mt-8 flex flex-col items-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mb-4"></div>
+          <p className="text-gray-600">Préparation de votre compte...</p>
+        </div>
+      ) : (
+        <>
+          {/* Show explanation only if user has interacted with input */}
+          {hasUserInteracted && (
+            <p className="mt-2 text-lg sm:text-xl mb-4 text-center px-4 sm:px-0">
+              Entrez le nom d'utilisateur souhaité pour créer votre compte Innopay.
+            </p>
+          )}
+
+          <div className="w-full max-w-md relative px-4 sm:px-0 mt-8">
+        {/* Show validation message only if user has interacted - Draggable */}
+        {hasUserInteracted && validationMessage && (
+          <div
+            className={`fixed p-3 rounded-lg shadow-lg text-center validation-callout z-[9999] cursor-move select-none transition-colors
+              ${isValidationSuccess ? 'bg-green-100/90 text-green-800' : 'bg-red-100/90 text-red-800'}`}
+            style={{
+              left: `calc(50% + ${toastPosition.x}px)`,
+              top: `calc(50% + ${toastPosition.y}px)`,
+              transform: 'translate(-50%, -50%)',
+              minWidth: '280px',
+              maxWidth: '400px',
+            }}
+            onMouseDown={handleToastMouseDown}
+            onTouchStart={handleToastTouchStart}
+          >
+            {validationMessage}
+          </div>
+        )}
+
+        <input
+          type="text"
+          value={accountName}
+          onChange={(e) => {
+            setUsingSuggestedUsername(false);
+            setHasUserInteracted(true);
+            validateAndHandleInput(e.target.value);
+          }}
+          onFocus={() => {
+            setHasUserInteracted(true);
+            if (accountName.length > 0 && !usingSuggestedUsername) {
+              validateAndHandleInput(accountName);
+            }
+          }}
+          placeholder="Choisissez un nom d'utilisateur"
+          className={`w-full p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition-colors duration-300
+            ${accountName.length > 0 ? (isUsernameValid ? 'bg-green-200/50' : 'bg-red-200/50') : ''}`}
+        />
+    {/* Checkbox for account creation confirmation */}
+    <label className="flex items-start space-x-3 mb-4 cursor-pointer group">
+      <input
+        type="checkbox"
+        checked={isUsernameValid && accountName.length > 0}
+        disabled
+        className="mt-1 h-5 w-5 text-blue-500 focus:ring-blue-500 border-gray-300 rounded disabled:opacity-100"
+      />
+      <span className="text-base text-gray-800 select-none">
+        {usingSuggestedUsername && !hasUserInteracted
+          ? 'Créer un compte Innopay avec le nom suggéré'
+          : 'Créer un compte Innopay'}
+      </span>
+    </label>
+
+    {/* Discount Savings Display (from Indies order) */}
+    {discount && discount > 0 && (
+      <div className="mb-4 p-4 bg-gradient-to-r from-green-50 to-green-100 border-2 border-green-500 rounded-lg text-center">
+        <p className="text-2xl font-bold text-green-700 flex items-center justify-center gap-2">
+          <span>🎉</span>
+          <span>Vous économisez {discount.toFixed(2)}€!</span>
+          <span>🎉</span>
+        </p>
+        <p className="text-sm text-green-600 mt-1">
+          En créant un compte Innopay, vous bénéficiez déjà d'une réduction sur votre commande
+        </p>
       </div>
     )}
 
-    <input
-      type="text"
-      value={accountName}
-      onChange={(e) => validateAndHandleInput(e.target.value)}
-      onFocus={() => {
-        if (accountName.length > 0) {
-          validateAndHandleInput(accountName);
-        }
-      }}
-      placeholder="Choose a username"
-      className={`w-4/5 p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition-colors duration-300
-        ${accountName.length > 0 ? (isUsernameValid ? 'bg-green-200/50' : 'bg-red-200/50') : ''}`}
-    />
+    {/* Campaign Bonus Display with Quick-Select Buttons */}
+    {activeCampaign && (activeCampaign.remainingSlots50 > 0 || activeCampaign.remainingSlots100 > 0) && (
+      <div className="mb-4 p-4 bg-gradient-to-r from-yellow-50 to-yellow-100 border-2 border-yellow-400 rounded-lg">
+        <h3 className="text-lg font-bold text-yellow-800 mb-3 flex items-center gap-2">
+          <span>🎁</span>
+          <span>{activeCampaign.name}</span>
+        </h3>
+        <div className="space-y-3">
+          {activeCampaign.remainingSlots50 > 0 && (
+            <div className="flex items-center gap-3 bg-white/50 p-3 rounded-lg">
+              <div className="flex-1 text-sm text-yellow-900">
+                <p className="font-semibold">
+                  Payez <span className="text-base font-bold">{activeCampaign.minAmount50}€</span> ou plus
+                  → Recevez <span className="text-base font-bold text-green-700">{activeCampaign.bonus50}€ de bonus</span>
+                </p>
+                <span className="text-xs text-yellow-700">
+                  ({activeCampaign.remainingSlots50} places restantes)
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTopupAmount(activeCampaign.minAmount50 + (activeCampaign.minAmount100 -  activeCampaign.minAmount50)/2)}
+                className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white font-semibold rounded-lg transition-colors text-sm whitespace-nowrap"
+              >
+                Choisir {activeCampaign.minAmount50 + (activeCampaign.minAmount100 -  activeCampaign.minAmount50)/2}€
+              </button>
+            </div>
+          )}
+          {activeCampaign.remainingSlots100 > 0 && (
+            <div className="flex items-center gap-3 bg-white/50 p-3 rounded-lg">
+              <div className="flex-1 text-sm text-yellow-900">
+                <p className="font-semibold">
+                  Payez <span className="text-base font-bold">{activeCampaign.minAmount100}€</span> ou plus
+                  → Recevez <span className="text-base font-bold text-green-700">{activeCampaign.bonus100}€ de bonus</span>
+                </p>
+                <span className="text-xs text-yellow-700">
+                  ({activeCampaign.remainingSlots100} places restantes)
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTopupAmount(activeCampaign.minAmount100 * 2)}
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition-colors text-sm whitespace-nowrap"
+              >
+                Choisir {activeCampaign.minAmount100 * 2}€
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
+    {/* Amount Input Field */}
+    <div className="mb-4">
+      <label htmlFor="topupAmount" className="block text-sm font-semibold text-gray-700 mb-2">
+        Montant de rechargement (EUR)
+        {orderAmount && (
+          <span className="ml-2 text-xs font-normal text-gray-500">
+            (Commande: {orderAmount}€, Minimum: {minimumAmount}€)
+          </span>
+        )}
+      </label>
+      <input
+        id="topupAmount"
+        type="number"
+        min={minimumAmount}
+        step="1"
+        value={topupAmount}
+        onChange={(e) => {
+          const value = parseFloat(e.target.value);
+          if (!isNaN(value) && value >= minimumAmount) {
+            setTopupAmount(value);
+          }
+        }}
+        className="w-full p-4 border-2 border-blue-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg font-semibold"
+      />
+      <p className="mt-2 text-sm text-black font-medium">
+        Vous pouvez entrer n'importe quel montant ≥ {minimumAmount}€. Choisissez un palier de campagne ci-dessus pour une sélection rapide.
+      </p>
+    </div>
+
     {/* Dev/Test Controls: Checkboxes and Erase Button */}
     {isDevOrTest && (
       <div className="flex flex-col space-y-2 mb-4">
@@ -561,10 +929,12 @@ export default function HiveAccountCreationPage() {
 
     <button
       onClick={handleCreateAccount}
-      disabled={loading || !isValidationSuccess}
+      disabled={loading || !isUsernameValid}
       className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
     >
-      {loading ? 'Creating Account...' : 'Create Innopay Account'}
+      {loading
+        ? 'Redirection vers le paiement...'
+        : `Procéder au paiement (${topupAmount}€)`}
     </button>
   </div>
 
@@ -574,8 +944,10 @@ export default function HiveAccountCreationPage() {
       <p>{error}</p>
     </div>
   )}
-</>  
-);
+        </>
+      )}
+    </>
+  );
 
   const renderExistingAccountView = () => (
     <>
