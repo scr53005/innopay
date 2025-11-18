@@ -1,6 +1,7 @@
 // app/api/wallet-payment/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { Client, PrivateKey, Transaction } from '@hiveio/dhive';
+import { Client } from '@hiveio/dhive';
+import { transferHbd, transferEuroTokens } from '@/services/hive';
 
 const client = new Client([
   'https://api.hive.blog',
@@ -37,6 +38,7 @@ export async function POST(req: NextRequest) {
       recipient,
       amountEuro,
       eurUsdRate,
+      orderMemo,
       distriateSuffix
     });
 
@@ -48,17 +50,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Get innopay account credentials from environment
-    const innopayAccount = process.env.HIVE_ACCOUNT;
-    const innopayActiveKey = process.env.HIVE_ACTIVE_PRIVATE_KEY;
+    // Get innopay account name from environment?
+    const innopayAccount = 'innopay'; // or process.env.HIVE_ACCOUNT to be more generic but I don't see the point;
 
-    if (!innopayAccount || !innopayActiveKey) {
-      console.error('[WALLET PAYMENT] Missing innopay credentials in environment');
+    /* if (!innopayAccount) {
+      console.error('[WALLET PAYMENT] Missing HIVE_ACCOUNT in environment');
       return NextResponse.json(
         { error: 'Server configuration error' },
         { status: 500 }
       );
-    }
+    } */
 
     // Construct final memo: orderMemo + distriateSuffix
     const finalMemo = `${orderMemo} ${distriateSuffix}`;
@@ -85,96 +86,19 @@ export async function POST(req: NextRequest) {
     let transferTxId: string;
 
     if (hbdBalance >= requiredHbd) {
-      // Transfer HBD from innopay to restaurant
+      // Transfer HBD from innopay to restaurant using utility function
       console.log('[WALLET PAYMENT] Sufficient HBD, transferring HBD...');
-
-      const hbdAmount = requiredHbd.toFixed(3);
-
-      const transferOperation = [
-        'transfer',
-        {
-          from: innopayAccount,
-          to: recipient,
-          amount: `${hbdAmount} HBD`,
-          memo: finalMemo
-        }
-      ];
-
-      // Get current blockchain block details for transaction validity
-      const dynamicGlobalProperties = await client.database.getDynamicGlobalProperties();
-      const headBlockNumber = dynamicGlobalProperties.head_block_number;
-      const headBlockId = dynamicGlobalProperties.head_block_id;
-      const refBlockNum = headBlockNumber & 0xffff;
-      const refBlockPrefix = Buffer.from(headBlockId, 'hex').readUInt32LE(4);
-      const expirationTime = Math.floor(Date.now() / 1000) + 60; // 60-second expiration
-
-      const baseTransaction: Transaction = {
-        ref_block_num: refBlockNum,
-        ref_block_prefix: refBlockPrefix,
-        expiration: new Date(expirationTime * 1000).toISOString().slice(0, -5),
-        operations: [transferOperation as any],
-        extensions: [],
-      };
-
-      // Sign and broadcast the transaction
-      const signedTransaction = client.broadcast.sign(baseTransaction, [PrivateKey.fromString(innopayActiveKey)]);
-      const broadcastResult = await client.broadcast.send(signedTransaction);
-      transferTxId = broadcastResult.id;
-
+      transferTxId = await transferHbd(recipient, requiredHbd, finalMemo);
       console.log('[WALLET PAYMENT] HBD transfer successful! TX:', transferTxId);
 
     } else {
-      // Transfer EURO tokens from innopay to restaurant
+      // Transfer EURO tokens from innopay to restaurant using utility function
       console.log('[WALLET PAYMENT] Insufficient HBD, transferring EURO tokens...');
-
-      const euroAmount = parseFloat(amountEuro).toFixed(2);
-
-      const transferPayload = {
-        contractName: 'tokens',
-        contractAction: 'transfer',
-        contractPayload: {
-          symbol: 'EURO',
-          to: recipient,
-          quantity: euroAmount,
-          memo: finalMemo,
-        },
-      };
-
-      const transferOperation = [
-        'custom_json',
-        {
-          required_auths: [innopayAccount],
-          required_posting_auths: [],
-          id: 'ssc-mainnet-hive',
-          json: JSON.stringify(transferPayload),
-        },
-      ];
-
-      // Get current blockchain block details for transaction validity
-      const dynamicGlobalProperties = await client.database.getDynamicGlobalProperties();
-      const headBlockNumber = dynamicGlobalProperties.head_block_number;
-      const headBlockId = dynamicGlobalProperties.head_block_id;
-      const refBlockNum = headBlockNumber & 0xffff;
-      const refBlockPrefix = Buffer.from(headBlockId, 'hex').readUInt32LE(4);
-      const expirationTime = Math.floor(Date.now() / 1000) + 60; // 60-second expiration
-
-      const baseTransaction: Transaction = {
-        ref_block_num: refBlockNum,
-        ref_block_prefix: refBlockPrefix,
-        expiration: new Date(expirationTime * 1000).toISOString().slice(0, -5),
-        operations: [transferOperation as any],
-        extensions: [],
-      };
-
-      // Sign and broadcast the transaction
-      const signedTransaction = client.broadcast.sign(baseTransaction, [PrivateKey.fromString(innopayActiveKey)]);
-      const broadcastResult = await client.broadcast.send(signedTransaction);
-      transferTxId = broadcastResult.id;
-
+      transferTxId = await transferEuroTokens(recipient, parseFloat(amountEuro), finalMemo);
       console.log('[WALLET PAYMENT] EURO transfer successful! TX:', transferTxId);
     }
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       customerTxId,
       innopayTxId: transferTxId,
@@ -183,14 +107,39 @@ export async function POST(req: NextRequest) {
       transferType: hbdBalance >= requiredHbd ? 'HBD' : 'EURO'
     }, { status: 200 });
 
+    // Add CORS headers
+    response.headers.set('Access-Control-Allow-Origin', '*');
+    response.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    response.headers.set('Access-Control-Allow-Headers', 'Content-Type');
+
+    return response;
+
   } catch (error: any) {
     console.error('[WALLET PAYMENT] Error:', error);
-    return NextResponse.json(
+    const errorResponse = NextResponse.json(
       {
         error: 'Payment processing failed',
         message: process.env.NODE_ENV === 'development' ? error.message : undefined
       },
       { status: 500 }
     );
+
+    // Add CORS headers to error response too
+    errorResponse.headers.set('Access-Control-Allow-Origin', '*');
+    errorResponse.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    errorResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type');
+
+    return errorResponse;
   }
+}
+
+/**
+ * OPTIONS handler for CORS preflight
+ */
+export async function OPTIONS() {
+  const response = NextResponse.json({}, { status: 200 });
+  response.headers.set('Access-Control-Allow-Origin', '*');
+  response.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  response.headers.set('Access-Control-Allow-Headers', 'Content-Type');
+  return response;
 }

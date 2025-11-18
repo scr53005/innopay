@@ -888,12 +888,20 @@ export default function HiveAccountCreationPage() {
         id="topupAmount"
         type="number"
         min={minimumAmount}
-        step="1"
+        step="0.01"
         value={topupAmount}
         onChange={(e) => {
-          const value = parseFloat(e.target.value);
-          if (!isNaN(value) && value >= minimumAmount) {
+          // Allow free entry - just update the value
+          const value = e.target.value === '' ? minimumAmount : parseFloat(e.target.value);
+          if (!isNaN(value)) {
             setTopupAmount(value);
+          }
+        }}
+        onBlur={(e) => {
+          // Validate when user leaves the field
+          const value = parseFloat(e.target.value);
+          if (isNaN(value) || value < minimumAmount) {
+            setTopupAmount(minimumAmount);
           }
         }}
         className="w-full p-4 border-2 border-blue-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg font-semibold"
