@@ -160,18 +160,22 @@ export async function POST(req: NextRequest) {
       payment_intent_data: {
         setup_future_usage: undefined,
       },
-      success_url: redirectParams?.table
-        ? `${baseUrl.replace('wallet.innopay.lu', 'menu.indiesmenu.lu').replace('localhost:3000', 'localhost:3001')}/?table=${redirectParams.table}&topup_success=true`
+      success_url: redirectParams?.orderAmount
+        ? `${baseUrl.replace('wallet.innopay.lu', 'menu.indiesmenu.lu').replace('localhost:3000', 'localhost:3001')}/?${redirectParams.table ? `table=${redirectParams.table}&` : ''}topup_success=true`
         : flow === 'topup'
           ? `${baseUrl}/?topup_success=true&session_id={CHECKOUT_SESSION_ID}`
           : `${baseUrl}/user/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: redirectParams?.table
-        ? `${baseUrl.replace('wallet.innopay.lu', 'menu.indiesmenu.lu').replace('localhost:3000', 'localhost:3001')}/?table=${redirectParams.table}&cancelled=true`
+      cancel_url: redirectParams?.orderAmount
+        ? `${baseUrl.replace('wallet.innopay.lu', 'menu.indiesmenu.lu').replace('localhost:3000', 'localhost:3001')}/?${redirectParams.table ? `table=${redirectParams.table}&` : ''}cancelled=true`
         : flow === 'topup'
           ? `${baseUrl}/?cancelled=true`
           : `${baseUrl}/user?cancelled=true`,
       metadata,
     };
+
+    // Log the URLs being used
+    console.log(`[${new Date().toISOString()}] [CHECKOUT API] Success URL:`, sessionConfig.success_url);
+    console.log(`[${new Date().toISOString()}] [CHECKOUT API] Cancel URL:`, sessionConfig.cancel_url);
 
     // Add customer email if provided
     if (email) {

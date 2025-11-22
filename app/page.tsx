@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import Draggable from '@/app/components/Draggable';
@@ -68,8 +68,10 @@ function TopUpContent() {
     const topupParam = searchParams.get('topup');
     if (topupParam) {
       const topupAmount = parseFloat(topupParam);
-      if (!isNaN(topupAmount) && topupAmount >= 15 && topupAmount <= 999) {
-        setAmount(Math.round(topupAmount));
+      if (!isNaN(topupAmount) && topupAmount > 0) {
+        // Clamp to valid range (15-999)
+        const clampedAmount = Math.max(15, Math.min(999, Math.round(topupAmount)));
+        setAmount(clampedAmount);
       }
     }
   }, [searchParams]);
@@ -80,25 +82,15 @@ function TopUpContent() {
     const orderAmount = searchParams.get('order_amount');
     const orderMemo = searchParams.get('order_memo');
 
-    if (table) {
+    // Return params if there's an order (indicated by order_amount)
+    if (orderAmount && parseFloat(orderAmount) > 0) {
       return { table, orderAmount, orderMemo };
     }
     return null;
   };
 
-  // Check if user has an account in localStorage and fetch balance
-  useEffect(() => {
-    const accountName = localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName');
-    setHasAccount(!!accountName);
-
-    // Fetch wallet balance if account exists
-    if (accountName) {
-      fetchWalletBalance(accountName);
-    }
-  }, []);
-
   // Fetch EURO token balance from Hive-Engine
-  const fetchWalletBalance = async (accountName: string) => {
+  const fetchWalletBalance = useCallback(async (accountName: string) => {
     console.log('[WALLET BALANCE] Fetching balance for:', accountName);
 
     try {
@@ -142,7 +134,29 @@ function TopUpContent() {
     } catch (error) {
       console.error('[WALLET BALANCE] Error fetching balance:', error);
     }
-  };
+  }, []);
+
+  // Check if user has an account in localStorage and fetch balance
+  useEffect(() => {
+    const accountName = localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName');
+    setHasAccount(!!accountName);
+
+    // Fetch wallet balance if account exists
+    if (accountName) {
+      fetchWalletBalance(accountName);
+    }
+
+    // If returning from successful top-up, refetch balance after a delay
+    const topupSuccess = searchParams.get('topup_success');
+    if (topupSuccess === 'true' && accountName) {
+      console.log('[LANDING] Returned from successful top-up, will refetch balance');
+      // Refetch after 2 seconds to allow blockchain to update
+      setTimeout(() => {
+        console.log('[LANDING] Refetching balance after top-up');
+        fetchWalletBalance(accountName);
+      }, 2000);
+    }
+  }, [searchParams, fetchWalletBalance]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -179,6 +193,7 @@ function TopUpContent() {
 
       // Get redirect parameters if coming from indiesmenu
       const redirectParams = getRedirectParams();
+      console.log('[LANDING] Redirect params:', redirectParams);
 
       const response = await fetch('/api/checkout/account', {
         method: 'POST',

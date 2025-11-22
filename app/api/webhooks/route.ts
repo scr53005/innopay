@@ -198,20 +198,24 @@ async function handleGuestCheckout(session: Stripe.Checkout.Session) {
         const euroTxId = await transferEuroTokens(recipient, amountEuro, memo);
         console.log(`[GUEST] EURO tokens transferred successfully: ${euroTxId}`);
 
-        // Record debt - innopay owes HBD to restaurant
-        const eurUsdRate = hbdAmountNum / amountEuro; // Calculate rate from amounts
-        await prisma.outstanding_debt.create({
-          data: {
-            creditor: getRecipientForEnvironment(recipient),
-            amount_hbd: hbdAmountNum,
-            euro_tx_id: euroTxId, // Use the EURO fallback TX as reference
-            eur_usd_rate: eurUsdRate,
-            reason: 'guest_checkout',
-            notes: `Guest checkout - HBD shortage at ${new Date().toISOString()}`
-          }
-        });
-
-        console.log(`📝 [DEBT] Recorded ${hbdAmountNum} HBD debt to restaurant (guest checkout)`);
+        // Try to record debt - innopay owes HBD to restaurant (non-blocking)
+        try {
+          const eurUsdRate = hbdAmountNum / amountEuro; // Calculate rate from amounts
+          await prisma.outstanding_debt.create({
+            data: {
+              creditor: getRecipientForEnvironment(recipient),
+              amount_hbd: hbdAmountNum,
+              euro_tx_id: euroTxId, // Use the EURO fallback TX as reference
+              eur_usd_rate: eurUsdRate,
+              reason: 'guest_checkout',
+              notes: `Guest checkout - HBD shortage at ${new Date().toISOString()}`
+            }
+          });
+          console.log(`📝 [DEBT] Recorded ${hbdAmountNum} HBD debt to restaurant (guest checkout)`);
+        } catch (debtError) {
+          console.error('[GUEST] WARNING: Failed to record debt, but EURO transfer succeeded:', debtError);
+          // Don't throw - the payment went through, just log the debt recording issue
+        }
 
         // Try to update DB, but don't fail if it errors
         try {
@@ -343,19 +347,22 @@ async function handleTopup(session: Stripe.Checkout.Session) {
       } catch (hbdError: any) {
         console.warn(`[TOPUP] ⚠️ HBD transfer failed despite sufficient balance:`, hbdError.message);
 
-        // Record debt - innopay owes HBD to restaurant
-        await prisma.outstanding_debt.create({
-          data: {
-            creditor: getRecipientForEnvironment('indies.cafe'),
-            amount_hbd: requiredHbd,
-            euro_tx_id: userTxId || 'TOPUP_NO_USER_TX',
-            eur_usd_rate: eurUsdRate,
-            reason: 'topup_order',
-            notes: `HBD transfer failed at ${new Date().toISOString()} - ${hbdError.message}`
-          }
-        });
-
-        console.log(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to restaurant`);
+        // Try to record debt - innopay owes HBD to restaurant (non-blocking)
+        try {
+          await prisma.outstanding_debt.create({
+            data: {
+              creditor: getRecipientForEnvironment('indies.cafe'),
+              amount_hbd: requiredHbd,
+              euro_tx_id: userTxId || 'TOPUP_NO_USER_TX',
+              eur_usd_rate: eurUsdRate,
+              reason: 'topup_order',
+              notes: `HBD transfer failed at ${new Date().toISOString()} - ${hbdError.message}`
+            }
+          });
+          console.log(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to restaurant`);
+        } catch (debtError) {
+          console.error('[TOPUP] WARNING: Failed to record debt:', debtError);
+        }
 
         // Fall back to EURO
         restaurantTxId = await transferEuroTokens('indies.cafe', orderCost, orderMemo);
@@ -365,19 +372,22 @@ async function handleTopup(session: Stripe.Checkout.Session) {
       // Insufficient HBD - transfer EURO tokens and record debt
       console.log(`[TOPUP] Insufficient HBD, transferring ${orderCost} EURO to indies.cafe`);
 
-      // Record debt - innopay should have paid HBD but paid EURO instead
-      await prisma.outstanding_debt.create({
-        data: {
-          creditor: getRecipientForEnvironment('indies.cafe'),
-          amount_hbd: requiredHbd,
-          euro_tx_id: userTxId || 'TOPUP_NO_USER_TX',
-          eur_usd_rate: eurUsdRate,
-          reason: 'topup_order',
-          notes: `Insufficient HBD balance at ${new Date().toISOString()}`
-        }
-      });
-
-      console.log(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to restaurant`);
+      // Try to record debt - innopay should have paid HBD but paid EURO instead (non-blocking)
+      try {
+        await prisma.outstanding_debt.create({
+          data: {
+            creditor: getRecipientForEnvironment('indies.cafe'),
+            amount_hbd: requiredHbd,
+            euro_tx_id: userTxId || 'TOPUP_NO_USER_TX',
+            eur_usd_rate: eurUsdRate,
+            reason: 'topup_order',
+            notes: `Insufficient HBD balance at ${new Date().toISOString()}`
+          }
+        });
+        console.log(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to restaurant`);
+      } catch (debtError) {
+        console.error('[TOPUP] WARNING: Failed to record debt:', debtError);
+      }
 
       restaurantTxId = await transferEuroTokens('indies.cafe', orderCost, orderMemo);
       console.log(`[TOPUP] EURO transfer successful: ${restaurantTxId}`);
@@ -587,19 +597,22 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
     } catch (hbdError: any) {
       console.warn(`[ACCOUNT] ⚠️ Failed to transfer HBD to user, recording debt:`, hbdError.message);
 
-      // Record debt - innopay owes HBD to customer
-      await prisma.outstanding_debt.create({
-        data: {
-          creditor: accountName,
-          amount_hbd: hbdAmount,
-          euro_tx_id: euroTxId,
-          eur_usd_rate: eurUsdRate,
-          reason: 'account_creation_bonus',
-          notes: `HBD shortage at ${new Date().toISOString()} - ${hbdError.message}`
-        }
-      });
-
-      console.log(`📝 [DEBT] Recorded ${hbdAmount} HBD debt to customer ${accountName}`);
+      // Try to record debt - innopay owes HBD to customer (non-blocking)
+      try {
+        await prisma.outstanding_debt.create({
+          data: {
+            creditor: accountName,
+            amount_hbd: hbdAmount,
+            euro_tx_id: euroTxId,
+            eur_usd_rate: eurUsdRate,
+            reason: 'account_creation_bonus',
+            notes: `HBD shortage at ${new Date().toISOString()} - ${hbdError.message}`
+          }
+        });
+        console.log(`📝 [DEBT] Recorded ${hbdAmount} HBD debt to customer ${accountName}`);
+      } catch (debtError) {
+        console.error('[ACCOUNT] WARNING: Failed to record debt:', debtError);
+      }
       // No EURO fallback here - user already has EURO tokens from line 520
     }
   }
@@ -636,19 +649,22 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
         // Fallback to EURO tokens if HBD insufficient - from innopay to restaurant
         console.warn(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] ⚠️ HBD transfer failed, using EURO token fallback:`, hbdError.message);
 
-        // Record debt - innopay owes HBD to restaurant
-        await prisma.outstanding_debt.create({
-          data: {
-            creditor: getRecipientForEnvironment('indies.cafe'),
-            amount_hbd: hbdAmountForOrder,
-            euro_tx_id: euroTxId,
-            eur_usd_rate: eurUsdRate,
-            reason: 'account_creation_order',
-            notes: `HBD shortage at ${new Date().toISOString()} - Paid with EURO instead`
-          }
-        });
-
-        console.log(`📝 [DEBT] Recorded ${hbdAmountForOrder} HBD debt to restaurant`);
+        // Try to record debt - innopay owes HBD to restaurant (non-blocking)
+        try {
+          await prisma.outstanding_debt.create({
+            data: {
+              creditor: getRecipientForEnvironment('indies.cafe'),
+              amount_hbd: hbdAmountForOrder,
+              euro_tx_id: euroTxId,
+              eur_usd_rate: eurUsdRate,
+              reason: 'account_creation_order',
+              notes: `HBD shortage at ${new Date().toISOString()} - Paid with EURO instead`
+            }
+          });
+          console.log(`📝 [DEBT] Recorded ${hbdAmountForOrder} HBD debt to restaurant`);
+        } catch (debtError) {
+          console.error('[ACCOUNT] WARNING: Failed to record debt:', debtError);
+        }
 
         console.log(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] 🔄 Attempting EURO token transfer with memo:`, orderMemo);
         restaurantEuroTxId = await transferEuroTokens('indies.cafe', orderCost, orderMemo);
