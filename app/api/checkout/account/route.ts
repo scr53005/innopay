@@ -30,7 +30,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
  */
 export async function POST(req: NextRequest) {
   try {
-    const { flow = 'account_creation', accountName, amount, email, campaign, orderAmountEuro, orderMemo } = await req.json();
+    const { flow = 'account_creation', accountName, amount, email, campaign, orderAmountEuro, orderMemo, redirectParams } = await req.json();
 
     console.log(`[${new Date().toISOString()}] [CHECKOUT API] Received request:`, {
       flow,
@@ -38,7 +38,8 @@ export async function POST(req: NextRequest) {
       amount,
       orderAmountEuro,
       orderMemo,
-      orderMemoLength: orderMemo?.length
+      orderMemoLength: orderMemo?.length,
+      redirectParams
     });
 
     // Validate required fields
@@ -159,12 +160,16 @@ export async function POST(req: NextRequest) {
       payment_intent_data: {
         setup_future_usage: undefined,
       },
-      success_url: flow === 'topup'
-        ? `${baseUrl}/?topup_success=true&session_id={CHECKOUT_SESSION_ID}`
-        : `${baseUrl}/user/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: flow === 'topup'
-        ? `${baseUrl}/?cancelled=true`
-        : `${baseUrl}/user?cancelled=true`,
+      success_url: redirectParams?.table
+        ? `${baseUrl.replace('wallet.innopay.lu', 'menu.indiesmenu.lu').replace('localhost:3000', 'localhost:3001')}/?table=${redirectParams.table}&topup_success=true`
+        : flow === 'topup'
+          ? `${baseUrl}/?topup_success=true&session_id={CHECKOUT_SESSION_ID}`
+          : `${baseUrl}/user/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: redirectParams?.table
+        ? `${baseUrl.replace('wallet.innopay.lu', 'menu.indiesmenu.lu').replace('localhost:3000', 'localhost:3001')}/?table=${redirectParams.table}&cancelled=true`
+        : flow === 'topup'
+          ? `${baseUrl}/?cancelled=true`
+          : `${baseUrl}/user?cancelled=true`,
       metadata,
     };
 

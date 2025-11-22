@@ -3,6 +3,7 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
+import Draggable from '@/app/components/Draggable';
 
 const innopayLogoUrl = "/innopay.svg";
 
@@ -53,13 +54,95 @@ function TopUpContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Mini-wallet state
+  const [showWalletBalance, setShowWalletBalance] = useState(false);
+  const [walletBalance, setWalletBalance] = useState<{
+    accountName: string;
+    euroBalance: number;
+  } | null>(null);
+
   const t = translations[language];
 
-  // Check if user has an account in localStorage
+  // Read URL parameters and set initial amount
+  useEffect(() => {
+    const topupParam = searchParams.get('topup');
+    if (topupParam) {
+      const topupAmount = parseFloat(topupParam);
+      if (!isNaN(topupAmount) && topupAmount >= 15 && topupAmount <= 999) {
+        setAmount(Math.round(topupAmount));
+      }
+    }
+  }, [searchParams]);
+
+  // Get redirect parameters from URL (for returning from indiesmenu)
+  const getRedirectParams = () => {
+    const table = searchParams.get('table');
+    const orderAmount = searchParams.get('order_amount');
+    const orderMemo = searchParams.get('order_memo');
+
+    if (table) {
+      return { table, orderAmount, orderMemo };
+    }
+    return null;
+  };
+
+  // Check if user has an account in localStorage and fetch balance
   useEffect(() => {
     const accountName = localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName');
     setHasAccount(!!accountName);
+
+    // Fetch wallet balance if account exists
+    if (accountName) {
+      fetchWalletBalance(accountName);
+    }
   }, []);
+
+  // Fetch EURO token balance from Hive-Engine
+  const fetchWalletBalance = async (accountName: string) => {
+    console.log('[WALLET BALANCE] Fetching balance for:', accountName);
+
+    try {
+      const response = await fetch('https://api.hive-engine.com/rpc/contracts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'find',
+          params: {
+            contract: 'tokens',
+            table: 'balances',
+            query: {
+              account: accountName,
+              symbol: 'EURO'
+            }
+          },
+          id: 1
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.result && data.result.length > 0) {
+        const euroBalance = parseFloat(data.result[0].balance);
+        console.log('[WALLET BALANCE] Balance retrieved:', euroBalance);
+
+        setWalletBalance({
+          accountName,
+          euroBalance: parseFloat(euroBalance.toFixed(2))
+        });
+        setShowWalletBalance(true);
+      } else {
+        console.log('[WALLET BALANCE] No EURO tokens found');
+        setWalletBalance({
+          accountName,
+          euroBalance: 0
+        });
+        setShowWalletBalance(true);
+      }
+    } catch (error) {
+      console.error('[WALLET BALANCE] Error fetching balance:', error);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,6 +177,9 @@ function TopUpContent() {
         }
       }
 
+      // Get redirect parameters if coming from indiesmenu
+      const redirectParams = getRedirectParams();
+
       const response = await fetch('/api/checkout/account', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -101,7 +187,8 @@ function TopUpContent() {
           amount,
           flow,
           accountName: hasAccount ? accountName : undefined,
-          email: userEmail
+          email: userEmail,
+          redirectParams // Pass table, orderAmount, orderMemo if present
         })
       });
 
@@ -209,6 +296,61 @@ function TopUpContent() {
           ))}
         </div>
       </div>
+
+      {/* Wallet Balance Reopen Button */}
+      {!showWalletBalance && walletBalance && (
+        <button
+          onClick={() => setShowWalletBalance(true)}
+          className="fixed bottom-4 right-4 z-[9998] bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-full shadow-lg transition-colors"
+          aria-label="View wallet"
+        >
+          <span className="text-2xl">💰</span>
+        </button>
+      )}
+
+      {/* Persistent Wallet Balance Indicator */}
+      {showWalletBalance && walletBalance && (
+        <Draggable
+          className="z-[9998] bg-gradient-to-r from-blue-600 to-blue-700 text-white px-4 py-3 rounded-lg shadow-lg"
+          initialPosition={{
+            x: typeof window !== 'undefined' ? window.innerWidth - 316 : 0, // 300px max-width + 16px margin
+            y: typeof window !== 'undefined' ? window.innerHeight - 170 : 0  // Approximate height + 30px lift
+          }}
+          style={{
+            minWidth: '200px',
+            maxWidth: '300px',
+          }}
+        >
+          <div className="flex items-center justify-between gap-3">
+            {/* Drag handle indicator */}
+            <div className="text-white opacity-50 text-xs flex-shrink-0">
+              ⋮⋮
+            </div>
+
+            <div className="flex-1">
+              <p className="text-xs opacity-75 mb-1">Your Innopay Wallet</p>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">💰</span>
+                <div>
+                  <p className="font-bold text-lg">{walletBalance.euroBalance.toFixed(2)} €</p>
+                  <p className="text-xs opacity-75 font-mono">{walletBalance.accountName}</p>
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowWalletBalance(false)}
+              onMouseDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+              className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-1 transition-colors"
+              aria-label="Close"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </Draggable>
+      )}
     </div>
   );
 }
