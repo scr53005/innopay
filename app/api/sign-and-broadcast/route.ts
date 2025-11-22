@@ -15,31 +15,52 @@ const client = new Client([
  * POST /api/sign-and-broadcast
  * Signs and broadcasts a Hive operation server-side (has access to Node.js crypto)
  *
- * Body:
+ * Body Option 1:
  * - operation: The Hive operation object (e.g., custom_json for EURO transfer)
  * - activePrivateKey: The active private key (WIF format)
  *
- * Security: Private key is transmitted over HTTPS, used immediately for signing,
+ * Body Option 2:
+ * - operation: The Hive operation object
+ * - masterPassword: The master password
+ * - accountName: The account name (to derive key)
+ *
+ * Security: Private key/password transmitted over HTTPS, used immediately for signing,
  * and not stored. Used only for this one-time broadcast.
  */
 export async function POST(req: NextRequest) {
   try {
-    const { operation, activePrivateKey } = await req.json();
+    const { operation, activePrivateKey, masterPassword, accountName } = await req.json();
 
     console.log('[SIGN-API] Received sign request');
 
     // Validate required fields
-    if (!operation || !activePrivateKey) {
+    if (!operation) {
       return NextResponse.json(
-        { error: 'Missing required fields: operation, activePrivateKey' },
+        { error: 'Missing required field: operation' },
         { status: 400 }
       );
     }
 
-    // Parse the private key
-    console.log('[SIGN-API] Parsing private key...');
-    const key = PrivateKey.fromString(activePrivateKey);
-    console.log('[SIGN-API] Key parsed successfully');
+    if (!activePrivateKey && (!masterPassword || !accountName)) {
+      return NextResponse.json(
+        { error: 'Must provide either activePrivateKey OR (masterPassword + accountName)' },
+        { status: 400 }
+      );
+    }
+
+    // Get or derive the private key
+    let key: PrivateKey;
+    if (activePrivateKey) {
+      // Option 1: Use provided active key
+      console.log('[SIGN-API] Using provided active key...');
+      key = PrivateKey.fromString(activePrivateKey);
+      console.log('[SIGN-API] Key parsed successfully');
+    } else {
+      // Option 2: Derive active key from master password
+      console.log('[SIGN-API] Deriving active key from master password...');
+      key = PrivateKey.fromSeed(`${accountName}active${masterPassword}`);
+      console.log('[SIGN-API] Key derived successfully');
+    }
 
     // Get current blockchain block details for transaction validity
     const dynamicGlobalProperties = await client.database.getDynamicGlobalProperties();

@@ -124,3 +124,18 @@ model accountCredentialSession {
 
   @@map("account_credential_session")
 }
+
+model outstanding_debt {
+  id            String    @id @default(cuid())
+  created_at    DateTime  @default(now())
+  creditor      String    @db.VarChar(16)
+  debtor        String    @default("innopay") @db.VarChar(16)
+  amount_hbd    Decimal   @db.Decimal(10, 3)
+  euro_tx_id    String    @db.Char(40)
+  eur_usd_rate  Decimal   @db.Decimal(10, 4)
+  reason        String    @db.VarChar(64)
+  paid          Boolean   @default(false)
+  paid_at       DateTime?
+  payment_tx_id String?   @db.Char(40)
+  notes         String?   @db.Text
+}

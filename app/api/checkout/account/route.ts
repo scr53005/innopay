@@ -8,12 +8,13 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 
 /**
  * POST /api/checkout/account
- * Creates a Stripe checkout session for account creation with top-up
+ * Creates a Stripe checkout session for account creation OR top-up
  * Body: {
+ *   flow: 'account_creation' | 'topup',  // Flow type (default: 'account_creation')
  *   accountName: string,
  *   amount: number,  // EUR amount (default/suggested)
  *   email?: string,  // Optional customer email
- *   campaign?: {     // Optional: active campaign info to display
+ *   campaign?: {     // Optional: active campaign info (only for account_creation flow)
  *     id: number,
  *     name: string,
  *     minAmount50: number,
@@ -29,9 +30,10 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
  */
 export async function POST(req: NextRequest) {
   try {
-    const { accountName, amount, email, campaign, orderAmountEuro, orderMemo } = await req.json();
+    const { flow = 'account_creation', accountName, amount, email, campaign, orderAmountEuro, orderMemo } = await req.json();
 
     console.log(`[${new Date().toISOString()}] [CHECKOUT API] Received request:`, {
+      flow,
       accountName,
       amount,
       orderAmountEuro,
@@ -68,10 +70,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validate minimum amount (30 EUR)
-    if (amount < 30) {
+    // Validate minimum amount (30 EUR for account creation, 15 EUR for top-up)
+    const minAmount = flow === 'topup' ? 15 : 30;
+    if (amount < minAmount) {
       return NextResponse.json(
-        { error: 'Minimum top-up amount is 30 EUR for account creation' },
+        { error: `Minimum amount is ${minAmount} EUR for ${flow === 'topup' ? 'top-up' : 'account creation'}` },
         { status: 400 }
       );
     }
@@ -82,7 +85,7 @@ export async function POST(req: NextRequest) {
 
     // Prepare metadata
     const metadata: any = {
-      flow: 'account_creation',
+      flow,
       accountName,
     };
 
@@ -105,19 +108,27 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Build product description with campaign bonus info
-    let productDescription = `Create Innopay account "${accountName}" and top-up with ${amount} EUR `;
-    productDescription += `\n\n Please provide a valid e-mail during checkout to receive account details. `;
+    // Build product description based on flow type
+    let productDescription: string;
 
-    if (campaign) {
-      productDescription += `\n\n 🎁 ${campaign.name}`;
+    if (flow === 'topup') {
+      // Top-up flow: No campaign bonuses for returning users
+      productDescription = `Top-up Innopay account "${accountName}" with ${amount} EUR`;
+    } else {
+      // Account creation flow: Include campaign bonuses
+      productDescription = `Create Innopay account "${accountName}" and top-up with ${amount} EUR `;
+      productDescription += `\n\n Please provide a valid e-mail during checkout to receive account details. `;
 
-      if (campaign.remainingSlots50 > 0) {
-        productDescription += `\n • Pay ${campaign.minAmount50}€ or more → Get ${campaign.bonus50}€ bonus (${campaign.remainingSlots50} slots left)`;
-      }
+      if (campaign) {
+        productDescription += `\n\n 🎁 ${campaign.name}`;
 
-      if (campaign.remainingSlots100 > 0) {
-        productDescription += `\n • Pay ${campaign.minAmount100}€ or more → Get ${campaign.bonus100}€ bonus (${campaign.remainingSlots100} slots left)`;
+        if (campaign.remainingSlots50 > 0) {
+          productDescription += `\n • Pay ${campaign.minAmount50}€ or more → Get ${campaign.bonus50}€ bonus (${campaign.remainingSlots50} slots left)`;
+        }
+
+        if (campaign.remainingSlots100 > 0) {
+          productDescription += `\n • Pay ${campaign.minAmount100}€ or more → Get ${campaign.bonus100}€ bonus (${campaign.remainingSlots100} slots left)`;
+        }
       }
     }
 
@@ -145,8 +156,12 @@ export async function POST(req: NextRequest) {
       payment_intent_data: {
         setup_future_usage: undefined,
       },
-      success_url: `${baseUrl}/user/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${baseUrl}/user?cancelled=true`,
+      success_url: flow === 'topup'
+        ? `${baseUrl}/?topup_success=true&session_id={CHECKOUT_SESSION_ID}`
+        : `${baseUrl}/user/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: flow === 'topup'
+        ? `${baseUrl}/?cancelled=true`
+        : `${baseUrl}/user?cancelled=true`,
       metadata,
     };
 

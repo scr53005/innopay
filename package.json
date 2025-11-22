@@ -5,8 +5,12 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
+    "vercel-build": "npx prisma migrate deploy && npx prisma generate && next build",
+    "postinstall": "prisma generate",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "migrate:dev": "npx prisma migrate dev",
+    "migrate:deploy": "npx prisma migrate deploy"
   },
   "dependencies": {
     "@bunny.net/storage-sdk": "^0.3.0",

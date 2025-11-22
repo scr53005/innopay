@@ -1,0 +1,2 @@
+insert into walletuser (id, "accountName", "creationDate", hivetxid, "masterPassword", seed, "userId") values
+(37, 'inno000-000-001', '2025-11-19T11:47:20.410+00:00', '563633aa0cb3e8945fcb723c53e427bebb1d4074', 'P5K1JcrVSZLuYMj4W1KChjnPXfdmD4xxR8xeTDs9oSQHvLzrZQwK', 'metal cram mask melody logic square duty guard aware sign festival truck', 1);
