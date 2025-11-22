@@ -108,14 +108,17 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Build product description based on flow type
+    // Build product name and description based on flow type
+    let productName: string;
     let productDescription: string;
 
     if (flow === 'topup') {
       // Top-up flow: No campaign bonuses for returning users
+      productName = 'Innopay Account Top-up';
       productDescription = `Top-up Innopay account "${accountName}" with ${amount} EUR`;
     } else {
       // Account creation flow: Include campaign bonuses
+      productName = 'Innopay Account Creation & Top-up';
       productDescription = `Create Innopay account "${accountName}" and top-up with ${amount} EUR `;
       productDescription += `\n\n Please provide a valid e-mail during checkout to receive account details. `;
 
@@ -140,7 +143,7 @@ export async function POST(req: NextRequest) {
           price_data: {
             currency: 'eur',
             product_data: {
-              name: 'Innopay Account Creation & Top-up',
+              name: productName,
               description: productDescription,
             },
             unit_amount: amountCents,

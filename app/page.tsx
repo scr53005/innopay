@@ -6,487 +6,215 @@ import Image from 'next/image';
 
 const innopayLogoUrl = "/innopay.svg";
 
-// Type for stored account information
-interface StoredAccount {
-  accountName: string;
-  addedAt: string;
-}
+// Translations for the UI
+const translations = {
+  fr: {
+    title: "Bienvenue sur Innopay",
+    amountLabel: "Montant (EUR)",
+    createAndTopUp: "Créer et Recharger",
+    topUpWallet: "Recharger Votre Portefeuille",
+    minAmount: "Montant minimum: 15€",
+    maxAmount: "Montant maximum: 999€"
+  },
+  en: {
+    title: "Welcome to Innopay",
+    amountLabel: "Amount (EUR)",
+    createAndTopUp: "Create and Top Up",
+    topUpWallet: "Top Up Your Wallet",
+    minAmount: "Minimum amount: 15€",
+    maxAmount: "Maximum amount: 999€"
+  },
+  de: {
+    title: "Willkommen bei Innopay",
+    amountLabel: "Betrag (EUR)",
+    createAndTopUp: "Erstellen und Aufladen",
+    topUpWallet: "Brieftasche Aufladen",
+    minAmount: "Mindestbetrag: 15€",
+    maxAmount: "Höchstbetrag: 999€"
+  },
+  lb: {
+    title: "Wëllkomm bei Innopay",
+    amountLabel: "Betrag (EUR)",
+    createAndTopUp: "Erstellen an Oplueden",
+    topUpWallet: "Äre Portemonnaie Oplueden",
+    minAmount: "Mindestbetrag: 15€",
+    maxAmount: "Maximal Betrag: 999€"
+  }
+};
 
-// Separate component that uses useSearchParams (needs Suspense)
+type Language = 'fr' | 'en' | 'de' | 'lb';
+
 function TopUpContent() {
   const searchParams = useSearchParams();
 
-  // State for account management
-  const [storedAccounts, setStoredAccounts] = useState<StoredAccount[]>([]);
-  const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
-  const [showAccountDialog, setShowAccountDialog] = useState(false);
-
-  // State for top-up flow
-  const [topupAmount, setTopupAmount] = useState(15);
+  const [amount, setAmount] = useState(100);
+  const [language, setLanguage] = useState<Language>('fr');
+  const [hasAccount, setHasAccount] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [returnToIndiesmenu, setReturnToIndiesmenu] = useState(false);
-  const [indiesTable, setIndiesTable] = useState<string | null>(null);
 
-  // State for success/cancel messages
-  const [showSuccess, setShowSuccess] = useState(false);
-  const [showCancelled, setShowCancelled] = useState(false);
+  const t = translations[language];
 
-  // ENTRY POINT HANDLER: Check URL params and localStorage on mount
+  // Check if user has an account in localStorage
   useEffect(() => {
-    // Check for success or cancelled params
-    const topupSuccess = searchParams.get('topup_success');
-    const cancelled = searchParams.get('cancelled');
+    const accountName = localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName');
+    setHasAccount(!!accountName);
+  }, []);
 
-    if (topupSuccess === 'true') {
-      // Check if we should return to indiesmenu
-      const returnToIndies = sessionStorage.getItem('innopay_return_to_indiesmenu');
-      const indiesTableNum = sessionStorage.getItem('innopay_indies_table');
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
 
-      if (returnToIndies === 'true' && indiesTableNum) {
-        console.log('[TOPUP PAGE] Returning to indiesmenu table:', indiesTableNum);
-        // Clear session storage
-        sessionStorage.removeItem('innopay_return_to_indiesmenu');
-        sessionStorage.removeItem('innopay_indies_table');
-
-        // Determine indiesmenu URL
-        let indiesUrl: string;
-        if (window.location.hostname === 'localhost') {
-          indiesUrl = 'http://localhost:3001';
-        } else if (window.location.hostname === 'wallet.innopay.lu' || window.location.hostname.includes('vercel.app')) {
-          indiesUrl = 'https://indies.innopay.lu';
-        } else {
-          indiesUrl = `http://${window.location.hostname}:3001`;
-        }
-
-        // Redirect back to indiesmenu with topup_success flag
-        window.location.href = `${indiesUrl}/menu?table=${indiesTableNum}&topup_success=true`;
-        return;
-      }
-
-      // Otherwise, show success banner on innopay
-      setShowSuccess(true);
-      // Clear params from URL
-      window.history.replaceState({}, '', window.location.pathname);
-      // Hide success message after 5 seconds
-      setTimeout(() => setShowSuccess(false), 5000);
-    }
-
-    if (cancelled === 'true') {
-      setShowCancelled(true);
-      // Clear params from URL
-      window.history.replaceState({}, '', window.location.pathname);
-      // Hide cancelled message after 5 seconds
-      setTimeout(() => setShowCancelled(false), 5000);
-    }
-
-    // Entry Point 2: Check for ?account= and ?topup= parameters (from indiesmenu)
-    const accountParam = searchParams.get('account');
-    const topupParam = searchParams.get('topup');
-    const tableParam = searchParams.get('table');
-    const orderAmountParam = searchParams.get('order_amount');
-    const orderMemoParam = searchParams.get('order_memo');
-
-    if (accountParam) {
-      console.log('[TOPUP PAGE] Entry Point 2: Called from indiesmenu with account:', accountParam);
-      console.log('[TOPUP PAGE] Topup deficit:', topupParam);
-      console.log('[TOPUP PAGE] Table:', tableParam);
-      console.log('[TOPUP PAGE] Order amount:', orderAmountParam);
-      console.log('[TOPUP PAGE] Order memo length:', orderMemoParam?.length);
-
-      // Register this user in localStorage
-      registerAccountInLocalStorage(accountParam);
-
-      // Proceed directly to top-up flow for this user
-      setSelectedAccount(accountParam);
-
-      // Set topup amount to max(minimum 15€, requested topup amount)
-      if (topupParam) {
-        const requestedAmount = parseFloat(topupParam);
-        if (!isNaN(requestedAmount) && requestedAmount > 0) {
-          const suggestedAmount = Math.max(15, requestedAmount);
-          setTopupAmount(suggestedAmount);
-          console.log('[TOPUP PAGE] Setting topup amount to:', suggestedAmount);
-        }
-      }
-
-      // Store order info in sessionStorage for checkout
-      if (orderAmountParam && orderMemoParam) {
-        sessionStorage.setItem('innopay_pending_order_amount', orderAmountParam);
-        sessionStorage.setItem('innopay_pending_order_memo', orderMemoParam);
-        console.log('[TOPUP PAGE] Stored pending order info');
-      }
-
-      // Mark that we should return to indiesmenu after topup
-      if (tableParam) {
-        setReturnToIndiesmenu(true);
-        setIndiesTable(tableParam);
-      }
-
-      // Clear params from URL (keep it clean)
-      window.history.replaceState({}, '', window.location.pathname);
-
-      return; // Skip the dialog, go straight to top-up
-    }
-
-    // Entry Point 1: Check localStorage for existing accounts
-    const accounts = getAccountsFromLocalStorage();
-    setStoredAccounts(accounts);
-
-    if (accounts.length > 0) {
-      console.log('[TOPUP PAGE] Entry Point 1: Found', accounts.length, 'account(s) in localStorage');
-
-      if (accounts.length === 1) {
-        // Single account: Show dialog to confirm or create new
-        setShowAccountDialog(true);
-      } else {
-        // Multiple accounts: Show selection dialog
-        setShowAccountDialog(true);
-      }
-    } else {
-      console.log('[TOPUP PAGE] Entry Point 1: No accounts found, showing create account option');
-    }
-  }, [searchParams]);
-
-  // Helper: Get accounts from localStorage
-  const getAccountsFromLocalStorage = (): StoredAccount[] => {
-    try {
-      const stored = localStorage.getItem('innopay_accounts');
-      if (stored) {
-        return JSON.parse(stored);
-      }
-
-      // Legacy support: Check for old single-account storage
-      const legacyAccount = localStorage.getItem('innopay_accountName');
-      if (legacyAccount) {
-        const accounts = [{ accountName: legacyAccount, addedAt: new Date().toISOString() }];
-        localStorage.setItem('innopay_accounts', JSON.stringify(accounts));
-        return accounts;
-      }
-    } catch (e) {
-      console.error('Error reading from localStorage:', e);
-    }
-    return [];
-  };
-
-  // Helper: Register account in localStorage
-  const registerAccountInLocalStorage = (accountName: string) => {
-    try {
-      const accounts = getAccountsFromLocalStorage();
-
-      // Check if account already exists
-      if (accounts.some(acc => acc.accountName === accountName)) {
-        console.log('[TOPUP PAGE] Account already registered:', accountName);
-        return;
-      }
-
-      // Add new account
-      const newAccount: StoredAccount = {
-        accountName,
-        addedAt: new Date().toISOString()
-      };
-
-      const updatedAccounts = [...accounts, newAccount];
-      localStorage.setItem('innopay_accounts', JSON.stringify(updatedAccounts));
-      setStoredAccounts(updatedAccounts);
-
-      console.log('[TOPUP PAGE] Account registered:', accountName);
-    } catch (e) {
-      console.error('Error writing to localStorage:', e);
-    }
-  };
-
-  // Handler: Select account from dialog
-  const handleSelectAccount = (accountName: string) => {
-    setSelectedAccount(accountName);
-    setShowAccountDialog(false);
-  };
-
-  // Handler: Create new account (redirect to /user)
-  const handleCreateNewAccount = () => {
-    window.location.href = '/user';
-  };
-
-  // Handler: Top-up button
-  const handleTopUp = async () => {
-    if (!selectedAccount) {
-      setError('No account selected');
+    if (amount < 15 || amount > 999) {
+      setError(t.minAmount + ' / ' + t.maxAmount);
       return;
     }
 
-    setError('');
     setLoading(true);
+    setError('');
 
     try {
-      console.log('[TOPUP PAGE] Starting top-up checkout for:', selectedAccount);
-      console.log('[TOPUP PAGE] Amount:', topupAmount);
+      const accountName = localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName');
+      const flow = hasAccount ? 'topup' : 'account_creation';
 
-      // Enforce minimum (15 EUR)
-      const finalAmount = Math.max(topupAmount, 15);
-
-      // Store return info in sessionStorage (survives Stripe redirect)
-      if (returnToIndiesmenu && indiesTable) {
-        sessionStorage.setItem('innopay_return_to_indiesmenu', 'true');
-        sessionStorage.setItem('innopay_indies_table', indiesTable);
-      }
-
-      // Retrieve pending order info (if exists)
-      const orderAmount = sessionStorage.getItem('innopay_pending_order_amount');
-      const orderMemo = sessionStorage.getItem('innopay_pending_order_memo');
-
-      // Fetch user email for Stripe pre-fill
+      // Fetch email for existing accounts to pre-fill Stripe form
       let userEmail: string | undefined;
-      try {
-        const emailResponse = await fetch(`/api/account/email?accountName=${selectedAccount}`);
-        if (emailResponse.ok) {
-          const emailData = await emailResponse.json();
-          userEmail = emailData.email;
-          console.log('[TOPUP PAGE] Retrieved user email for Stripe pre-fill');
+      if (hasAccount && accountName) {
+        try {
+          const emailResponse = await fetch(`/api/account/email?accountName=${accountName}`);
+          if (emailResponse.ok) {
+            const emailData = await emailResponse.json();
+            if (emailData.found && emailData.email) {
+              userEmail = emailData.email;
+              console.log('[LANDING] Found email for pre-fill:', userEmail);
+            }
+          }
+        } catch (emailError) {
+          console.warn('[LANDING] Failed to fetch email for pre-fill:', emailError);
+          // Continue without email pre-fill
         }
-      } catch (e) {
-        console.log('[TOPUP PAGE] Could not retrieve user email:', e);
       }
 
-      // Build checkout request
-      const checkoutBody: any = {
-        flow: 'topup',
-        accountName: selectedAccount,
-        amount: finalAmount,
-      };
-
-      // Add email if found
-      if (userEmail) {
-        checkoutBody.email = userEmail;
-      }
-
-      // Add order info if pending order exists
-      if (orderAmount && orderMemo) {
-        checkoutBody.orderAmountEuro = orderAmount;
-        checkoutBody.orderMemo = orderMemo;
-        console.log('[TOPUP PAGE] Including pending order in topup:', { orderAmount, memoLength: orderMemo.length });
-      }
-
-      // Create checkout session with flow='topup'
       const response = await fetch('/api/checkout/account', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(checkoutBody),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount,
+          flow,
+          accountName: hasAccount ? accountName : undefined,
+          email: userEmail
+        })
       });
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to create checkout session');
+        throw new Error(errorData.error || 'Checkout failed');
       }
 
       const data = await response.json();
-      console.log('[TOPUP PAGE] Checkout session created:', data.sessionId);
 
-      // Redirect to Stripe checkout
-      window.location.href = data.url;
-
+      // Redirect to Stripe
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        throw new Error('No checkout URL received');
+      }
     } catch (err: any) {
-      console.error('[TOPUP PAGE] Error:', err);
-      setError(err.message || 'An unexpected error occurred');
+      setError(err.message || 'An error occurred');
       setLoading(false);
     }
   };
 
-  // Render: Account selection dialog
-  const renderAccountDialog = () => {
-    if (!showAccountDialog) return null;
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 px-4">
+      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
+        {/* Logo */}
+        <div className="flex justify-center mb-6">
+          <Image
+            src={innopayLogoUrl}
+            alt="Innopay Logo"
+            width={200}
+            height={60}
+            priority
+          />
+        </div>
 
-    return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
-          <h2 className="text-2xl font-bold text-blue-900 mb-4">
-            {storedAccounts.length === 1 ? 'Welcome back!' : 'Select Account'}
-          </h2>
+        {/* Title */}
+        <h1 className="text-2xl font-bold text-center text-gray-800 mb-8">
+          {t.title}
+        </h1>
 
-          {storedAccounts.length === 1 ? (
-            <p className="text-gray-700 mb-6">
-              Top up your account <span className="font-bold text-blue-700">{storedAccounts[0].accountName}</span>?
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* Amount Input */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              {t.amountLabel}
+            </label>
+            <input
+              type="number"
+              min="15"
+              max="999"
+              step="1"
+              value={amount}
+              onChange={(e) => setAmount(Number(e.target.value))}
+              className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-4xl font-bold text-center"
+              disabled={loading}
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              {t.minAmount} / {t.maxAmount}
             </p>
-          ) : (
-            <p className="text-gray-700 mb-4">
-              Which account would you like to top up?
-            </p>
+          </div>
+
+          {/* Error Message */}
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+              {error}
+            </div>
           )}
 
-          <div className="space-y-3 mb-4">
-            {storedAccounts.map((account) => (
-              <button
-                key={account.accountName}
-                onClick={() => handleSelectAccount(account.accountName)}
-                className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-lg transition duration-200"
-              >
-                {account.accountName}
-              </button>
-            ))}
-          </div>
-
+          {/* Submit Button */}
           <button
-            onClick={handleCreateNewAccount}
-            className="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-3 px-4 rounded-lg transition duration-200"
+            type="submit"
+            disabled={loading}
+            className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-4 rounded-lg font-semibold text-lg hover:from-blue-700 hover:to-indigo-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
           >
-            Create New Account
+            {loading ? (
+              <span className="flex items-center justify-center">
+                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Processing...
+              </span>
+            ) : (
+              hasAccount ? t.topUpWallet : t.createAndTopUp
+            )}
           </button>
+        </form>
+
+        {/* Language Buttons */}
+        <div className="mt-8 flex justify-center gap-2">
+          {(['fr', 'en', 'de', 'lb'] as Language[]).map((lang) => (
+            <button
+              key={lang}
+              onClick={() => setLanguage(lang)}
+              className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
+                language === lang
+                  ? 'bg-blue-600 text-white shadow-md'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {lang.toUpperCase()}
+            </button>
+          ))}
         </div>
       </div>
-    );
-  };
-
-  // Render: Top-up form
-  const renderTopUpForm = () => {
-    if (!selectedAccount) return null;
-
-    return (
-      <div className="flex flex-col items-center space-y-6 p-6 sm:p-8 bg-white rounded-xl shadow-lg w-full max-w-md">
-        {/* Header with logo */}
-        <div className="flex flex-col items-center mb-4 p-4 bg-gradient-to-r from-blue-50 to-blue-100 border-2 border-blue-500 rounded-lg shadow-lg w-full text-center">
-          <div className="relative w-[80%] h-auto aspect-video">
-            <Image
-              src={innopayLogoUrl}
-              alt="Innopay Logo"
-              fill
-              className="object-contain"
-              priority={true}
-            />
-          </div>
-          <h1 className="text-3xl sm:text-4xl font-bold text-blue-900 mt-4">
-            Top-up Your Wallet
-          </h1>
-        </div>
-
-        {/* Account info */}
-        <div className="w-full p-4 bg-blue-50 border-2 border-blue-300 rounded-lg">
-          <p className="text-sm text-gray-600 mb-1">Account</p>
-          <p className="text-xl font-bold text-blue-900">{selectedAccount}</p>
-        </div>
-
-        {/* Amount input */}
-        <div className="w-full">
-          <label htmlFor="topupAmount" className="block text-sm font-semibold text-gray-700 mb-2">
-            Top-up Amount (EUR)
-          </label>
-          <input
-            id="topupAmount"
-            type="number"
-            min={15}
-            step="0.01"
-            value={topupAmount}
-            onChange={(e) => {
-              const value = e.target.value === '' ? 15 : parseFloat(e.target.value);
-              if (!isNaN(value)) {
-                setTopupAmount(value);
-              }
-            }}
-            onBlur={(e) => {
-              // Validate when user leaves the field
-              const value = parseFloat(e.target.value);
-              if (isNaN(value) || value < 15) {
-                setTopupAmount(15);
-              }
-            }}
-            className="w-full p-4 border-2 border-blue-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg font-semibold"
-          />
-          <p className="mt-2 text-sm text-gray-600">
-            Minimum: 15 EUR
-          </p>
-        </div>
-
-        {/* Top-up button */}
-        <button
-          onClick={handleTopUp}
-          disabled={loading}
-          className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {loading ? 'Processing...' : `Top-up ${topupAmount} EUR`}
-        </button>
-
-        {/* Change account button */}
-        <button
-          onClick={() => {
-            setSelectedAccount(null);
-            setShowAccountDialog(true);
-          }}
-          className="text-sm text-blue-600 hover:text-blue-800 underline"
-        >
-          Change Account
-        </button>
-
-        {error && (
-          <div className="w-full p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg">
-            <p className="font-bold">Error:</p>
-            <p>{error}</p>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Render: No account (create new)
-  const renderNoAccount = () => {
-    return (
-      <div className="flex flex-col items-center space-y-6 p-6 sm:p-8 bg-white rounded-xl shadow-lg w-full max-w-md">
-        {/* Header with logo */}
-        <div className="flex flex-col items-center mb-4 p-4 bg-gradient-to-r from-blue-50 to-blue-100 border-2 border-blue-500 rounded-lg shadow-lg w-full text-center">
-          <div className="relative w-[80%] h-auto aspect-video">
-            <Image
-              src={innopayLogoUrl}
-              alt="Innopay Logo"
-              fill
-              className="object-contain"
-              priority={true}
-            />
-          </div>
-          <h1 className="text-3xl sm:text-4xl font-bold text-blue-900 mt-4">
-            Welcome to Innopay
-          </h1>
-        </div>
-
-        <p className="text-lg text-gray-700 text-center">
-          You don't have an Innopay account yet.
-        </p>
-
-        <button
-          onClick={handleCreateNewAccount}
-          className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300"
-        >
-          Create Account
-        </button>
-      </div>
-    );
-  };
-
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
-      {/* Success banner */}
-      {showSuccess && (
-        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50">
-          ✓ Top-up successful! Your wallet has been credited.
-        </div>
-      )}
-
-      {/* Cancelled banner */}
-      {showCancelled && (
-        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-yellow-500 text-white px-6 py-3 rounded-lg shadow-lg z-50">
-          Payment cancelled. No charges were made.
-        </div>
-      )}
-
-      {/* Account selection dialog */}
-      {renderAccountDialog()}
-
-      {/* Main content */}
-      {selectedAccount ? renderTopUpForm() : storedAccounts.length === 0 ? renderNoAccount() : null}
     </div>
   );
 }
 
 // Main page component with Suspense boundary
-export default function TopUpPage() {
+export default function LandingPage() {
   return (
     <Suspense fallback={
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
