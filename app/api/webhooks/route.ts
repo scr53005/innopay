@@ -310,7 +310,8 @@ async function handleTopup(session: Stripe.Checkout.Session) {
     console.log(`[TOPUP] Processing restaurant order: ${orderCost} EUR to indies.cafe`);
 
     // Get EUR/USD rate for HBD conversion
-    const eurUsdRate = await getEurUsdRateServerSide();
+    const rateData = await getEurUsdRateServerSide();
+    const eurUsdRate = rateData.conversion_rate;
     const requiredHbd = orderCost * eurUsdRate;
 
     // Check innopay HBD balance
@@ -348,7 +349,7 @@ async function handleTopup(session: Stripe.Checkout.Session) {
             creditor: getRecipientForEnvironment('indies.cafe'),
             amount_hbd: requiredHbd,
             euro_tx_id: userTxId || 'TOPUP_NO_USER_TX',
-            eur_usd_rate: eurUsdRate.conversion_rate,
+            eur_usd_rate: eurUsdRate,
             reason: 'topup_order',
             notes: `HBD transfer failed at ${new Date().toISOString()} - ${hbdError.message}`
           }
@@ -370,7 +371,7 @@ async function handleTopup(session: Stripe.Checkout.Session) {
           creditor: getRecipientForEnvironment('indies.cafe'),
           amount_hbd: requiredHbd,
           euro_tx_id: userTxId || 'TOPUP_NO_USER_TX',
-          eur_usd_rate: eurUsdRate.conversion_rate,
+          eur_usd_rate: eurUsdRate,
           reason: 'topup_order',
           notes: `Insufficient HBD balance at ${new Date().toISOString()}`
         }
