@@ -328,8 +328,8 @@ function TopUpContent() {
         <Draggable
           className="z-[9998] bg-gradient-to-r from-blue-600 to-blue-700 text-white px-4 py-3 rounded-lg shadow-lg"
           initialPosition={{
-            x: typeof window !== 'undefined' ? window.innerWidth - 316 : 0, // 300px max-width + 16px margin
-            y: typeof window !== 'undefined' ? window.innerHeight - 170 : 0  // Approximate height + 30px lift
+            x: typeof window !== 'undefined' ? (window.innerWidth / 2) - 150 : 0, // Centered (300px max-width / 2)
+            y: 20  // 20px from top
           }}
           style={{
             minWidth: '200px',

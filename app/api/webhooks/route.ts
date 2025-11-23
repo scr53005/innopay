@@ -298,20 +298,95 @@ async function handleTopup(session: Stripe.Checkout.Session) {
   const userCredit = orderCost > 0 ? amountEuro - orderCost : amountEuro;
 
   let userTxId: string | undefined;
+  let userHbdTxId: string | undefined;
   let restaurantTxId: string | undefined;
 
   // Transfer user's portion (if any)
   if (userCredit > 0) {
-    console.log(`[TOPUP] Transferring ${userCredit} EURO tokens to ${accountName} (user credit)`);
+    console.warn(`[TOPUP] Transferring ${userCredit} EURO tokens to ${accountName} (user credit)`);
     userTxId = await transferEuroTokens(accountName, userCredit, `Top-up credit: ${userCredit} EUR`);
-    console.log(`[TOPUP] User credit transferred: ${userTxId}`);
+    console.warn(`[TOPUP] ✅ User EURO credit transferred: ${userTxId}`);
+
+    // CRITICAL: Also transfer HBD to user for simple top-ups
+    const rateData = await getEurUsdRateServerSide();
+    const eurUsdRate = rateData.conversion_rate;
+    const requiredHbd = userCredit * eurUsdRate;
+
+    // Check innopay HBD balance
+    const Client = (await import('@hiveio/dhive')).Client;
+    const client = new Client([
+      'https://api.hive.blog',
+      'https://api.deathwing.me',
+      'https://hive-api.arcange.eu'
+    ]);
+
+    const accounts = await client.database.getAccounts(['innopay']);
+    if (!accounts || accounts.length === 0) {
+      console.error('[TOPUP] ❌ CRITICAL: Innopay account not found');
+      throw new Error('Innopay account not found');
+    }
+
+    const hbdBalanceStr = typeof accounts[0].hbd_balance === 'string'
+      ? accounts[0].hbd_balance
+      : accounts[0].hbd_balance.toString();
+    const hbdBalance = parseFloat(hbdBalanceStr.split(' ')[0]);
+
+    console.warn(`[TOPUP] Innopay HBD balance: ${hbdBalance}, Required for user: ${requiredHbd}`);
+
+    if (hbdBalance >= requiredHbd) {
+      // Transfer HBD to user
+      console.warn(`[TOPUP] Sufficient HBD, transferring ${requiredHbd} HBD to ${accountName}`);
+      try {
+        userHbdTxId = await transferHbd(accountName, requiredHbd, `Top-up: ${userCredit} EUR`);
+        console.warn(`[TOPUP] ✅ HBD transfer to user successful: ${userHbdTxId}`);
+      } catch (hbdError: any) {
+        console.error(`[TOPUP] ❌ HBD transfer to user FAILED:`, hbdError.message);
+
+        // Try to record debt - innopay owes HBD to user (non-blocking)
+        try {
+          await prisma.outstanding_debt.create({
+            data: {
+              creditor: accountName,
+              amount_hbd: requiredHbd,
+              euro_tx_id: userTxId || 'TOPUP_USER_CREDIT',
+              eur_usd_rate: eurUsdRate,
+              reason: 'topup_user_credit',
+              notes: `HBD transfer to user failed at ${new Date().toISOString()} - ${hbdError.message}`
+            }
+          });
+          console.warn(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to user ${accountName}`);
+        } catch (debtError) {
+          console.error('[TOPUP] ❌ WARNING: Failed to record debt to user:', debtError);
+        }
+      }
+    } else {
+      // Insufficient HBD - user only gets EURO, record debt
+      console.error(`[TOPUP] ⚠️ Insufficient HBD for user credit (balance: ${hbdBalance}, needed: ${requiredHbd})`);
+
+      // Try to record debt - innopay should pay HBD to user (non-blocking)
+      try {
+        await prisma.outstanding_debt.create({
+          data: {
+            creditor: accountName,
+            amount_hbd: requiredHbd,
+            euro_tx_id: userTxId || 'TOPUP_USER_CREDIT',
+            eur_usd_rate: eurUsdRate,
+            reason: 'topup_user_credit',
+            notes: `Insufficient HBD balance at ${new Date().toISOString()}`
+          }
+        });
+        console.warn(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to user ${accountName}`);
+      } catch (debtError) {
+        console.error('[TOPUP] ❌ WARNING: Failed to record debt to user:', debtError);
+      }
+    }
   } else {
-    console.log(`[TOPUP] No user credit (full amount goes to restaurant)`);
+    console.warn(`[TOPUP] No user credit (full amount goes to restaurant)`);
   }
 
   // Transfer restaurant order (if pending order exists)
   if (orderCost > 0 && orderMemo) {
-    console.log(`[TOPUP] Processing restaurant order: ${orderCost} EUR to indies.cafe`);
+    console.warn(`[TOPUP] Processing restaurant order: ${orderCost} EUR to indies.cafe`);
 
     // Get EUR/USD rate for HBD conversion
     const rateData = await getEurUsdRateServerSide();
@@ -328,6 +403,7 @@ async function handleTopup(session: Stripe.Checkout.Session) {
 
     const accounts = await client.database.getAccounts(['innopay']);
     if (!accounts || accounts.length === 0) {
+      console.error('[TOPUP] ❌ CRITICAL: Innopay account not found for restaurant order');
       throw new Error('Innopay account not found');
     }
 
@@ -336,16 +412,16 @@ async function handleTopup(session: Stripe.Checkout.Session) {
       : accounts[0].hbd_balance.toString();
     const hbdBalance = parseFloat(hbdBalanceStr.split(' ')[0]);
 
-    console.log(`[TOPUP] Innopay HBD balance: ${hbdBalance}, Required: ${requiredHbd}`);
+    console.warn(`[TOPUP] Innopay HBD balance: ${hbdBalance}, Required for restaurant: ${requiredHbd}`);
 
     if (hbdBalance >= requiredHbd) {
       // Transfer HBD from innopay to restaurant
-      console.log(`[TOPUP] Sufficient HBD, transferring ${requiredHbd} HBD to indies.cafe`);
+      console.warn(`[TOPUP] Sufficient HBD, transferring ${requiredHbd} HBD to indies.cafe`);
       try {
         restaurantTxId = await transferHbd('indies.cafe', requiredHbd, orderMemo);
-        console.log(`[TOPUP] HBD transfer successful: ${restaurantTxId}`);
+        console.warn(`[TOPUP] ✅ HBD transfer to restaurant successful: ${restaurantTxId}`);
       } catch (hbdError: any) {
-        console.warn(`[TOPUP] ⚠️ HBD transfer failed despite sufficient balance:`, hbdError.message);
+        console.error(`[TOPUP] ❌ HBD transfer to restaurant failed despite sufficient balance:`, hbdError.message);
 
         // Try to record debt - innopay owes HBD to restaurant (non-blocking)
         try {
@@ -359,18 +435,18 @@ async function handleTopup(session: Stripe.Checkout.Session) {
               notes: `HBD transfer failed at ${new Date().toISOString()} - ${hbdError.message}`
             }
           });
-          console.log(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to restaurant`);
+          console.warn(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to restaurant`);
         } catch (debtError) {
-          console.error('[TOPUP] WARNING: Failed to record debt:', debtError);
+          console.error('[TOPUP] ❌ WARNING: Failed to record debt:', debtError);
         }
 
         // Fall back to EURO
         restaurantTxId = await transferEuroTokens('indies.cafe', orderCost, orderMemo);
-        console.log(`[TOPUP] EURO fallback transfer successful: ${restaurantTxId}`);
+        console.warn(`[TOPUP] ✅ EURO fallback transfer to restaurant successful: ${restaurantTxId}`);
       }
     } else {
       // Insufficient HBD - transfer EURO tokens and record debt
-      console.log(`[TOPUP] Insufficient HBD, transferring ${orderCost} EURO to indies.cafe`);
+      console.error(`[TOPUP] ⚠️ Insufficient HBD, transferring ${orderCost} EURO to indies.cafe`);
 
       // Try to record debt - innopay should have paid HBD but paid EURO instead (non-blocking)
       try {
@@ -384,30 +460,75 @@ async function handleTopup(session: Stripe.Checkout.Session) {
             notes: `Insufficient HBD balance at ${new Date().toISOString()}`
           }
         });
-        console.log(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to restaurant`);
+        console.warn(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to restaurant`);
       } catch (debtError) {
-        console.error('[TOPUP] WARNING: Failed to record debt:', debtError);
+        console.error('[TOPUP] ❌ WARNING: Failed to record debt:', debtError);
       }
 
       restaurantTxId = await transferEuroTokens('indies.cafe', orderCost, orderMemo);
-      console.log(`[TOPUP] EURO transfer successful: ${restaurantTxId}`);
+      console.warn(`[TOPUP] ✅ EURO transfer to restaurant successful: ${restaurantTxId}`);
     }
   }
 
   // If email provided, update database with topup record
   if (customerEmail) {
+    console.warn(`[TOPUP] Attempting to update database with email: ${customerEmail}`);
     try {
-      const existingUser = await findInnoUserByEmail(customerEmail);
-      if (existingUser) {
-        await createTopupForExistingUser(existingUser.id, amountEuro);
-        console.log(`[TOPUP] Topup record created for user ID: ${existingUser.id}`);
+      // First, check if walletuser exists and log userId status
+      const walletUser = await prisma.walletuser.findFirst({
+        where: { accountName }
+      });
+
+      if (walletUser) {
+        console.warn(`[TOPUP] Found walletuser for ${accountName}, userId: ${walletUser.userId || 'NULL'}`);
+
+        if (!walletUser.userId) {
+          console.error(`[TOPUP] ⚠️ CRITICAL: walletuser.userId is NULL for accountName '${accountName}'!`);
+          console.error(`[TOPUP] This means the account was never properly linked to an innouser record.`);
+
+          // Try to find innouser by email and create link
+          const existingUser = await findInnoUserByEmail(customerEmail);
+          if (existingUser) {
+            console.warn(`[TOPUP] Found innouser with email ${customerEmail}, userId: ${existingUser.id}`);
+
+            // Update walletuser with userId
+            await prisma.walletuser.update({
+              where: { id: walletUser.id },
+              data: { userId: existingUser.id }
+            });
+            console.warn(`[TOPUP] ✅ Updated walletuser.userId to ${existingUser.id}`);
+
+            // Now create topup record
+            await createTopupForExistingUser(existingUser.id, amountEuro);
+            console.warn(`[TOPUP] ✅ Topup record created for user ID: ${existingUser.id}`);
+          } else {
+            console.error(`[TOPUP] ❌ Email ${customerEmail} not found in innouser table. Cannot link walletuser.`);
+            console.error(`[TOPUP] Top-up completed but not tracked in database.`);
+          }
+        } else {
+          // userId exists, proceed normally
+          const existingUser = await findInnoUserByEmail(customerEmail);
+          if (existingUser) {
+            if (existingUser.id !== walletUser.userId) {
+              console.warn(`[TOPUP] ⚠️ Email mismatch: walletuser.userId=${walletUser.userId}, but email maps to userId=${existingUser.id}`);
+              console.warn(`[TOPUP] Updating email in innouser to ${customerEmail}`);
+            }
+            await createTopupForExistingUser(existingUser.id, amountEuro);
+            console.warn(`[TOPUP] ✅ Topup record created for user ID: ${existingUser.id}`);
+          } else {
+            console.error(`[TOPUP] ❌ Email ${customerEmail} not found in database. Top-up completed but not tracked.`);
+          }
+        }
       } else {
-        console.warn(`[TOPUP] Email ${customerEmail} not found in database. Top-up completed but not tracked.`);
+        console.error(`[TOPUP] ❌ CRITICAL: No walletuser found for accountName '${accountName}'!`);
+        console.error(`[TOPUP] This should never happen for a top-up flow. Account may not exist.`);
       }
     } catch (dbError) {
-      console.error('[TOPUP] WARNING: Database update failed, but transfers succeeded:', dbError);
+      console.error('[TOPUP] ❌ Database update failed, but transfers succeeded:', dbError);
       // Don't throw - the payment went through, just log the DB issue
     }
+  } else {
+    console.warn(`[TOPUP] No customer email provided, skipping database update`);
   }
 
   return NextResponse.json({
@@ -416,6 +537,7 @@ async function handleTopup(session: Stripe.Checkout.Session) {
     amountEuro,
     userCredit,
     userTxId,
+    userHbdTxId,
     restaurantTxId,
     orderProcessed: !!restaurantTxId
   }, { status: 200 });
