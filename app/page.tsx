@@ -366,6 +366,38 @@ function TopUpContent() {
           </div>
         </Draggable>
       )}
+
+      {/* DEV ONLY: Clear localStorage button */}
+      {(typeof window !== 'undefined') && (window.location.hostname === 'localhost' ||
+        window.location.hostname.includes('127.0.0.1') ||
+        window.location.hostname.startsWith('192.168.')) && (
+        <div className="fixed top-2 right-2 z-[10001]">
+          <button
+            onClick={() => {
+              if (confirm('Clear all localStorage (dev only)?')) {
+                // Clear all innopay-related items
+                localStorage.removeItem('innopay_accountName');
+                localStorage.removeItem('innopay_masterPassword');
+                localStorage.removeItem('innopay_activePrivate');
+                localStorage.removeItem('innopay_postingPrivate');
+                localStorage.removeItem('innopay_memoPrivate');
+                localStorage.removeItem('innopay_credentialToken');
+                localStorage.removeItem('innopay_accounts');
+                localStorage.removeItem('innopay_wallet_credentials');
+                localStorage.removeItem('innopay_import_attempts');
+
+                console.log('[DEV] localStorage cleared');
+                alert('localStorage cleared! Reloading...');
+                window.location.reload();
+              }
+            }}
+            className="bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-1 rounded shadow-lg font-mono"
+            title="Development only: Clear localStorage"
+          >
+            🧹 Clear LS
+          </button>
+        </div>
+      )}
     </div>
   );
 }

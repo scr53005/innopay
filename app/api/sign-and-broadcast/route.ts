@@ -35,17 +35,25 @@ export async function POST(req: NextRequest) {
 
     // Validate required fields
     if (!operation) {
-      return NextResponse.json(
+      const errorResponse = NextResponse.json(
         { error: 'Missing required field: operation' },
         { status: 400 }
       );
+      errorResponse.headers.set('Access-Control-Allow-Origin', '*');
+      errorResponse.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+      errorResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type');
+      return errorResponse;
     }
 
     if (!activePrivateKey && (!masterPassword || !accountName)) {
-      return NextResponse.json(
+      const errorResponse = NextResponse.json(
         { error: 'Must provide either activePrivateKey OR (masterPassword + accountName)' },
         { status: 400 }
       );
+      errorResponse.headers.set('Access-Control-Allow-Origin', '*');
+      errorResponse.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+      errorResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type');
+      return errorResponse;
     }
 
     // Get or derive the private key
@@ -99,13 +107,20 @@ export async function POST(req: NextRequest) {
 
   } catch (error: any) {
     console.error('[SIGN-API] Error:', error);
-    return NextResponse.json(
+    const errorResponse = NextResponse.json(
       {
         error: 'Signing/broadcasting failed',
         message: process.env.NODE_ENV === 'development' ? error.message : undefined
       },
       { status: 500 }
     );
+
+    // Add CORS headers to error response
+    errorResponse.headers.set('Access-Control-Allow-Origin', '*');
+    errorResponse.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    errorResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type');
+
+    return errorResponse;
   }
 }
 

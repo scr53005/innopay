@@ -1,8 +1,85 @@
 # INNOPAY REFACTORING - PROJECT STATUS
 
-**Last Updated**: 2025-11-22
-**Session ID**: Production Testing & Timestamp Fixes Complete
-**Status**: ✅ Account Creation Working | Mobile Payments Operational | Top-up Flow Integrated | Outstanding Debt Tracking | Timestamp Issues Resolved
+**Last Updated**: 2025-11-23
+**Session ID**: Cross-Platform Testing Complete (15/40) | Customer HBD Transfer Implemented | PWA Cache Fixes
+**Status**: ✅ Guest Checkout Working | Account Creation Working | Wallet Payments Working | **15/40 Tests Passing** ✅
+
+---
+
+## 🚀 LATEST UPDATES (2025-11-23)
+
+### Cross-Platform Testing Progress
+- ✅ **15 of 40 tests passing** across 5 platforms (Desktop, Android Chrome, Android Samsung, iPhone Safari, iPhone Chrome)
+  - ✅ Guest checkout (5/5 platforms)
+  - ✅ Account creation (5/5 platforms)
+  - ✅ Pay from existing account (5/5 platforms)
+- 🔄 **25 tests remaining**: Top-up flows and edge cases
+
+### Critical Bug Fixes
+
+#### Customer → Innopay HBD Transfer Implementation
+- ✅ **Wallet Payment Flow Enhanced** (`/api/wallet-payment/route.ts`)
+  - **STEP 1**: Customer transfers EURO tokens to innopay (was working)
+  - **STEP 2 (NEW)**: Customer transfers HBD to innopay using innopay's active authority
+    - Checks customer's liquid HBD balance
+    - Transfers whatever HBD is available (incremental)
+    - Records `outstanding_debt` for any shortfall
+    - Handles errors: authority revoked, insufficient balance, HBD in savings, network issues
+  - **STEP 3**: Innopay transfers HBD/EURO to restaurant (was working)
+- ✅ **Comprehensive Error Handling**: Ensures STEP 3 always executes even if STEP 1/2 fail
+- ✅ **Enhanced Logging**: All critical logs elevated to `console.warn`/`console.error` for Vercel visibility
+
+#### Top-Up Flow HBD Transfer Fix
+- ✅ **Simple Top-Up HBD Transfer** (`/api/webhooks/route.ts` lines 304-385)
+  - When user tops up from `wallet.innopay.lu` (no order), system now transfers BOTH:
+    - ✅ EURO tokens to user
+    - ✅ HBD to user (NEW - was missing!)
+  - Incremental transfer: sends whatever HBD is available
+  - Records `outstanding_debt` if innopay has insufficient HBD
+- ✅ **NULL userId Handling**: Added comprehensive checks and auto-linking
+  - Detects NULL `walletuser.userId` and logs critical warnings
+  - Attempts to link walletuser to innouser by email
+  - Creates topup record if successful
+
+#### PWA Caching Issues Fixed
+- ✅ **Service Worker Cache Busting** (`public/sw.js`)
+  - Updated cache version: `innopay-v2-20251123`
+  - Added cache clearing logic in activate event
+  - Implemented network-first caching strategy
+  - Ensures users always get fresh content when online
+- ✅ **Manifest Start URL**: Changed from `/user` to `/` for proper landing page default
+- ✅ **Icon Fix**: Removed "maskable" purpose to prevent cropping on Android
+
+#### UX Improvements
+- ✅ **Mini-Wallet Positioning** (`app/page.tsx`)
+  - Initial position: centered, 20px from top (was bottom-right)
+  - Better visibility on mobile devices
+- ✅ **Safari Banner Logic** (`indiesmenu/app/menu/page.tsx`)
+  - Only shows on Safari/iOS when NO account exists in localStorage
+  - Prevents annoying banner for Chrome iOS users with accounts
+- ✅ **Account Creation Timeout** (`app/user/success/page.tsx`)
+  - Added 90-second timeout for webhook polling (was infinite loop)
+  - User-friendly error message with actionable instructions
+  - Suggests using "Import Account" feature if timeout occurs
+
+#### Development Tools
+- ✅ **Clear localStorage Button** - Added to both apps for testing
+  - Only visible in dev environments (localhost, 192.168.x.x)
+  - Fixed top-right position with red "🧹 Clear LS" button
+  - Clears all innopay-related items and reloads
+
+#### CORS & API Fixes
+- ✅ **CORS Headers on All Errors**: Fixed OPTIONS 400 errors
+  - Added CORS headers to all 400/500 error responses
+  - `/api/wallet-payment/route.ts`: All validation errors now include CORS
+  - `/api/sign-and-broadcast/route.ts`: All error paths include CORS
+  - Resolves "Failed to fetch" errors from cross-origin requests
+
+### Technical Debt Addressed
+- ✅ **Stripe CLI Clarification**: Webhook secret is session-specific, not folder-specific
+  - Each `stripe listen` generates new secret
+  - Must update `.env.local` with current session secret
+  - Project folder determines which Stripe account is used
 
 ---
 
