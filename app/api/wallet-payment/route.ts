@@ -117,7 +117,12 @@ export async function POST(req: NextRequest) {
           const privateKey = PrivateKey.fromString(innopayActiveKey);
 
           // Create transfer operation from customer to innopay
-          const transferOp = [
+          const transferOp: ['transfer', {
+            from: string;
+            to: string;
+            amount: string;
+            memo: string;
+          }] = [
             'transfer',
             {
               from: customerAccount,
@@ -128,7 +133,7 @@ export async function POST(req: NextRequest) {
           ];
 
           // Broadcast transaction
-          const result = await client.broadcast.sendOperations([transferOp], privateKey);
+          const result = await client.broadcast.sendOperations([transferOp as any], privateKey);
           customerHbdTxId = result.id;
           customerHbdTransferred = hbdToTransfer;
 

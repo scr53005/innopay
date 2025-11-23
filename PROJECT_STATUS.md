@@ -81,6 +81,15 @@
   - Must update `.env.local` with current session secret
   - Project folder determines which Stripe account is used
 
+### ⚠️ Technical Debt to Address (Next Session)
+- 🔄 **Refactor Customer HBD Transfer** (`/api/wallet-payment/route.ts` lines 117-136)
+  - **Issue**: Currently uses `client.broadcast.sendOperations()` directly
+  - **Problem**: Bypasses existing service layer functions in `services/hive.ts`
+  - **Solution**: Use existing wrapper functions (`transferHbd()` or create `transferHbdFromAccount()`)
+  - **Why**: Maintains consistency across codebase, proper error handling, and follows established patterns
+  - **Note**: All Hive and Hive-Engine transactions should go through `services/hive.ts` layer
+  - **Priority**: Medium (works but needs refactoring for maintainability)
+
 ---
 
 ## 🎯 PROJECT OVERVIEW
