@@ -71,8 +71,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validate minimum amount (30 EUR for account creation, 15 EUR for top-up)
-    const minAmount = flow === 'topup' ? 15 : 30;
+    // Validate minimum amount (TEMP: reduced for testing - was 30 EUR for account creation, 15 EUR for top-up)
+    const minAmount = flow === 'topup' ? 15 : 3;
     if (amount < minAmount) {
       return NextResponse.json(
         { error: `Minimum amount is ${minAmount} EUR for ${flow === 'topup' ? 'top-up' : 'account creation'}` },

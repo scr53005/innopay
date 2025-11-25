@@ -574,9 +574,9 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
     throw new Error('Missing accountName in session metadata');
   }
 
-  // Validate minimum amount
-  if (amountEuro < 30) {
-    throw new Error(`Amount ${amountEuro} EUR is below minimum of 30 EUR`);
+  // Validate minimum amount (TEMP: reduced for testing - was 30 EUR)
+  if (amountEuro < 3) {
+    throw new Error(`Amount ${amountEuro} EUR is below minimum of 3 EUR (TEMP: reduced for testing)`);
   }
 
   // Check if account already exists
@@ -861,7 +861,7 @@ async function handleLegacyFlow(session: Stripe.Checkout.Session) {
         euroTokenTxId: tokenTxId,
       }, { status: 201 });
     } else {
-      throw new Error('Minimum top-up is 30 EUR for new accounts');
+      throw new Error('Minimum top-up is 3 EUR for new accounts (TEMP: reduced for testing)');
     }
   } else {
     // Existing user - top-up only

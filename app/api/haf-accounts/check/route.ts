@@ -36,16 +36,27 @@ function getPool() {
  * Returns: { available: boolean }
  */
 export async function GET(req: NextRequest) {
+  const startTime = Date.now();
+
   try {
     const { searchParams } = new URL(req.url);
     const accountName = searchParams.get('accountName');
 
+    console.warn(`[HAF CHECK] ========================================`);
+    console.warn(`[HAF CHECK] Checking username: "${accountName}"`);
+    console.warn(`[HAF CHECK] Environment: ${process.env.NODE_ENV}`);
+
     // Fast fail if no account name
     if (!accountName) {
+      console.warn(`[HAF CHECK] ❌ No account name provided`);
       return NextResponse.json({ available: false });
     }
 
+    console.warn(`[HAF CHECK] Getting HAF pool connection...`);
     const hafPool = getPool();
+    console.warn(`[HAF CHECK] HAF pool obtained successfully`);
+
+    console.warn(`[HAF CHECK] Executing query: SELECT 1 FROM hafsql.accounts WHERE name = '${accountName}' LIMIT 1`);
 
     // Fast indexed query - hafsql.accounts.name should be indexed
     const result = await hafPool.query(
@@ -53,11 +64,25 @@ export async function GET(req: NextRequest) {
       [accountName]
     );
 
+    const elapsed = Date.now() - startTime;
+    const available = result.rows.length === 0;
+
+    console.warn(`[HAF CHECK] Query completed in ${elapsed}ms`);
+    console.warn(`[HAF CHECK] Rows found: ${result.rows.length}`);
+    console.warn(`[HAF CHECK] Username "${accountName}" is ${available ? '✅ AVAILABLE' : '❌ TAKEN'}`);
+    console.warn(`[HAF CHECK] Returning: { available: ${available} }`);
+    console.warn(`[HAF CHECK] ========================================`);
+
     // Return simple boolean - account is available if NOT found in database
-    return NextResponse.json({ available: result.rows.length === 0 });
+    return NextResponse.json({ available });
 
   } catch (error: any) {
-    console.error('[HAF CHECK] Error:', error);
+    const elapsed = Date.now() - startTime;
+    console.error(`[HAF CHECK] ❌ ERROR after ${elapsed}ms:`, error.message);
+    console.error('[HAF CHECK] Error stack:', error.stack);
+    console.error('[HAF CHECK] Error details:', JSON.stringify(error, null, 2));
+    console.warn(`[HAF CHECK] Returning { available: false } due to error`);
+    console.warn(`[HAF CHECK] ========================================`);
 
     // On error, return unavailable (safer default)
     return NextResponse.json({ available: false });

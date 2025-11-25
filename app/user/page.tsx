@@ -102,8 +102,8 @@ export default function HiveAccountCreationPage() {
   const [loadingCampaign, setLoadingCampaign] = useState(true);
 
   // State for amount selection
-  const [topupAmount, setTopupAmount] = useState(35); // Default 35€
-  const [minimumAmount, setMinimumAmount] = useState(30); // Will be updated based on order
+  const [topupAmount, setTopupAmount] = useState(5); // Default 5€ (TEMP: reduced for testing)
+  const [minimumAmount, setMinimumAmount] = useState(3); // TEMP: reduced from 30€ to 3€ for testing
   const [orderAmount, setOrderAmount] = useState<number | null>(null); // Amount from indiesmenu order
   const [discount, setDiscount] = useState<number | null>(null); // Discount from indiesmenu order
   const [orderMemo, setOrderMemo] = useState<string | null>(null); // Memo from indiesmenu order (table, order details)
@@ -141,8 +141,8 @@ export default function HiveAccountCreationPage() {
       const parsedOrder = parseFloat(orderParam);
       if (!isNaN(parsedOrder) && parsedOrder > 0) {
         setOrderAmount(parsedOrder);
-        // Set minimum to max(30, orderAmount)
-        const calculatedMin = Math.max(30, parsedOrder);
+        // Set minimum to max(3, orderAmount) - TEMP: reduced from 30€ for testing
+        const calculatedMin = Math.max(3, parsedOrder);
         setMinimumAmount(calculatedMin);
         // Set initial topup to the minimum
         setTopupAmount(calculatedMin);
@@ -356,7 +356,7 @@ export default function HiveAccountCreationPage() {
           const data = await response.json();
           const duration = Date.now() - startTime;
 
-          console.log(`[HAF CHECK] Response time: ${duration}ms`, data);
+          console.warn(`[HAF CHECK] Response time: ${duration}ms`, data);
 
           // Only update if username is taken (silent success if available)
           if (!data.available) {
@@ -368,7 +368,7 @@ export default function HiveAccountCreationPage() {
         } catch (error) {
           console.error('[HAF CHECK] Error:', error);
           // Graceful fallback: keep optimistic state, post-hoc verification will catch it
-          console.log('[HAF CHECK] Falling back to post-hoc verification');
+          console.warn('[HAF CHECK] Falling back to post-hoc verification');
         }
       }, 300); // 300ms debounce delay
     } else if (message) {
