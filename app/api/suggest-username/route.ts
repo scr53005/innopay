@@ -46,12 +46,13 @@ export async function GET() {
     console.warn(`[SUGGEST USERNAME] HAF pool obtained successfully`);
 
     // Query all accounts matching our pattern from HAF
-    // Pattern: test000-000-001 or inno000-000-001
-    console.warn(`[SUGGEST USERNAME] Executing HAF query for sequential accounts...`);
+    // Pattern: test000-000-001 (dev) or inno000-000-001 (prod)
+    // IMPORTANT: Only search for current environment's prefix to avoid mixing sequences
+    console.warn(`[SUGGEST USERNAME] Executing HAF query for "${prefix}" accounts only...`);
     const result = await hafPool.query(`
       SELECT name
       FROM hafsql.accounts
-      WHERE name ~ '^(test|inno)\\d{3}-\\d{3}-\\d{3}$'
+      WHERE name ~ '^${prefix}\\d{3}-\\d{3}-\\d{3}$'
       ORDER BY name ASC
     `);
 
@@ -63,7 +64,8 @@ export async function GET() {
 
     // Extract numbers from account names and create set of used numbers
     const usedNumbers = new Set<number>();
-    const pattern = /^(?:test|inno)(\d{3})-(\d{3})-(\d{3})$/;
+    // Create regex pattern for current environment's prefix only
+    const pattern = new RegExp(`^${prefix}(\\d{3})-(\\d{3})-(\\d{3})$`);
 
     for (const row of result.rows) {
       const match = row.name.match(pattern);
