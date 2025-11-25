@@ -159,11 +159,29 @@ function TopUpContent() {
       fetchWalletBalance(accountName);
     }
 
-    // If returning from successful top-up, refetch balance after a delay
+    // If returning from successful top-up, check if we should redirect to indiesmenu
     const topupSuccess = searchParams.get('topup_success');
     if (topupSuccess === 'true' && accountName) {
-      console.log('[LANDING] Returned from successful top-up, will refetch balance');
-      // Refetch after 2 seconds to allow blockchain to update
+      console.log('[LANDING] Returned from successful top-up');
+
+      // Check if this was a top-up initiated from indiesmenu (has table or order params)
+      const table = searchParams.get('table');
+      const orderAmount = searchParams.get('order_amount');
+
+      if (table || orderAmount) {
+        console.log('[LANDING] Top-up was for indiesmenu order, redirecting back to indiesmenu');
+        // Build redirect URL to indiesmenu
+        const indiesMenuUrl = window.location.hostname === 'wallet.innopay.lu'
+          ? 'https://menu.indiesmenu.lu'
+          : 'http://localhost:3001';
+        const redirectUrl = `${indiesMenuUrl}/?${table ? `table=${table}&` : ''}topup_success=true`;
+        console.log('[LANDING] Redirecting to:', redirectUrl);
+        window.location.href = redirectUrl;
+        return;
+      }
+
+      // Regular top-up (not from indiesmenu), refetch balance after a delay
+      console.log('[LANDING] Regular top-up, will refetch balance');
       setTimeout(() => {
         console.log('[LANDING] Refetching balance after top-up');
         fetchWalletBalance(accountName);

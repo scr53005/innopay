@@ -274,6 +274,33 @@ async function handleTopup(session: Stripe.Checkout.Session) {
     hasOrderMemo: !!orderMemo
   });
 
+  // Idempotency check: Check if we've recently processed a top-up with same amount for this account
+  // This prevents duplicate webhook processing
+  const walletUser = await prisma.walletuser.findUnique({
+    where: { accountName }
+  });
+
+  if (walletUser && walletUser.userId) {
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+    const recentTopup = await prisma.topup.findFirst({
+      where: {
+        userId: walletUser.userId,
+        amountEuro: amountEuro,
+        topupAt: { gte: twoMinutesAgo }
+      },
+      orderBy: { topupAt: 'desc' }
+    });
+
+    if (recentTopup) {
+      console.log(`[TOPUP] Recent identical top-up found (${amountEuro} EUR at ${recentTopup.topupAt}), returning success (idempotency)`);
+      return NextResponse.json({
+        message: 'Duplicate top-up detected',
+        accountName,
+        amountEuro
+      }, { status: 200 });
+    }
+  }
+
   // Validate metadata
   if (!accountName) {
     throw new Error('Missing accountName in session metadata');
@@ -569,6 +596,19 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
     console.error(`[${timestamp}] [WEBHOOK ACCOUNT] ⚠️ CRITICAL: Order cost ${orderCost} but NO MEMO! Transfer will fail to match order!`);
   }
 
+  // Idempotency check: Have we already processed this session?
+  const existingCredentialSession = await prisma.accountCredentialSession.findFirst({
+    where: { stripeSessionId: session.id }
+  });
+
+  if (existingCredentialSession) {
+    console.log(`[ACCOUNT] Session ${session.id} already processed (found credential session), returning success (idempotency)`);
+    return NextResponse.json({
+      message: 'Session already processed',
+      accountName: existingCredentialSession.accountName
+    }, { status: 200 });
+  }
+
   // Validate metadata
   if (!accountName) {
     throw new Error('Missing accountName in session metadata');
@@ -579,13 +619,38 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
     throw new Error(`Amount ${amountEuro} EUR is below minimum of 3 EUR (TEMP: reduced for testing)`);
   }
 
-  // Check if account already exists
-  console.log(`[ACCOUNT] Checking if ${accountName} already exists...`);
+  // Check if account already exists on Hive blockchain
+  console.log(`[ACCOUNT] Checking if ${accountName} already exists on Hive...`);
   const exists = await accountExists(accountName);
   if (exists) {
-    console.error(`[ACCOUNT] Account ${accountName} already exists!`);
-    // TODO: In production, trigger Stripe refund here
-    throw new Error(`Account ${accountName} already exists`);
+    console.log(`[ACCOUNT] Account ${accountName} already exists on Hive, checking database linkage...`);
+
+    // Check if the account is properly tracked in our database via bip39seedandaccount
+    const accountLink = await prisma.bip39seedandaccount.findUnique({
+      where: { accountName },
+      include: {
+        innouser: true
+      }
+    });
+
+    if (accountLink && accountLink.innouser) {
+      console.log(`[ACCOUNT] ✅ Account ${accountName} exists and is properly tracked in database`);
+      console.log(`[ACCOUNT] innouser id: ${accountLink.innouser.id}, email: ${accountLink.innouser.email}`);
+      console.log(`[ACCOUNT] bip39seedandaccount id: ${accountLink.id}`);
+      console.log(`[ACCOUNT] This was likely a retry webhook after manual recovery. Returning success.`);
+
+      return NextResponse.json({
+        message: 'Account creation successful (already completed)',
+        accountName,
+        innouserId: accountLink.innouser.id,
+        recovered: true
+      }, { status: 200 });
+    }
+
+    // Account exists on Hive but not properly tracked in database
+    console.error(`[ACCOUNT] ❌ Account ${accountName} exists on Hive but NOT properly tracked in database!`);
+    console.error(`[ACCOUNT] This indicates a partial failure. Manual intervention required.`);
+    throw new Error(`Account ${accountName} exists on Hive but not properly tracked in database`);
   }
 
   // Generate seed and keys

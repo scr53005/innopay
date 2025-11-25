@@ -37,7 +37,7 @@ export async function POST(request: Request) {
     console.log(`Hive account ${accountName} created with transaction ID: ${transactionId}`);
     const savedUser = await createWalletUser(accountName, transactionId);
     if (savedUser && savedUser.id) {
-      console.log(`New user ${savedUser.accountName} created at ${savedUser.creationDate} with ID: ${savedUser.id}`);
+      console.warn(`New user ${savedUser.accountName} created at ${savedUser.creationDate} with ID: ${savedUser.id}`);
     }
 
     // Return the generated data to the client for the user to save
