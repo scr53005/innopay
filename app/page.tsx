@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Draggable from '@/app/components/Draggable';
 
@@ -47,6 +47,7 @@ type Language = 'fr' | 'en' | 'de' | 'lb';
 
 function TopUpContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   const [amount, setAmount] = useState(100);
   const [language, setLanguage] = useState<Language>('fr');
@@ -137,8 +138,20 @@ function TopUpContent() {
   }, []);
 
   // Check if user has an account in localStorage and fetch balance
+  // If no URL params and no account, redirect to account creation
   useEffect(() => {
     const accountName = localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName');
+
+    // Check if there are any URL parameters
+    const hasSearchParams = Array.from(searchParams.keys()).length > 0;
+
+    // If no search params and no account, redirect to account creation
+    if (!hasSearchParams && !accountName) {
+      console.log('[LANDING] No search params and no account found - redirecting to /user');
+      router.push('/user');
+      return;
+    }
+
     setHasAccount(!!accountName);
 
     // Fetch wallet balance if account exists
@@ -156,7 +169,7 @@ function TopUpContent() {
         fetchWalletBalance(accountName);
       }, 2000);
     }
-  }, [searchParams, fetchWalletBalance]);
+  }, [searchParams, fetchWalletBalance, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
