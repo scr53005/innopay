@@ -105,16 +105,58 @@ export async function getEurUsdRateServerSide(today?: Date): Promise<CurrencyRat
       const parsed = await parseStringPromise(xml);
       const cube = parsed['gesmes:Envelope']['Cube'][0]['Cube'][0]['Cube'];
       const usdRate = cube.find((entry: any) => entry['$'].currency === 'USD')['$'].rate;
+      const ecbDateStr = parsed['gesmes:Envelope']['Cube'][0]['Cube'][0]['$'].time;
+
       const rate = parseFloat(usdRate);
+      const ecbDate = new Date(ecbDateStr);
+
+      // Step 3: Check if this ECB date already exists in database
+      let existingRate = null;
+      try {
+        existingRate = await prisma.currencyConversion.findUnique({
+          where: { date: ecbDate },
+        });
+        if (existingRate) {
+          console.log('[CURRENCY] ECB rate for date already in DB:', ecbDate.toISOString().split('T')[0]);
+          return {
+            date: existingRate.date.toISOString(),
+            conversion_rate: parseFloat(existingRate.conversionRate.toString()),
+            isFresh: false,
+          };
+        }
+      } catch (dbCheckError) {
+        console.warn('[CURRENCY] Failed to check for existing ECB date:', dbCheckError);
+      }
+
+      // Step 4: Determine if rate is fresh (ECB date matches requested date)
+      const isFresh = ecbDate.toISOString().split('T')[0] === todayStr;
+
+      // Step 5: Save the new rate to database
+      try {
+        await prisma.currencyConversion.create({
+          data: {
+            date: ecbDate,
+            conversionRate: rate,
+          },
+        });
+        console.log('[CURRENCY] Saved new ECB rate to DB:', ecbDate.toISOString().split('T')[0], 'Rate:', rate);
+      } catch (dbSaveError: any) {
+        if (dbSaveError.code === 'P2002') {
+          console.warn('[CURRENCY] ECB rate already exists (race condition):', ecbDate.toISOString().split('T')[0]);
+        } else {
+          console.warn('[CURRENCY] Failed to save ECB rate to DB:', dbSaveError);
+        }
+        // Continue even if save fails - we still have the rate
+      }
 
       return {
-        date: new Date().toISOString(),
+        date: ecbDate.toISOString(),
         conversion_rate: rate,
-        isFresh: true,
+        isFresh,
       };
     }
   } catch (error) {
-    console.warn('Failed to fetch from ECB:', error);
+    console.warn('[CURRENCY] Failed to fetch from ECB:', error);
   }
 
   // Fallback to 1.0

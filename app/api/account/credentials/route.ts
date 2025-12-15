@@ -15,9 +15,19 @@ export async function OPTIONS() {
 }
 
 /**
+ * NOTE: GET endpoint removed for security reasons.
+ * Credential fetching by accountName is now handled by Server Action in /app/actions/get-credentials.ts
+ * This prevents unauthorized external access to account credentials.
+ */
+
+/**
  * POST /api/account/credentials
- * Retrieves account credentials using a one-time credential token
- * Body: { credentialToken: string }
+ * Retrieves account credentials using credential token OR Stripe session ID
+ * Body: { credentialToken?: string, sessionId?: string }
+ *
+ * Two paths:
+ * 1. credentialToken - Used by INTERNAL flows (new_account) via /user/success page
+ * 2. sessionId - Used by EXTERNAL flows (create_account_only, create_account_and_pay) from Stripe redirect
  *
  * Security:
  * - Token can only be used once (retrieved flag)
@@ -26,35 +36,71 @@ export async function OPTIONS() {
  */
 export async function POST(req: NextRequest) {
   try {
-    const { credentialToken } = await req.json();
+    const { credentialToken, sessionId } = await req.json();
 
-    // Validate required field
-    if (!credentialToken) {
+    // Validate required field - need at least one
+    if (!credentialToken && !sessionId) {
       return NextResponse.json(
-        { error: 'Missing required field: credentialToken' },
+        { error: 'Missing required field: credentialToken or sessionId' },
         { status: 400 }
       );
     }
 
-    console.log(`[CREDENTIALS] Attempting to retrieve credentials for token: ${credentialToken}`);
+    let lookupId: string;
+    let credentialSession;
 
-    // Find the credential session
-    const credentialSession = await prisma.accountCredentialSession.findUnique({
-      where: { id: credentialToken },
-    });
+    // Path 1: Direct credential token lookup (INTERNAL flows)
+    if (credentialToken) {
+      console.log(`[CREDENTIALS] Looking up credential session by credentialToken: ${credentialToken}`);
 
-    // Check if session exists
-    if (!credentialSession) {
-      console.warn(`[CREDENTIALS] Token not found: ${credentialToken}`);
+      credentialSession = await prisma.accountCredentialSession.findUnique({
+        where: { id: credentialToken },
+      });
+
+      if (!credentialSession) {
+        console.warn(`[CREDENTIALS] Credential token not found: ${credentialToken}`);
+        return NextResponse.json(
+          { error: 'Invalid credential token' },
+          { status: 404 }
+        );
+      }
+
+      lookupId = credentialToken;
+      console.log(`[CREDENTIALS] Found credential session: ${lookupId} for account: ${credentialSession.accountName}`);
+    }
+    // Path 2: Stripe session ID lookup (EXTERNAL flows)
+    else if (sessionId) {
+      console.log(`[CREDENTIALS] Looking up credential session by Stripe sessionId: ${sessionId}`);
+
+      credentialSession = await prisma.accountCredentialSession.findFirst({
+        where: {
+          stripeSessionId: sessionId,
+          retrieved: false
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+
+      if (!credentialSession) {
+        console.warn(`[CREDENTIALS] No credential session found for sessionId: ${sessionId}`);
+        return NextResponse.json(
+          { error: 'Invalid session ID or credentials already retrieved' },
+          { status: 404 }
+        );
+      }
+
+      lookupId = credentialSession.id;
+      console.log(`[CREDENTIALS] Found credential session: ${lookupId} for account: ${credentialSession.accountName}`);
+    } else {
+      // Should never reach here due to validation above
       return NextResponse.json(
-        { error: 'Invalid credential token' },
-        { status: 404 }
+        { error: 'Invalid request' },
+        { status: 400 }
       );
     }
 
     // Check if already retrieved
     if (credentialSession.retrieved) {
-      console.warn(`[CREDENTIALS] Token already used: ${credentialToken}`);
+      console.warn(`[CREDENTIALS] Token already used: ${lookupId}`);
       return NextResponse.json(
         { error: 'Credential token has already been used' },
         { status: 410 } // 410 Gone
@@ -63,7 +109,7 @@ export async function POST(req: NextRequest) {
 
     // Check if expired
     if (credentialSession.expiresAt < new Date()) {
-      console.warn(`[CREDENTIALS] Token expired: ${credentialToken}`);
+      console.warn(`[CREDENTIALS] Token expired: ${lookupId}`);
       return NextResponse.json(
         { error: 'Credential token has expired' },
         { status: 410 } // 410 Gone
@@ -72,7 +118,7 @@ export async function POST(req: NextRequest) {
 
     // Mark as retrieved (one-time use)
     await prisma.accountCredentialSession.update({
-      where: { id: credentialToken },
+      where: { id: lookupId },
       data: { retrieved: true },
     });
 

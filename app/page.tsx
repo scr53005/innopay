@@ -4,8 +4,67 @@ import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Draggable from '@/app/components/Draggable';
+import MiniWallet, { WalletReopenButton } from '@/app/components/MiniWallet';
+import { getAccountCredentials } from '@/app/actions/get-credentials';
 
 const innopayLogoUrl = "/innopay.svg";
+
+// Helper function to get spoke URL based on environment (hub-and-spoke architecture)
+const getSpokeUrl = (spoke: string): string => {
+  if (typeof window === 'undefined') {
+    // SSR fallback - return localhost for 'indies' spoke
+    return spoke === 'indies' ? 'http://localhost:3001' : '/';
+  }
+
+  const hostname = window.location.hostname;
+
+  // Production environment
+  if (hostname === 'wallet.innopay.lu') {
+    if (spoke === 'indies') return 'https://indies.innopay.lu';
+    // Future spokes can be added here
+    return '/';
+  }
+
+  // Mobile testing (Android/iOS on local network)
+  if (hostname.startsWith('192.168.')) {
+    if (spoke === 'indies') return 'http://192.168.178.55:3001';
+    // Future spokes: add mobile testing URLs here
+    return '/';
+  }
+
+  // Desktop/localhost testing
+  if (spoke === 'indies') return 'http://localhost:3001';
+  // Future spokes: add localhost ports here (e.g., 'spoke2': 'http://localhost:3002')
+  return '/';
+};
+
+// Hardcoded nearby businesses (will be fetched from database in future iteration)
+const nearbyBusinesses = [
+  {
+    id: 'independent-cafe',
+    name: 'Independent Café',
+    image: '/images/businesses/independent-cafe.jpg',
+    table: '0'
+  },
+  {
+    id: 'al21',
+    name: "Al'21 Restaurant",
+    image: '/images/businesses/al21.jpg',
+    table: '0'
+  },
+  {
+    id: 'croque-bedaine',
+    name: 'Le Croque Bedaine',
+    image: '/images/businesses/croque-bedaine.jpg',
+    table: '0'
+  },
+  {
+    id: 'millewee',
+    name: 'Brasserie Millewee',
+    image: '/images/businesses/millewee.PNG',
+    table: '0'
+  }
+];
 
 // Translations for the UI
 const translations = {
@@ -15,7 +74,9 @@ const translations = {
     createAndTopUp: "Créer et Recharger",
     topUpWallet: "Recharger Votre Portefeuille",
     minAmount: "Montant minimum: 15€",
-    maxAmount: "Montant maximum: 999€"
+    maxAmount: "Montant maximum: 999€",
+    nearbyBusinesses: "Commerces à proximité acceptant Innopay",
+    lowBalanceWarning: "Votre solde est trop bas, veuillez recharger votre portefeuille d'abord."
   },
   en: {
     title: "Welcome to Innopay",
@@ -23,7 +84,9 @@ const translations = {
     createAndTopUp: "Create and Top Up",
     topUpWallet: "Top Up Your Wallet",
     minAmount: "Minimum amount: 15€",
-    maxAmount: "Maximum amount: 999€"
+    maxAmount: "Maximum amount: 999€",
+    nearbyBusinesses: "Nearby businesses accepting Innopay",
+    lowBalanceWarning: "Your balance is too low, please top up your wallet first."
   },
   de: {
     title: "Willkommen bei Innopay",
@@ -31,7 +94,9 @@ const translations = {
     createAndTopUp: "Erstellen und Aufladen",
     topUpWallet: "Brieftasche Aufladen",
     minAmount: "Mindestbetrag: 15€",
-    maxAmount: "Höchstbetrag: 999€"
+    maxAmount: "Höchstbetrag: 999€",
+    nearbyBusinesses: "Geschäfte in der Nähe, die Innopay akzeptieren",
+    lowBalanceWarning: "Ihr Guthaben ist zu niedrig, bitte laden Sie zuerst Ihre Brieftasche auf."
   },
   lb: {
     title: "Wëllkomm bei Innopay",
@@ -39,7 +104,9 @@ const translations = {
     createAndTopUp: "Erstellen an Oplueden",
     topUpWallet: "Äre Portemonnaie Oplueden",
     minAmount: "Mindestbetrag: 15€",
-    maxAmount: "Maximal Betrag: 999€"
+    maxAmount: "Maximal Betrag: 999€",
+    nearbyBusinesses: "Geschäfter an der Noperschaft déi Innopay akzeptéieren",
+    lowBalanceWarning: "Äert Solde ass ze niddreg, luet w.e.g. Äre Portemonnaie éischt op."
   }
 };
 
@@ -62,7 +129,45 @@ function TopUpContent() {
     euroBalance: number;
   } | null>(null);
 
+  // Import account state (for corrupted localStorage)
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importEmail, setImportEmail] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState('');
+  const [importAttempts, setImportAttempts] = useState(5);
+
+  // State for showing nearby businesses (balance >= 4.99€)
+  const [showNearbyBusinesses, setShowNearbyBusinesses] = useState(false);
+
+  // State for order context from indiesmenu (Flow 7: pay_with_topup)
+  const [orderContext, setOrderContext] = useState<{
+    table: string;
+    orderAmount: string;
+    orderMemo: string;
+    returnUrl: string;
+  } | null>(null);
+
   const t = translations[language];
+
+  // 🔧 DEBUG: Load Eruda for mobile debugging (REMOVE AFTER TESTING)
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/eruda';
+    script.onload = () => {
+      if ((window as any).eruda) {
+        (window as any).eruda.init();
+        console.log('🔧 Eruda mobile debugger loaded - tap floating button to open console');
+      }
+    };
+    document.body.appendChild(script);
+
+    return () => {
+      // Cleanup on unmount
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    };
+  }, []);
 
   // Read URL parameters and set initial amount
   useEffect(() => {
@@ -74,6 +179,140 @@ function TopUpContent() {
         const clampedAmount = Math.max(15, Math.min(999, Math.round(topupAmount)));
         setAmount(clampedAmount);
       }
+    }
+  }, [searchParams]);
+
+  // FLOW 7: Handle incoming context from indiesmenu (pay_with_topup)
+  // This must run EARLY to overwrite localStorage before account detection
+  useEffect(() => {
+    const topupFor = searchParams.get('topup_for');
+    const source = searchParams.get('source');
+
+    if (topupFor === 'order' && source === 'indiesmenu') {
+      console.log('[FLOW 7] Detected incoming order context from indiesmenu');
+
+      // Extract all context parameters
+      const account = searchParams.get('account');
+      const balance = searchParams.get('balance');
+      const deficit = searchParams.get('deficit');
+      const table = searchParams.get('table');
+      const orderAmount = searchParams.get('order_amount');
+      const orderMemo = decodeURIComponent(searchParams.get('order_memo') || '');
+      const returnUrl = decodeURIComponent(searchParams.get('return_url') || '');
+
+      console.log('[FLOW 7] Extracted context:', {
+        account,
+        balance,
+        deficit,
+        table,
+        orderAmount,
+        orderMemo: orderMemo.substring(0, 50) + '...',
+        returnUrl
+      });
+
+      // Validate required params
+      if (!account || !deficit || !table || !orderAmount) {
+        console.error('[FLOW 7] Missing required parameters');
+        return;
+      }
+
+      // STEP 1: Ensure MiniWallet shows the correct account
+      // Override localStorage accountName to match the account from indiesmenu
+      const currentAccount = localStorage.getItem('innopay_accountName');
+      if (currentAccount !== account) {
+        console.log(`[FLOW 7] Account mismatch detected - overriding '${currentAccount}' with '${account}'`);
+        localStorage.setItem('innopay_accountName', account);
+
+        // Set balance if available
+        if (balance) {
+          const balanceNum = parseFloat(balance);
+          if (!isNaN(balanceNum)) {
+            localStorage.setItem('innopay_lastBalance', balanceNum.toFixed(2));
+          }
+        }
+      } else {
+        console.log(`[FLOW 7] Account already matches: ${account}`);
+      }
+
+      // STEP 2: Auto-import credentials from database if not in localStorage
+      const activePrivate = localStorage.getItem('innopay_activePrivate');
+      const masterPassword = localStorage.getItem('innopay_masterPassword');
+
+      if (!activePrivate || !masterPassword) {
+        console.log(`[FLOW 7] Missing credentials in localStorage, fetching from database for account: ${account}`);
+
+        // Use IIFE to handle async call in useEffect
+        (async () => {
+          try {
+            // Call Server Action (secure, server-side only)
+            const result = await getAccountCredentials(account);
+
+            if (result.success && result.accountName) {
+              console.log(`[FLOW 7] Successfully fetched credentials from ${result.source}`);
+
+              // Import all credentials to localStorage
+              localStorage.setItem('innopay_accountName', result.accountName);
+              localStorage.setItem('innopay_masterPassword', result.masterPassword || '');
+              localStorage.setItem('innopay_activePrivate', result.activePrivate || '');
+              localStorage.setItem('innopay_activePublic', result.activePublic || '');
+              localStorage.setItem('innopay_postingPrivate', result.postingPrivate || '');
+              localStorage.setItem('innopay_postingPublic', result.postingPublic || '');
+              localStorage.setItem('innopay_memoPrivate', result.memoPrivate || '');
+              localStorage.setItem('innopay_memoPublic', result.memoPublic || '');
+
+              if (result.euroBalance && result.euroBalance > 0) {
+                localStorage.setItem('innopay_lastBalance', result.euroBalance.toFixed(2));
+              }
+
+              console.log(`[FLOW 7] ✅ Credentials auto-imported successfully`);
+            } else {
+              console.warn(`[FLOW 7] Could not fetch credentials from database: ${result.error}`);
+            }
+          } catch (error) {
+            console.error(`[FLOW 7] Error auto-importing credentials:`, error);
+          }
+        })();
+      } else {
+        console.log(`[FLOW 7] Credentials already present in localStorage`);
+      }
+
+      // STEP 3: Calculate suggested topup amount - Round UP to nearest 5€
+      const deficitNum = parseFloat(deficit);
+
+      // Round deficit UP to nearest euro first
+      const deficitRoundedUp = Math.ceil(deficitNum);
+
+      // Then round UP to nearest 5€ increment
+      const suggestedTopup = Math.max(
+        Math.ceil(deficitRoundedUp / 5) * 5, // Round up to nearest 5€
+        15 // Minimum 15€
+      );
+
+      console.log('[FLOW 7] Calculated suggested topup:', {
+        deficitRaw: deficitNum,
+        deficitRoundedUp: deficitRoundedUp,
+        suggestedTopup: suggestedTopup,
+        minimum: 15
+      });
+
+      // STEP 4: Pre-fill amount (already rounded to 5€ increment)
+      const clampedAmount = Math.max(15, Math.min(999, suggestedTopup));
+      setAmount(clampedAmount);
+      console.log('[FLOW 7] Pre-filled amount:', clampedAmount);
+
+      // STEP 5: Store order context for UI display
+      if (table && orderAmount && returnUrl) {
+        setOrderContext({
+          table,
+          orderAmount,
+          orderMemo,
+          returnUrl
+        });
+        console.log('[FLOW 7] Stored order context for UI display');
+      }
+
+      // STEP 6: Trigger account detection (will happen in main useEffect)
+      setHasAccount(true);
     }
   }, [searchParams]);
 
@@ -90,9 +329,94 @@ function TopUpContent() {
     return null;
   };
 
+  // Fetch HBD balance from Hive blockchain for reconciliation
+  // TODO: Implement reconciliation mechanism in future iteration
+  const fetchHBDBalance = useCallback(async (accountName: string): Promise<number> => {
+    console.log('[HBD BALANCE] Fetching HBD balance for:', accountName);
+
+    try {
+      // Fetch account data from Hive blockchain
+      const response = await fetch('https://api.hive.blog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'condenser_api.get_accounts',
+          params: [[accountName]],
+          id: 1
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.result && data.result.length > 0) {
+        const account = data.result[0];
+        const hbdBalance = parseFloat(account.hbd_balance.split(' ')[0]);
+        console.log('[HBD BALANCE] HBD balance retrieved:', hbdBalance);
+        return hbdBalance;
+      }
+    } catch (error) {
+      console.error('[HBD BALANCE] Error fetching HBD balance:', error);
+    }
+
+    return 0;
+  }, []);
+
+  // Decision point: Check if balance needs reconciliation or if we should show nearby businesses
+  const checkBalanceAndShowBusinesses = useCallback((euroBalance: number, accountName: string) => {
+    console.log('[BALANCE CHECK] Checking balance:', euroBalance, '€');
+
+    // If balance is 0.00€ and not a mock account, try to fetch and reconcile
+    if (euroBalance === 0 && !accountName.startsWith('mockaccount')) {
+      console.log('[BALANCE CHECK] Zero balance detected for real account - fetching HBD for reconciliation');
+
+      // TODO: Implement reconciliation mechanism
+      // For now, we just fetch HBD balance for logging purposes
+      fetchHBDBalance(accountName).then(hbdBalance => {
+        console.log('[RECONCILIATION] HBD balance:', hbdBalance);
+
+        // TODO: Future iteration - Calculate EURO from HBD using conversion rate
+        // if (Hive-Engine fetch fails) {
+        //   const conversionRate = await fetchEuroDollarRate();
+        //   const estimatedEuro = hbdBalance / conversionRate;
+        //   setWalletBalance({ accountName, euroBalance: estimatedEuro });
+        //   if (estimatedEuro >= 4.99) setShowNearbyBusinesses(true);
+        // }
+      });
+    }
+
+    // Show nearby businesses if balance >= 4.99€
+    if (euroBalance >= 4.99) {
+      console.log('[BALANCE CHECK] Balance >= 4.99€ - showing nearby businesses');
+      setShowNearbyBusinesses(true);
+    } else {
+      setShowNearbyBusinesses(false);
+    }
+  }, [fetchHBDBalance]);
+
   // Fetch EURO token balance from Hive-Engine
   const fetchWalletBalance = useCallback(async (accountName: string) => {
     console.log('[WALLET BALANCE] Fetching balance for:', accountName);
+
+    // Skip blockchain fetch for mock accounts (dev/test only)
+    const isMockAccount = accountName.startsWith('mockaccount');
+    if (isMockAccount) {
+      console.log('[WALLET BALANCE] ⚠️ Mock account detected - skipping Hive-Engine API call');
+
+      // Load balance from localStorage for mock accounts
+      const savedBalance = parseFloat(localStorage.getItem('innopay_lastBalance') || '0');
+      console.log('[WALLET BALANCE] Loading mock account balance from localStorage:', savedBalance);
+
+      setWalletBalance({
+        accountName,
+        euroBalance: savedBalance
+      });
+      setShowWalletBalance(true);
+
+      // Check if we should show nearby businesses for mock accounts
+      checkBalanceAndShowBusinesses(savedBalance, accountName);
+      return;
+    }
 
     try {
       const response = await fetch('https://api.hive-engine.com/rpc/contracts', {
@@ -119,11 +443,18 @@ function TopUpContent() {
         const euroBalance = parseFloat(data.result[0].balance);
         console.log('[WALLET BALANCE] Balance retrieved:', euroBalance);
 
+        const formattedBalance = parseFloat(euroBalance.toFixed(2));
         setWalletBalance({
           accountName,
-          euroBalance: parseFloat(euroBalance.toFixed(2))
+          euroBalance: formattedBalance
         });
         setShowWalletBalance(true);
+
+        // Save to localStorage for optimistic balance calculations
+        localStorage.setItem('innopay_lastBalance', formattedBalance.toString());
+
+        // Check if we should show nearby businesses
+        checkBalanceAndShowBusinesses(formattedBalance, accountName);
       } else {
         console.log('[WALLET BALANCE] No EURO tokens found');
         setWalletBalance({
@@ -131,32 +462,156 @@ function TopUpContent() {
           euroBalance: 0
         });
         setShowWalletBalance(true);
+
+        // Save to localStorage for optimistic balance calculations
+        localStorage.setItem('innopay_lastBalance', '0');
+
+        // Check if we should show nearby businesses (will try HBD reconciliation)
+        checkBalanceAndShowBusinesses(0, accountName);
       }
     } catch (error) {
       console.error('[WALLET BALANCE] Error fetching balance:', error);
     }
-  }, []);
+  }, [checkBalanceAndShowBusinesses]);
 
   // Check if user has an account in localStorage and fetch balance
   // If no URL params and no account, redirect to account creation
   useEffect(() => {
+    // Check for credential token (from successful account creation via success page redirect)
+    const credentialToken = localStorage.getItem('innopay_credentialToken');
+
+    if (credentialToken) {
+      console.log('[LANDING] Found credential token, fetching full credentials...');
+
+      // Fetch full credentials from API
+      fetch('/api/account/credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credentialToken })
+      })
+        .then(res => {
+          if (!res.ok) {
+            // Handle 410 Gone (token expired or already used)
+            if (res.status === 410) {
+              console.warn('[LANDING] Credential token expired or already used, cleaning up');
+              localStorage.removeItem('innopay_credentialToken');
+              return null;
+            }
+            throw new Error(`API error: ${res.status}`);
+          }
+          return res.json();
+        })
+        .then(credentials => {
+          // If token was expired/used, credentials will be null
+          if (!credentials) {
+            return;
+          }
+
+          // Validate the credentials object structure
+          if (!credentials || !credentials.accountName || !credentials.masterPassword ||
+              !credentials.keys || !credentials.keys.active || !credentials.keys.posting ||
+              !credentials.keys.memo) {
+            throw new Error('Invalid credentials structure received from API');
+          }
+
+          console.log('[LANDING] Storing full credentials for:', credentials.accountName);
+
+          // Store all credentials in localStorage
+          localStorage.setItem('innopay_accountName', credentials.accountName);
+          localStorage.setItem('innopay_masterPassword', credentials.masterPassword);
+          localStorage.setItem('innopay_activePrivate', credentials.keys.active.privateKey);
+          localStorage.setItem('innopay_postingPrivate', credentials.keys.posting.privateKey);
+          localStorage.setItem('innopay_memoPrivate', credentials.keys.memo.privateKey);
+
+          // Store the initial balance from credential session
+          if (credentials.euroBalance !== undefined) {
+            localStorage.setItem('innopay_lastBalance', credentials.euroBalance.toString());
+            console.log('[LANDING] Saved initial balance to localStorage:', credentials.euroBalance);
+          }
+
+          // Remove the token (one-time use)
+          localStorage.removeItem('innopay_credentialToken');
+
+          // Set account state and fetch balance
+          setHasAccount(true);
+          fetchWalletBalance(credentials.accountName);
+        })
+        .catch(err => {
+          console.error('[LANDING] Error fetching credentials:', err);
+          // Clean up the invalid token
+          localStorage.removeItem('innopay_credentialToken');
+          // Redirect to account creation since credentials couldn't be fetched
+          router.push('/user');
+        });
+
+      return; // Don't do other checks while fetching credentials
+    }
+
     const accountName = localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName');
+    const activePrivate = localStorage.getItem('innopay_activePrivate');
+    const masterPassword = localStorage.getItem('innopay_masterPassword');
 
     // Check if there are any URL parameters
     const hasSearchParams = Array.from(searchParams.keys()).length > 0;
 
-    // If no search params and no account, redirect to account creation
+    // Validate that if accountName exists, the required keys also exist
+    // This handles the case where Safari/browser cleared some but not all localStorage items
+    if (accountName && (!activePrivate || !masterPassword)) {
+      console.warn('[LANDING] Corrupted localStorage detected (accountName exists but keys missing) - showing import modal');
+      // Clear corrupted data
+      localStorage.removeItem('innopay_accountName');
+      localStorage.removeItem('innopayAccountName');
+      localStorage.removeItem('innopay_activePrivate');
+      localStorage.removeItem('innopay_postingPrivate');
+      localStorage.removeItem('innopay_memoPrivate');
+      localStorage.removeItem('innopay_masterPassword');
+
+      // Show import account modal (user had an account before)
+      setShowImportModal(true);
+
+      // Don't redirect - let user recover their account
+      return;
+    }
+
+    // If no search params and no valid account, redirect to account creation
     if (!hasSearchParams && !accountName) {
       console.log('[LANDING] No search params and no account found - redirecting to /user');
       router.push('/user');
       return;
     }
 
-    setHasAccount(!!accountName);
+    setHasAccount(!!accountName && !!activePrivate && !!masterPassword);
 
     // Fetch wallet balance if account exists
     if (accountName) {
-      fetchWalletBalance(accountName);
+      // Check if returning from successful payment (for optimistic balance)
+      const topupSuccess = searchParams.get('topup_success');
+      const amountParam = searchParams.get('amount');
+
+      if (topupSuccess === 'true' && amountParam) {
+        // Show optimistic balance immediately
+        const topupAmount = parseFloat(amountParam);
+        console.log('[LANDING] Showing optimistic balance with top-up amount:', topupAmount);
+
+        // Get current balance from localStorage if available
+        const lastKnownBalance = parseFloat(localStorage.getItem('innopay_lastBalance') || '0');
+        const optimisticBalance = lastKnownBalance + topupAmount;
+
+        // Save optimistic balance to localStorage for persistence
+        localStorage.setItem('innopay_lastBalance', optimisticBalance.toFixed(2));
+
+        setWalletBalance({
+          accountName,
+          euroBalance: parseFloat(optimisticBalance.toFixed(2))
+        });
+        setShowWalletBalance(true);
+
+        // Fetch real balance from blockchain (will be skipped for mock accounts)
+        fetchWalletBalance(accountName);
+      } else {
+        // Normal balance fetch
+        fetchWalletBalance(accountName);
+      }
     }
 
     // If returning from successful top-up, check if we should redirect to indiesmenu
@@ -179,13 +634,6 @@ function TopUpContent() {
         window.location.href = redirectUrl;
         return;
       }
-
-      // Regular top-up (not from indiesmenu), refetch balance after a delay
-      console.log('[LANDING] Regular top-up, will refetch balance');
-      setTimeout(() => {
-        console.log('[LANDING] Refetching balance after top-up');
-        fetchWalletBalance(accountName);
-      }, 2000);
     }
   }, [searchParams, fetchWalletBalance, router]);
 
@@ -202,7 +650,6 @@ function TopUpContent() {
 
     try {
       const accountName = localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName');
-      const flow = hasAccount ? 'topup' : 'account_creation';
 
       // Fetch email for existing accounts to pre-fill Stripe form
       let userEmail: string | undefined;
@@ -223,19 +670,40 @@ function TopUpContent() {
       }
 
       // Get redirect parameters if coming from indiesmenu
-      const redirectParams = getRedirectParams();
+      // Use orderContext if available (Flow 7), otherwise read from URL
+      const redirectParams = orderContext
+        ? {
+            table: orderContext.table,
+            orderAmount: orderContext.orderAmount,
+            orderMemo: orderContext.orderMemo
+          }
+        : getRedirectParams();
+
       console.log('[LANDING] Redirect params:', redirectParams);
+      console.log('[LANDING] Order context:', orderContext);
+
+      // Build flow context for systematic flow detection
+      const requestBody = {
+        amount,
+        accountName: hasAccount ? accountName : undefined,
+        email: userEmail,
+        redirectParams, // Pass table, orderAmount, orderMemo if present
+        hasLocalStorageAccount: hasAccount, // For flow detection
+        accountBalance: walletBalance?.euroBalance, // For payment flow decisions
+        returnUrl: orderContext?.returnUrl, // Custom return URL for Flow 7
+      };
+
+      console.log('[LANDING] Submitting checkout with flow context:', {
+        hasLocalStorageAccount: requestBody.hasLocalStorageAccount,
+        accountName: requestBody.accountName,
+        accountBalance: requestBody.accountBalance,
+        redirectParams: requestBody.redirectParams,
+      });
 
       const response = await fetch('/api/checkout/account', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amount,
-          flow,
-          accountName: hasAccount ? accountName : undefined,
-          email: userEmail,
-          redirectParams // Pass table, orderAmount, orderMemo if present
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
@@ -254,6 +722,107 @@ function TopUpContent() {
     } catch (err: any) {
       setError(err.message || 'An error occurred');
       setLoading(false);
+    }
+  };
+
+  // Handle import account submission
+  const handleImportAccount = async () => {
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const sanitizedEmail = importEmail.trim().toLowerCase();
+
+    if (!emailRegex.test(sanitizedEmail)) {
+      setImportError('Invalid email format / Format d\'email invalide');
+      setTimeout(() => setImportError(''), 3000);
+      return;
+    }
+
+    setImportLoading(true);
+    setImportError('');
+
+    try {
+      console.log('[IMPORT ACCOUNT] Calling innopay API:', `/api/account/retrieve`);
+
+      const response = await fetch('/api/account/retrieve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: sanitizedEmail })
+      });
+
+      // Parse response regardless of status
+      const data = await response.json();
+      console.log('[IMPORT ACCOUNT] API response:', { status: response.status, data });
+
+      // Check if account was found
+      if (data.found === true) {
+        console.log('[IMPORT ACCOUNT] Account found:', data.accountName);
+
+        // Save to localStorage
+        localStorage.setItem('innopay_accountName', data.accountName);
+        localStorage.setItem('innopay_masterPassword', data.masterPassword);
+
+        // Save keys if available
+        if (data.keys) {
+          localStorage.setItem('innopay_activePrivate', data.keys.active);
+          localStorage.setItem('innopay_postingPrivate', data.keys.posting);
+          localStorage.setItem('innopay_memoPrivate', data.keys.memo);
+          console.log('[IMPORT ACCOUNT] Saved account with all keys');
+        } else {
+          console.log('[IMPORT ACCOUNT] Saved account (keys not available)');
+        }
+
+        // Close modal and reload to show mini-wallet
+        setShowImportModal(false);
+        console.log('[IMPORT ACCOUNT] Reloading page to activate account');
+        window.location.reload();
+
+      } else if (data.found === false) {
+        // Account not found - this is expected behavior, not an error
+        console.log('[IMPORT ACCOUNT] Account not found for email:', sanitizedEmail);
+
+        // Decrement attempts FIRST
+        const newAttempts = importAttempts - 1;
+        setImportAttempts(newAttempts);
+        localStorage.setItem('innopay_import_attempts', newAttempts.toString());
+        console.log('[IMPORT ACCOUNT] Attempts remaining:', newAttempts);
+
+        // Check if out of attempts
+        if (newAttempts <= 0) {
+          // Final attempt used
+          setImportError('No account found in database, sorry! / Rien dans la base de données, désolé!');
+
+          // Redirect to /user after 3 seconds
+          setTimeout(() => {
+            router.push('/user');
+          }, 3000);
+        } else {
+          // Still have attempts remaining
+          setImportError(`You may have used a different email / Vous avez peut-être utilisé une adresse mail différente (${newAttempts} attempts left)`);
+
+          // Clear error after 3 seconds to allow retry
+          setTimeout(() => {
+            setImportError('');
+            setImportLoading(false);
+          }, 3000);
+        }
+
+      } else {
+        // Unexpected response format
+        console.error('[IMPORT ACCOUNT] Unexpected response format:', data);
+        setImportError('Server response error / Erreur de réponse du serveur');
+        setTimeout(() => {
+          setImportError('');
+          setImportLoading(false);
+        }, 3000);
+      }
+
+    } catch (error) {
+      console.error('[IMPORT ACCOUNT] Network or parsing error:', error);
+      setImportError('Server connection error / Erreur de connexion au serveur');
+      setTimeout(() => {
+        setImportError('');
+        setImportLoading(false);
+      }, 3000);
     }
   };
 
@@ -276,6 +845,83 @@ function TopUpContent() {
           {t.title}
         </h1>
 
+        {/* Low Balance Warning - Show when balance < 5.00€ AND not from restaurant (Flow 7) */}
+        {walletBalance && walletBalance.euroBalance < 5.00 && !orderContext && (
+          <div className="mb-6 border-2 border-green-400 rounded-lg p-4 bg-gradient-to-r from-green-50 to-emerald-50 shadow-md">
+            <div className="flex items-start gap-3">
+              <div className="text-2xl">💡</div>
+              <div className="flex-1">
+                <p className="text-base font-semibold text-gray-800">
+                  {t.lowBalanceWarning}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Order Context Banner - Show when topping up for restaurant order (Flow 7) */}
+        {orderContext && (
+          <div className="mb-6 border-2 border-orange-400 rounded-lg p-4 bg-gradient-to-r from-orange-50 to-amber-50 shadow-md">
+            <div className="flex items-start gap-3">
+              <div className="text-2xl">🍽️</div>
+              <div className="flex-1">
+                <h3 className="font-bold text-gray-800 mb-1">
+                  Top-up for Restaurant Order
+                </h3>
+                <div className="text-sm text-gray-700 space-y-1">
+                  <p>📍 Table {orderContext.table}</p>
+                  <p>💰 Order Total: {orderContext.orderAmount}€</p>
+                  <p className="text-xs text-gray-600 mt-2 italic">
+                    After payment, you'll be redirected back to complete your order
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Nearby Businesses - Show ABOVE form if balance >= 4.99€ AND not from restaurant (Flow 7) */}
+        {showNearbyBusinesses && !orderContext && (
+          <div className="mb-8">
+            <h2 className="text-xl font-bold text-gray-800 mb-4 text-center">
+              {t.nearbyBusinesses}
+            </h2>
+            <div className="max-h-56 overflow-y-auto border-2 border-blue-300 rounded-lg p-4 bg-gradient-to-br from-blue-50 to-indigo-50 shadow-lg">
+              <div className="space-y-3">
+                {nearbyBusinesses.map((business) => (
+                  <div
+                    key={business.id}
+                    onClick={() => {
+                      const spokeUrl = getSpokeUrl('indies');
+                      window.location.href = `${spokeUrl}/menu?table=${business.table}`;
+                    }}
+                    className="flex items-center gap-4 p-4 bg-white rounded-lg hover:shadow-xl hover:scale-[1.02] transition-all cursor-pointer border-2 border-gray-200 hover:border-blue-400"
+                  >
+                    <div className="relative w-20 h-20 flex-shrink-0 bg-gray-200 rounded-lg overflow-hidden shadow-md">
+                      <Image
+                        src={business.image}
+                        alt={business.name}
+                        fill
+                        className="object-cover"
+                        unoptimized
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-bold text-lg text-gray-900">{business.name}</p>
+                      <p className="text-sm text-blue-600 font-medium">Click to view menu</p>
+                    </div>
+                    <div className="text-blue-500">
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Amount Input */}
@@ -290,7 +936,7 @@ function TopUpContent() {
               step="1"
               value={amount}
               onChange={(e) => setAmount(Number(e.target.value))}
-              className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-4xl font-bold text-center"
+              className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-4xl font-bold text-center text-gray-900 bg-white"
               disabled={loading}
             />
             <p className="mt-1 text-xs text-gray-500">
@@ -344,56 +990,86 @@ function TopUpContent() {
       </div>
 
       {/* Wallet Balance Reopen Button */}
-      {!showWalletBalance && walletBalance && (
-        <button
-          onClick={() => setShowWalletBalance(true)}
-          className="fixed bottom-4 right-4 z-[9998] bg-blue-600 hover:bg-blue-700 text-white p-3 rounded-full shadow-lg transition-colors"
-          aria-label="View wallet"
-        >
-          <span className="text-2xl">💰</span>
-        </button>
-      )}
+      <WalletReopenButton
+        visible={!showWalletBalance && !!walletBalance}
+        onClick={() => setShowWalletBalance(true)}
+      />
 
       {/* Persistent Wallet Balance Indicator */}
-      {showWalletBalance && walletBalance && (
-        <Draggable
-          className="z-[9998] bg-gradient-to-r from-blue-600 to-blue-700 text-white px-4 py-3 rounded-lg shadow-lg"
+      {walletBalance && (
+        <MiniWallet
+          balance={walletBalance}
+          visible={showWalletBalance}
+          onClose={() => setShowWalletBalance(false)}
+          title="Your Innopay Wallet"
           initialPosition={{
             x: typeof window !== 'undefined' ? (window.innerWidth / 2) - 150 : 0, // Centered (300px max-width / 2)
             y: 20  // 20px from top
           }}
+        />
+      )}
+
+      {/* Import Account Modal (for corrupted localStorage) */}
+      {showImportModal && (
+        <Draggable
+          className="z-[9999] bg-white rounded-lg shadow-2xl border-2 border-blue-500"
+          initialPosition={{
+            x: typeof window !== 'undefined' ? (window.innerWidth / 2) - 200 : 0,
+            y: typeof window !== 'undefined' ? (window.innerHeight / 2) - 200 : 100
+          }}
           style={{
-            minWidth: '200px',
-            maxWidth: '300px',
+            width: '400px',
+            maxWidth: '90vw',
           }}
         >
-          <div className="flex items-center justify-between gap-3">
-            {/* Drag handle indicator */}
-            <div className="text-white opacity-50 text-xs flex-shrink-0">
-              ⋮⋮
+          <div className="p-6">
+            {/* Header with drag handle */}
+            <div className="flex items-center gap-2 mb-4">
+              <div className="text-gray-400 cursor-move">⋮⋮</div>
+              <h3 className="text-lg font-bold text-gray-800 flex-1">
+                Import Account / Importer un compte
+              </h3>
+              <button
+                onClick={() => {
+                  setShowImportModal(false);
+                  router.push('/user');
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                className="text-gray-400 hover:text-gray-600 rounded-full p-1 transition-colors"
+                aria-label="Close and go to account creation"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
 
-            <div className="flex-1">
-              <p className="text-xs opacity-75 mb-1">Your Innopay Wallet</p>
-              <div className="flex items-center gap-2">
-                <span className="text-2xl">💰</span>
-                <div>
-                  <p className="font-bold text-lg">{walletBalance.euroBalance.toFixed(2)} €</p>
-                  <p className="text-xs opacity-75 font-mono">{walletBalance.accountName}</p>
-                </div>
-              </div>
+            <p className="text-sm text-gray-600 mb-4">
+              We detected you had an account before. Enter your email to recover it.
+              <br />
+              <span className="text-xs italic">Nous avons détecté que vous aviez un compte. Entrez votre email pour le récupérer.</span>
+            </p>
+
+            <div className="space-y-4">
+              <p className="text-center text-gray-700 mb-4">
+                Please go to the account page to import or create your account.
+                <br />
+                <span className="text-sm italic">Veuillez aller à la page compte pour importer ou créer votre compte.</span>
+              </p>
+
+              <button
+                onClick={() => {
+                  setShowImportModal(false);
+                  router.push('/user');
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-indigo-700 transition-all"
+              >
+                Go to Account Page / Aller à la page compte
+              </button>
             </div>
-            <button
-              onClick={() => setShowWalletBalance(false)}
-              onMouseDown={(e) => e.stopPropagation()}
-              onTouchStart={(e) => e.stopPropagation()}
-              className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-1 transition-colors"
-              aria-label="Close"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
           </div>
         </Draggable>
       )}
@@ -405,7 +1081,7 @@ function TopUpContent() {
         <div className="fixed top-2 right-2 z-[10001]">
           <button
             onClick={() => {
-              if (confirm('Clear all localStorage (dev only)?')) {
+              if (confirm('Clear all localStorage and reset import attempts (dev only)?')) {
                 // Clear all innopay-related items
                 localStorage.removeItem('innopay_accountName');
                 localStorage.removeItem('innopay_masterPassword');
@@ -415,15 +1091,17 @@ function TopUpContent() {
                 localStorage.removeItem('innopay_credentialToken');
                 localStorage.removeItem('innopay_accounts');
                 localStorage.removeItem('innopay_wallet_credentials');
-                localStorage.removeItem('innopay_import_attempts');
 
-                console.log('[DEV] localStorage cleared');
-                alert('localStorage cleared! Reloading...');
+                // Reset import attempts counter to 5
+                localStorage.setItem('innopay_import_attempts', '5');
+
+                console.log('[DEV] localStorage cleared and import attempts reset to 5');
+                alert('localStorage cleared & counter reset to 5! Reloading...');
                 window.location.reload();
               }
             }}
             className="bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-1 rounded shadow-lg font-mono"
-            title="Development only: Clear localStorage"
+            title="Development only: Clear localStorage and reset import counter"
           >
             🧹 Clear LS
           </button>

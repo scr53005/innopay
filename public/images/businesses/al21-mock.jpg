@@ -1,0 +1,6 @@
+<svg width="200" height="200" xmlns="http://www.w3.org/2000/svg">
+  <rect width="200" height="200" fill="#2C3E50"/>
+  <text x="100" y="90" font-family="Arial" font-size="24" fill="white" text-anchor="middle">🍽️</text>
+  <text x="100" y="130" font-family="Arial" font-size="16" fill="white" text-anchor="middle">Al'21</text>
+  <text x="100" y="150" font-family="Arial" font-size="16" fill="white" text-anchor="middle">Restaurant</text>
+</svg>

@@ -4,7 +4,16 @@
       "Bash(dir:*)",
       "Bash(npx prisma:*)",
       "Bash(npm install:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(test:*)",
+      "Bash(npm run build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(cat:*)",
+      "Bash(if [ -f \".next/BUILD_ID\" ])",
+      "Bash(then echo \"Build completed successfully\")",
+      "Bash(else echo \"Build may still be running or failed\")",
+      "Bash(fi)",
+      "Bash(ls:*)"
     ],
     "deny": [],
     "ask": []

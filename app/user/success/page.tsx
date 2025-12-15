@@ -2,11 +2,13 @@
 
 import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { getRestaurantUrl, detectRestaurant } from '@/services/utils';
 
 interface AccountCredentials {
   accountName: string;
   masterPassword: string;
   euroBalance: number;
+  email?: string | null;
   keys: {
     owner: { privateKey: string; publicKey: string };
     active: { privateKey: string; publicKey: string };
@@ -22,6 +24,7 @@ function AccountSuccessContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState('Creating your account...');
+  const [isExternalFlow, setIsExternalFlow] = useState(false);
 
   useEffect(() => {
     if (!sessionId) {
@@ -37,8 +40,8 @@ function AccountSuccessContent() {
     try {
       setMessage('Waiting for account creation...');
 
-      // STEP 1: Poll for webhook completion and get credential token
-      const pollSession = async (): Promise<{ credentialToken: string; accountName: string }> => {
+      // STEP 1: Poll for webhook completion and get FULL credentials directly
+      const pollSession = async (): Promise<AccountCredentials> => {
         const maxPolls = 90; // Poll for up to 90 seconds (90 polls × 1 second)
         let pollCount = 0;
 
@@ -51,7 +54,14 @@ function AccountSuccessContent() {
 
           if (data.ready) {
             console.log(`[ACCOUNT POLL] ✓ Credentials ready!`);
-            return { credentialToken: data.credentialToken, accountName: data.accountName };
+            // Return full credentials object (session_id is used for external flows, not credentialToken)
+            return {
+              accountName: data.accountName,
+              masterPassword: data.masterPassword,
+              euroBalance: data.euroBalance,
+              email: data.email || null,
+              keys: data.keys,
+            };
           }
 
           // Wait 1 second before next poll
@@ -63,35 +73,70 @@ function AccountSuccessContent() {
         throw new Error('Account creation is taking longer than expected. Please contact support with your payment confirmation.');
       };
 
-      const { credentialToken, accountName } = await pollSession();
-      console.log(`[SUCCESS] Got credential token for account: ${accountName}`);
+      const credentials = await pollSession();
+      console.log(`[SUCCESS] Got full credentials for account: ${credentials.accountName}`);
 
       setMessage('Account created successfully!');
       setLoading(false);
 
-      // STEP 2: Store token in localStorage for innopay's own use
-      localStorage.setItem('innopay_credentialToken', credentialToken);
-      localStorage.setItem('innopay_accountName', accountName);
+      // STEP 2: Store FULL credentials in localStorage (no need for token!)
+      localStorage.setItem('innopay_accountName', credentials.accountName);
+      localStorage.setItem('innopay_masterPassword', credentials.masterPassword);
+      localStorage.setItem('innopay_activePrivate', credentials.keys.active.privateKey);
+      localStorage.setItem('innopay_postingPrivate', credentials.keys.posting.privateKey);
+      localStorage.setItem('innopay_memoPrivate', credentials.keys.memo.privateKey);
+      localStorage.setItem('innopay_lastBalance', credentials.euroBalance.toString());
 
-      // STEP 3: Redirect back to indiesmenu with credential token
-      const isDev = window.location.hostname === 'localhost' || window.location.hostname.startsWith('192.168');
-      const baseIndiesMenuUrl = isDev
-        ? 'http://192.168.178.55:3001/menu'
-        : 'https://indies.innopay.lu/menu';
-
-      // If opened in popup from indiesmenu
-      if (window.opener) {
-        // Redirect opener to menu page with credential token
-        window.opener.location.href = `${baseIndiesMenuUrl}?account_created=true&credential_token=${credentialToken}`;
-
-        // Close popup after a short delay
-        setTimeout(() => {
-          window.close();
-        }, 2000);
+      // Store email if available
+      if (credentials.email) {
+        localStorage.setItem('innopay_email', credentials.email);
+        console.log(`[SUCCESS] Stored full credentials in localStorage including email: ${credentials.email}`);
       } else {
-        // Opened in same window, redirect with credential token
+        console.log(`[SUCCESS] Stored full credentials in localStorage (no email available)`);
+      }
+
+      // STEP 3: Detect which restaurant (if any) the user came from
+      const restaurant = detectRestaurant(searchParams);
+
+      if (restaurant) {
+        // EXTERNAL FLOW: Redirect back to restaurant with session_id (not credential_token - that's legacy)
+        console.log(`[SUCCESS] External flow detected, redirecting to restaurant: ${restaurant}`);
+        setIsExternalFlow(true);
+
+        const table = searchParams.get('table');
+        const restaurantUrl = getRestaurantUrl(restaurant, '/menu');
+        const redirectUrl = `${restaurantUrl}?${table ? `table=${table}&` : ''}account_created=true&session_id=${sessionId}`;
+
+        console.log(`[SUCCESS] Redirecting to: ${redirectUrl}`);
+
+        // If opened in popup from restaurant
+        if (window.opener) {
+          window.opener.location.href = redirectUrl;
+          setTimeout(() => {
+            window.close();
+          }, 2000);
+        } else {
+          setTimeout(() => {
+            window.location.href = redirectUrl;
+          }, 2000);
+        }
+      } else {
+        // INTERNAL FLOW: Stay on wallet.innopay.lu and redirect to /user for celebration
+        console.log(`[SUCCESS] Internal flow detected, staying on wallet.innopay.lu`);
+        setIsExternalFlow(false);
+        setMessage('Redirecting to your account...');
+
+        // Get amount parameter to preserve for optimistic balance display
+        const amountParam = searchParams.get('amount');
+
         setTimeout(() => {
-          window.location.href = `${baseIndiesMenuUrl}?account_created=true&credential_token=${credentialToken}`;
+          // Redirect to /user page to show confetti, metadata form, and RUBIS opportunity
+          const redirectUrl = amountParam
+            ? `/user?account_created=true&amount=${amountParam}`
+            : `/user?account_created=true`;
+
+          console.log(`[SUCCESS] Redirecting to: ${redirectUrl}`);
+          window.location.href = redirectUrl;
         }, 2000);
       }
 
@@ -181,7 +226,9 @@ function AccountSuccessContent() {
         </div>
         <h2 className="text-2xl font-bold text-gray-900 mb-2">Account Created!</h2>
         <p className="text-gray-600 mb-4">{message}</p>
-        <p className="text-sm text-gray-500">Redirecting back to restaurant...</p>
+        <p className="text-sm text-gray-500">
+          {isExternalFlow ? 'Redirecting back to restaurant...' : 'Redirecting to your wallet...'}
+        </p>
       </div>
     </div>
   );

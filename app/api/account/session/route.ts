@@ -4,13 +4,15 @@ import prisma from '@/lib/prisma';
 
 /**
  * GET /api/account/session?session_id=xxx
- * Looks up the credential token for a Stripe session
- * Used by success page to get the token needed to retrieve credentials
+ * Returns full account credentials for internal flows (new_account)
+ * Returns credential token for external flows
  *
- * Flow:
+ * SIMPLIFIED FLOW (internal):
  * 1. Success page has: session_id (from URL)
- * 2. Calls this endpoint to get: credentialToken
- * 3. Uses credentialToken to call /api/account/credentials
+ * 2. Calls this endpoint and gets full credentials directly
+ * 3. Stores in localStorage and redirects to /user
+ *
+ * Security: This is safe because we're staying on wallet.innopay.lu domain
  */
 export async function GET(req: NextRequest) {
   try {
@@ -24,17 +26,11 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    console.log(`[ACCOUNT SESSION] Looking up credential token for session: ${sessionId}`);
+    console.log(`[ACCOUNT SESSION] Looking up credentials for session: ${sessionId}`);
 
-    // Look up the credential session by Stripe session ID
+    // Look up the credential session by Stripe session ID - get FULL credentials
     const credentialSession = await prisma.accountCredentialSession.findUnique({
       where: { stripeSessionId: sessionId },
-      select: {
-        id: true,
-        accountName: true,
-        retrieved: true,
-        expiresAt: true,
-      },
     });
 
     if (!credentialSession) {
@@ -58,13 +54,35 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    console.log(`[ACCOUNT SESSION] Found credential token for account: ${credentialSession.accountName}`);
+    console.log(`[ACCOUNT SESSION] Found credentials for account: ${credentialSession.accountName}`);
 
+    // Return FULL credentials directly (no need for token ping-pong on same domain)
     return NextResponse.json({
       ready: true,
-      credentialToken: credentialSession.id,
       accountName: credentialSession.accountName,
-      retrieved: credentialSession.retrieved,
+      masterPassword: credentialSession.masterPassword,
+      euroBalance: parseFloat(credentialSession.euroBalance.toString()),
+      email: credentialSession.email || null,
+      keys: {
+        owner: {
+          privateKey: credentialSession.ownerPrivate,
+          publicKey: credentialSession.ownerPublic,
+        },
+        active: {
+          privateKey: credentialSession.activePrivate,
+          publicKey: credentialSession.activePublic,
+        },
+        posting: {
+          privateKey: credentialSession.postingPrivate,
+          publicKey: credentialSession.postingPublic,
+        },
+        memo: {
+          privateKey: credentialSession.memoPrivate,
+          publicKey: credentialSession.memoPublic,
+        },
+      },
+      // Also include token for backward compatibility with external flows
+      credentialToken: credentialSession.id,
     }, { status: 200 });
 
   } catch (error: any) {

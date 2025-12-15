@@ -1,6 +1,9 @@
-// app/api/webhooks/route.ts - Updated to support multiple checkout flows
+// app/api/webhooks/route.ts - Updated to support systematic flow management
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
+
+// Import flow management system
+import { FLOW_METADATA, type Flow } from '@/lib/flows';
 
 // Import database functions
 import {
@@ -94,27 +97,47 @@ export async function POST(req: NextRequest) {
   // Handle checkout.session.completed event
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
-    console.log(`Processing checkout session: ${session.id}`);
-    console.log(`Metadata:`, session.metadata);
+    const timestamp = new Date().toISOString();
 
-    const flow = session.metadata?.flow;
+    console.log(`[${timestamp}] [WEBHOOK] ========================================`);
+    console.log(`[${timestamp}] [WEBHOOK] Processing checkout session: ${session.id}`);
+    console.log(`[${timestamp}] [WEBHOOK] Full metadata:`, session.metadata);
+
+    const flow = session.metadata?.flow as Flow | undefined;
+    const flowCategory = session.metadata?.flowCategory;
+
+    if (flow && FLOW_METADATA[flow]) {
+      const flowMetadata = FLOW_METADATA[flow];
+      console.log(`[${timestamp}] [WEBHOOK] Detected flow: ${flow}`);
+      console.log(`[${timestamp}] [WEBHOOK] Flow category: ${flowMetadata.category}`);
+      console.log(`[${timestamp}] [WEBHOOK] Flow description: ${flowMetadata.description}`);
+      console.log(`[${timestamp}] [WEBHOOK] Requires redirect: ${flowMetadata.requiresRedirect} → ${flowMetadata.redirectTarget || 'none'}`);
+    } else {
+      console.warn(`[${timestamp}] [WEBHOOK] No flow metadata found, using legacy detection`);
+    }
 
     try {
-      if (flow === 'guest') {
+      // Route to appropriate handler based on flow
+      if (flow === 'guest_checkout') {
         // === GUEST CHECKOUT FLOW ===
         return await handleGuestCheckout(session);
-      } else if (flow === 'account_creation') {
-        // === ACCOUNT CREATION FLOW ===
+      } else if (flow === 'new_account' || flow === 'create_account_only' || flow === 'create_account_and_pay') {
+        // === ACCOUNT CREATION FLOWS ===
         return await handleAccountCreation(session);
-      } else if (flow === 'topup') {
-        // === TOP-UP FLOW (existing account) ===
+      } else if (flow === 'topup' || flow === 'pay_with_account' || flow === 'pay_with_topup') {
+        // === TOP-UP / PAYMENT FLOWS ===
         return await handleTopup(session);
+      } else if (flow === 'import_account') {
+        // === IMPORT ACCOUNT FLOW ===
+        console.error(`[${timestamp}] [WEBHOOK] Import account flow not yet implemented`);
+        throw new Error('Import account flow not yet implemented');
       } else {
-        // === LEGACY FLOW (email-based, sequential account names) ===
+        // === LEGACY FLOW (backward compatibility) ===
+        console.log(`[${timestamp}] [WEBHOOK] Using legacy flow handler`);
         return await handleLegacyFlow(session);
       }
     } catch (error: any) {
-      console.error(`Error processing checkout session ${session.id}:`, error);
+      console.error(`[${timestamp}] [WEBHOOK] Error processing checkout session ${session.id}:`, error);
       return NextResponse.json(
         { error: 'Processing failed', message: error.message },
         { status: 500 }
@@ -261,17 +284,20 @@ async function handleTopup(session: Stripe.Checkout.Session) {
   console.log(`[${timestamp}] [WEBHOOK TOPUP] Processing top-up: ${session.id}`);
   console.log(`[${timestamp}] [WEBHOOK TOPUP] Full metadata:`, JSON.stringify(session.metadata, null, 2));
 
-  const { accountName, orderAmountEuro, orderMemo } = session.metadata!;
+  const { accountName, orderAmountEuro, orderMemo, table } = session.metadata!;
   const amountEuro = (session.amount_total || 0) / 100;
   const customerEmail = session.customer_details?.email;
   const orderCost = orderAmountEuro ? parseFloat(orderAmountEuro) : 0;
+  const isFlow7 = orderCost > 0 && orderMemo;
 
   console.log(`[${timestamp}] [WEBHOOK TOPUP] Top-up info:`, {
     accountName,
     amountEuro,
     orderCost,
     customerEmail,
-    hasOrderMemo: !!orderMemo
+    hasOrderMemo: !!orderMemo,
+    isFlow7,
+    table
   });
 
   // Idempotency check: Check if we've recently processed a top-up with same amount for this account
@@ -311,33 +337,287 @@ async function handleTopup(session: Stripe.Checkout.Session) {
     throw new Error(`Amount ${amountEuro} EUR is below minimum of 15 EUR for top-up`);
   }
 
-  // Verify account exists
-  console.log(`[TOPUP] Verifying account ${accountName} exists...`);
-  const exists = await accountExists(accountName);
-  if (!exists) {
-    console.error(`[TOPUP] Account ${accountName} does not exist!`);
-    throw new Error(`Account ${accountName} does not exist. Cannot top-up non-existent account.`);
+  // Skip account verification for topup flows (Flow 7, Flow 5 Branch B)
+  // These accounts already exist in innopay localStorage
+  // Note: Mock accounts are handled separately in dev/test and would need mocking
+  console.log(`[TOPUP] Skipping account verification for ${accountName} (topup flow assumes account exists)`);
+
+  if (accountName.startsWith('mock')) {
+    console.log(`[TOPUP] ⚠️ Mock account detected - transfers will need to be mocked in future`);
   }
 
-  console.log(`[TOPUP] Account verified.`);
+  // BRANCH: FLOW 7 vs FLOW 2
+  if (isFlow7) {
+    // ===== FLOW 7: TOPUP + ORDER PAYMENT (NEW UNIFIED APPROACH) =====
+    console.log(`[FLOW 7] Detected Flow 7 - unified webhook approach`);
+    return await handleFlow7UnifiedApproach(
+      session,
+      accountName,
+      amountEuro,
+      orderCost,
+      orderMemo!,
+      customerEmail,
+      table,
+      walletUser
+    );
+  } else {
+    // ===== FLOW 2: PURE TOPUP (EXISTING LOGIC) =====
+    console.log(`[FLOW 2] Pure topup - no pending order`);
+    return await handleFlow2PureTopup(
+      session,
+      accountName,
+      amountEuro,
+      customerEmail,
+      walletUser
+    );
+  }
+}
 
-  // Calculate how much goes to user vs restaurant
-  const userCredit = orderCost > 0 ? amountEuro - orderCost : amountEuro;
+// ========================================
+// FLOW 7: UNIFIED TOPUP + ORDER PAYMENT
+// ========================================
+async function handleFlow7UnifiedApproach(
+  session: Stripe.Checkout.Session,
+  accountName: string,
+  topupAmount: number,
+  orderCost: number,
+  orderMemo: string,
+  customerEmail: string | null | undefined,
+  table: string | undefined,
+  walletUser: any
+) {
+  console.log(`[FLOW 7] ========================================`);
+  console.log(`[FLOW 7] Unified approach: topup=${topupAmount}€, order=${orderCost}€`);
+
+  // STEP 1: Execute order payment from innopay → restaurant using innopay authority
+  console.log(`[FLOW 7] Step 1: Execute order payment from innopay → restaurant`);
+
+  let restaurantEuroTxId: string | undefined;
+  let restaurantHbdTxId: string | undefined;
+
+  try {
+    // Fetch EUR/USD rate for HBD conversion
+    const rateData = await getEurUsdRateServerSide();
+    const eurUsdRate = rateData.conversion_rate;
+    const hbdAmountForOrder = convertEurToHbd(orderCost, eurUsdRate);
+
+    console.log(`[FLOW 7] Calculated HBD amount for order: ${hbdAmountForOrder} (rate: ${eurUsdRate})`);
+
+    // Try HBD transfer first (preferred) - from innopay to restaurant
+    try {
+      console.log(`[FLOW 7] Attempting HBD transfer to indies.cafe with memo:`, orderMemo);
+      restaurantHbdTxId = await transferHbd('indies.cafe', hbdAmountForOrder, orderMemo);
+      console.log(`[FLOW 7] ✅ HBD transferred to restaurant: ${restaurantHbdTxId}`);
+    } catch (hbdError: any) {
+      // Fallback to EURO tokens if HBD insufficient
+      console.warn(`[FLOW 7] ⚠️ HBD transfer failed, using EURO token fallback:`, hbdError.message);
+
+      // Try to record debt - innopay owes HBD to restaurant (non-blocking)
+      try {
+        await prisma.outstanding_debt.create({
+          data: {
+            creditor: getRecipientForEnvironment('indies.cafe'),
+            amount_hbd: hbdAmountForOrder,
+            euro_tx_id: 'FLOW7_ORDER',
+            eur_usd_rate: eurUsdRate,
+            reason: 'flow7_order',
+            notes: `Flow 7 order payment - HBD shortage at ${new Date().toISOString()}`
+          }
+        });
+        console.log(`📝 [DEBT] Recorded ${hbdAmountForOrder} HBD debt to restaurant`);
+      } catch (debtError) {
+        console.error('[FLOW 7] WARNING: Failed to record debt:', debtError);
+      }
+
+      console.log(`[FLOW 7] Attempting EURO token transfer with memo:`, orderMemo);
+      restaurantEuroTxId = await transferEuroTokens('indies.cafe', orderCost, orderMemo);
+      console.log(`[FLOW 7] ✅ EURO tokens transferred to restaurant: ${restaurantEuroTxId}`);
+    }
+  } catch (orderError: any) {
+    console.error(`[FLOW 7] ❌ Restaurant payment failed:`, orderError);
+    throw new Error(`Flow 7 order payment failed: ${orderError.message}`);
+  }
+
+  // STEP 2: Calculate change (topup - order)
+  const change = topupAmount - orderCost;
+  console.log(`[FLOW 7] Step 2: Calculate change: ${topupAmount}€ - ${orderCost}€ = ${change}€`);
+
+  // STEP 3: Handle change transfer
+  let changeTxId: string | undefined;
+  let changeHbdTxId: string | undefined;
+  let userBalance = 0;
+
+  if (change > 0) {
+    // Positive change: innopay owes customer → transfer change to customer
+    console.log(`[FLOW 7] Step 3: Positive change - transferring ${change}€ to ${accountName}`);
+
+    const changeMemo = 'Monnaie / Change';
+    changeTxId = await transferEuroTokens(accountName, change, changeMemo);
+    console.log(`[FLOW 7] ✅ Change EURO transferred to customer: ${changeTxId}`);
+
+    // Also try to transfer HBD change
+    const rateData = await getEurUsdRateServerSide();
+    const eurUsdRate = rateData.conversion_rate;
+    const hbdChange = convertEurToHbd(change, eurUsdRate);
+
+    try {
+      changeHbdTxId = await transferHbd(accountName, hbdChange, changeMemo);
+      console.log(`[FLOW 7] ✅ Change HBD transferred to customer: ${changeHbdTxId}`);
+    } catch (hbdError: any) {
+      console.warn(`[FLOW 7] ⚠️ HBD change transfer failed, recording debt:`, hbdError.message);
+
+      try {
+        await prisma.outstanding_debt.create({
+          data: {
+            creditor: accountName,
+            amount_hbd: hbdChange,
+            euro_tx_id: changeTxId,
+            eur_usd_rate: eurUsdRate,
+            reason: 'flow7_change',
+            notes: `Flow 7 change - HBD shortage at ${new Date().toISOString()}`
+          }
+        });
+        console.log(`📝 [DEBT] Recorded ${hbdChange} HBD debt to customer`);
+      } catch (debtError) {
+        console.error('[FLOW 7] WARNING: Failed to record change debt:', debtError);
+      }
+    }
+
+    userBalance = change;
+
+  } else if (change < 0) {
+    // Negative change: customer owes innopay → transfer deficit from customer to innopay
+    const deficit = Math.abs(change);
+    console.log(`[FLOW 7] Step 3: Negative change - transferring ${deficit}€ from ${accountName} to innopay`);
+
+    // Use transferEuroTokensFromAccount which signs with innopay authority
+    const deficitMemo = 'Paiement manquant / Missing payment';
+
+    try {
+      changeTxId = await transferEuroTokensFromAccount(accountName, 'innopay', deficit, deficitMemo);
+      console.log(`[FLOW 7] ✅ Deficit EURO transferred from customer to innopay: ${changeTxId}`);
+    } catch (deficitError: any) {
+      console.error(`[FLOW 7] ❌ Deficit transfer failed:`, deficitError.message);
+      // Don't throw - order was already paid to restaurant, this is just reconciliation
+      console.warn(`[FLOW 7] ⚠️ Customer owes innopay ${deficit}€ but transfer failed - manual reconciliation needed`);
+    }
+
+    userBalance = 0; // Customer spent all their topup + some existing balance
+
+  } else {
+    // Zero change: exact match
+    console.log(`[FLOW 7] Step 3: Exact match - no change transfer needed`);
+    userBalance = 0;
+  }
+
+  // STEP 4: Update database with topup record
+  if (customerEmail && walletUser) {
+    try {
+      if (!walletUser.userId) {
+        console.error(`[FLOW 7] ⚠️ CRITICAL: walletuser.userId is NULL for accountName '${accountName}'!`);
+
+        const existingUser = await findInnoUserByEmail(customerEmail);
+        if (existingUser) {
+          await prisma.walletuser.update({
+            where: { id: walletUser.id },
+            data: { userId: existingUser.id }
+          });
+          console.warn(`[FLOW 7] ✅ Updated walletuser.userId to ${existingUser.id}`);
+          await createTopupForExistingUser(existingUser.id, topupAmount);
+          console.warn(`[FLOW 7] ✅ Topup record created for user ID: ${existingUser.id}`);
+        }
+      } else {
+        const existingUser = await findInnoUserByEmail(customerEmail);
+        if (existingUser) {
+          await createTopupForExistingUser(existingUser.id, topupAmount);
+          console.warn(`[FLOW 7] ✅ Topup record created for user ID: ${existingUser.id}`);
+        }
+      }
+    } catch (dbError) {
+      console.error('[FLOW 7] ❌ Database update failed, but transfers succeeded:', dbError);
+    }
+  }
+
+  // STEP 5: Create credential session with updated balance
+  console.log(`[FLOW 7] Step 5: Creating credential session with balance: ${userBalance}€`);
+
+  // Retrieve account keys from seed (same as account creation flow)
+  const { getSeed, generateHiveKeys } = await import('@/services/hive');
+  const seed = walletUser?.seed || getSeed(accountName);
+  const keychain = generateHiveKeys(accountName, seed);
+
+  const credentialSession = await prisma.accountCredentialSession.create({
+    data: {
+      accountName,
+      stripeSessionId: session.id,
+      masterPassword: walletUser?.masterPassword || keychain.masterPassword,
+      ownerPrivate: keychain.owner.privateKey,
+      ownerPublic: keychain.owner.publicKey,
+      activePrivate: keychain.active.privateKey,
+      activePublic: keychain.active.publicKey,
+      postingPrivate: keychain.posting.privateKey,
+      postingPublic: keychain.posting.publicKey,
+      memoPrivate: keychain.memo.privateKey,
+      memoPublic: keychain.memo.publicKey,
+      euroBalance: userBalance,
+      email: customerEmail || null,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
+    },
+  });
+  console.log(`[FLOW 7] Credential session created: ${credentialSession.id}`);
+
+  // STEP 6: Return success with redirect info
+  const { getRestaurantUrl } = await import('@/services/utils');
+  const restaurantUrl = getRestaurantUrl('indies', '/menu');
+
+  const redirectUrl = new URL(restaurantUrl);
+  redirectUrl.searchParams.set('order_success', 'true');
+  redirectUrl.searchParams.set('credential_token', credentialSession.id);
+  if (table) redirectUrl.searchParams.set('table', table);
+
+  console.log(`[FLOW 7] ✅ Flow 7 complete - redirect to: ${redirectUrl.toString()}`);
+
+  return NextResponse.json({
+    message: 'Flow 7 completed successfully - topup + order payment unified',
+    accountName,
+    topupAmount,
+    orderCost,
+    change,
+    userBalance,
+    restaurantHbdTxId,
+    restaurantEuroTxId,
+    changeTxId,
+    changeHbdTxId,
+    credentialToken: credentialSession.id,
+    redirectUrl: redirectUrl.toString()
+  }, { status: 200 });
+}
+
+// ========================================
+// FLOW 2: PURE TOPUP (NO ORDER)
+// ========================================
+async function handleFlow2PureTopup(
+  session: Stripe.Checkout.Session,
+  accountName: string,
+  amountEuro: number,
+  customerEmail: string | null | undefined,
+  walletUser: any
+) {
+  const topupMemo = 'Solde mis à jour! / Balance updated!';
 
   let userTxId: string | undefined;
   let userHbdTxId: string | undefined;
-  let restaurantTxId: string | undefined;
 
-  // Transfer user's portion (if any)
-  if (userCredit > 0) {
-    console.warn(`[TOPUP] Transferring ${userCredit} EURO tokens to ${accountName} (user credit)`);
-    userTxId = await transferEuroTokens(accountName, userCredit, `Top-up credit: ${userCredit} EUR`);
-    console.warn(`[TOPUP] ✅ User EURO credit transferred: ${userTxId}`);
+  // Transfer entire topup amount to customer
+  if (amountEuro > 0) {
+    console.warn(`[FLOW 2] Transferring ${amountEuro} EURO tokens to ${accountName} with memo: ${topupMemo}`);
+    userTxId = await transferEuroTokens(accountName, amountEuro, topupMemo);
+    console.warn(`[FLOW 2] ✅ EURO transferred: ${userTxId}`);
 
-    // CRITICAL: Also transfer HBD to user for simple top-ups
+    // CRITICAL: Also transfer HBD to user
     const rateData = await getEurUsdRateServerSide();
     const eurUsdRate = rateData.conversion_rate;
-    const requiredHbd = userCredit * eurUsdRate;
+    const requiredHbd = amountEuro * eurUsdRate;
 
     // Check innopay HBD balance
     const Client = (await import('@hiveio/dhive')).Client;
@@ -349,7 +629,7 @@ async function handleTopup(session: Stripe.Checkout.Session) {
 
     const accounts = await client.database.getAccounts(['innopay']);
     if (!accounts || accounts.length === 0) {
-      console.error('[TOPUP] ❌ CRITICAL: Innopay account not found');
+      console.error('[FLOW 2] ❌ CRITICAL: Innopay account not found');
       throw new Error('Innopay account not found');
     }
 
@@ -358,16 +638,16 @@ async function handleTopup(session: Stripe.Checkout.Session) {
       : accounts[0].hbd_balance.toString();
     const hbdBalance = parseFloat(hbdBalanceStr.split(' ')[0]);
 
-    console.warn(`[TOPUP] Innopay HBD balance: ${hbdBalance}, Required for user: ${requiredHbd}`);
+    console.warn(`[FLOW 2] Innopay HBD balance: ${hbdBalance}, Required for user: ${requiredHbd}`);
 
     if (hbdBalance >= requiredHbd) {
       // Transfer HBD to user
-      console.warn(`[TOPUP] Sufficient HBD, transferring ${requiredHbd} HBD to ${accountName}`);
+      console.warn(`[FLOW 2] Sufficient HBD, transferring ${requiredHbd} HBD to ${accountName}`);
       try {
-        userHbdTxId = await transferHbd(accountName, requiredHbd, `Top-up: ${userCredit} EUR`);
-        console.warn(`[TOPUP] ✅ HBD transfer to user successful: ${userHbdTxId}`);
+        userHbdTxId = await transferHbd(accountName, requiredHbd, topupMemo);
+        console.warn(`[FLOW 2] ✅ HBD transferred: ${userHbdTxId}`);
       } catch (hbdError: any) {
-        console.error(`[TOPUP] ❌ HBD transfer to user FAILED:`, hbdError.message);
+        console.error(`[FLOW 2] ❌ HBD transfer FAILED:`, hbdError.message);
 
         // Try to record debt - innopay owes HBD to user (non-blocking)
         try {
@@ -375,20 +655,20 @@ async function handleTopup(session: Stripe.Checkout.Session) {
             data: {
               creditor: accountName,
               amount_hbd: requiredHbd,
-              euro_tx_id: userTxId || 'TOPUP_USER_CREDIT',
+              euro_tx_id: userTxId || 'TOPUP',
               eur_usd_rate: eurUsdRate,
-              reason: 'topup_user_credit',
-              notes: `HBD transfer to user failed at ${new Date().toISOString()} - ${hbdError.message}`
+              reason: 'topup',
+              notes: `HBD transfer failed at ${new Date().toISOString()} - ${hbdError.message}`
             }
           });
-          console.warn(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to user ${accountName}`);
+          console.warn(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to ${accountName}`);
         } catch (debtError) {
-          console.error('[TOPUP] ❌ WARNING: Failed to record debt to user:', debtError);
+          console.error('[FLOW 2] ❌ WARNING: Failed to record debt:', debtError);
         }
       }
     } else {
       // Insufficient HBD - user only gets EURO, record debt
-      console.error(`[TOPUP] ⚠️ Insufficient HBD for user credit (balance: ${hbdBalance}, needed: ${requiredHbd})`);
+      console.error(`[FLOW 2] ⚠️ Insufficient HBD (balance: ${hbdBalance}, needed: ${requiredHbd})`);
 
       // Try to record debt - innopay should pay HBD to user (non-blocking)
       try {
@@ -396,177 +676,73 @@ async function handleTopup(session: Stripe.Checkout.Session) {
           data: {
             creditor: accountName,
             amount_hbd: requiredHbd,
-            euro_tx_id: userTxId || 'TOPUP_USER_CREDIT',
+            euro_tx_id: userTxId || 'TOPUP',
             eur_usd_rate: eurUsdRate,
-            reason: 'topup_user_credit',
+            reason: 'topup',
             notes: `Insufficient HBD balance at ${new Date().toISOString()}`
           }
         });
-        console.warn(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to user ${accountName}`);
+        console.warn(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to ${accountName}`);
       } catch (debtError) {
-        console.error('[TOPUP] ❌ WARNING: Failed to record debt to user:', debtError);
+        console.error('[FLOW 2] ❌ WARNING: Failed to record debt:', debtError);
       }
-    }
-  } else {
-    console.warn(`[TOPUP] No user credit (full amount goes to restaurant)`);
-  }
-
-  // Transfer restaurant order (if pending order exists)
-  if (orderCost > 0 && orderMemo) {
-    console.warn(`[TOPUP] Processing restaurant order: ${orderCost} EUR to indies.cafe`);
-
-    // Get EUR/USD rate for HBD conversion
-    const rateData = await getEurUsdRateServerSide();
-    const eurUsdRate = rateData.conversion_rate;
-    const requiredHbd = orderCost * eurUsdRate;
-
-    // Check innopay HBD balance
-    const Client = (await import('@hiveio/dhive')).Client;
-    const client = new Client([
-      'https://api.hive.blog',
-      'https://api.deathwing.me',
-      'https://hive-api.arcange.eu'
-    ]);
-
-    const accounts = await client.database.getAccounts(['innopay']);
-    if (!accounts || accounts.length === 0) {
-      console.error('[TOPUP] ❌ CRITICAL: Innopay account not found for restaurant order');
-      throw new Error('Innopay account not found');
-    }
-
-    const hbdBalanceStr = typeof accounts[0].hbd_balance === 'string'
-      ? accounts[0].hbd_balance
-      : accounts[0].hbd_balance.toString();
-    const hbdBalance = parseFloat(hbdBalanceStr.split(' ')[0]);
-
-    console.warn(`[TOPUP] Innopay HBD balance: ${hbdBalance}, Required for restaurant: ${requiredHbd}`);
-
-    if (hbdBalance >= requiredHbd) {
-      // Transfer HBD from innopay to restaurant
-      console.warn(`[TOPUP] Sufficient HBD, transferring ${requiredHbd} HBD to indies.cafe`);
-      try {
-        restaurantTxId = await transferHbd('indies.cafe', requiredHbd, orderMemo);
-        console.warn(`[TOPUP] ✅ HBD transfer to restaurant successful: ${restaurantTxId}`);
-      } catch (hbdError: any) {
-        console.error(`[TOPUP] ❌ HBD transfer to restaurant failed despite sufficient balance:`, hbdError.message);
-
-        // Try to record debt - innopay owes HBD to restaurant (non-blocking)
-        try {
-          await prisma.outstanding_debt.create({
-            data: {
-              creditor: getRecipientForEnvironment('indies.cafe'),
-              amount_hbd: requiredHbd,
-              euro_tx_id: userTxId || 'TOPUP_NO_USER_TX',
-              eur_usd_rate: eurUsdRate,
-              reason: 'topup_order',
-              notes: `HBD transfer failed at ${new Date().toISOString()} - ${hbdError.message}`
-            }
-          });
-          console.warn(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to restaurant`);
-        } catch (debtError) {
-          console.error('[TOPUP] ❌ WARNING: Failed to record debt:', debtError);
-        }
-
-        // Fall back to EURO
-        restaurantTxId = await transferEuroTokens('indies.cafe', orderCost, orderMemo);
-        console.warn(`[TOPUP] ✅ EURO fallback transfer to restaurant successful: ${restaurantTxId}`);
-      }
-    } else {
-      // Insufficient HBD - transfer EURO tokens and record debt
-      console.error(`[TOPUP] ⚠️ Insufficient HBD, transferring ${orderCost} EURO to indies.cafe`);
-
-      // Try to record debt - innopay should have paid HBD but paid EURO instead (non-blocking)
-      try {
-        await prisma.outstanding_debt.create({
-          data: {
-            creditor: getRecipientForEnvironment('indies.cafe'),
-            amount_hbd: requiredHbd,
-            euro_tx_id: userTxId || 'TOPUP_NO_USER_TX',
-            eur_usd_rate: eurUsdRate,
-            reason: 'topup_order',
-            notes: `Insufficient HBD balance at ${new Date().toISOString()}`
-          }
-        });
-        console.warn(`📝 [DEBT] Recorded ${requiredHbd} HBD debt to restaurant`);
-      } catch (debtError) {
-        console.error('[TOPUP] ❌ WARNING: Failed to record debt:', debtError);
-      }
-
-      restaurantTxId = await transferEuroTokens('indies.cafe', orderCost, orderMemo);
-      console.warn(`[TOPUP] ✅ EURO transfer to restaurant successful: ${restaurantTxId}`);
     }
   }
 
   // If email provided, update database with topup record
-  if (customerEmail) {
-    console.warn(`[TOPUP] Attempting to update database with email: ${customerEmail}`);
+  if (customerEmail && walletUser) {
+    console.warn(`[FLOW 2] Attempting to update database with email: ${customerEmail}`);
     try {
-      // First, check if walletuser exists and log userId status
-      const walletUser = await prisma.walletuser.findFirst({
-        where: { accountName }
-      });
+      if (!walletUser.userId) {
+        console.error(`[FLOW 2] ⚠️ CRITICAL: walletuser.userId is NULL for accountName '${accountName}'!`);
 
-      if (walletUser) {
-        console.warn(`[TOPUP] Found walletuser for ${accountName}, userId: ${walletUser.userId || 'NULL'}`);
+        // Try to find innouser by email and create link
+        const existingUser = await findInnoUserByEmail(customerEmail);
+        if (existingUser) {
+          console.warn(`[FLOW 2] Found innouser with email ${customerEmail}, userId: ${existingUser.id}`);
 
-        if (!walletUser.userId) {
-          console.error(`[TOPUP] ⚠️ CRITICAL: walletuser.userId is NULL for accountName '${accountName}'!`);
-          console.error(`[TOPUP] This means the account was never properly linked to an innouser record.`);
+          // Update walletuser with userId
+          await prisma.walletuser.update({
+            where: { id: walletUser.id },
+            data: { userId: existingUser.id }
+          });
+          console.warn(`[FLOW 2] ✅ Updated walletuser.userId to ${existingUser.id}`);
 
-          // Try to find innouser by email and create link
-          const existingUser = await findInnoUserByEmail(customerEmail);
-          if (existingUser) {
-            console.warn(`[TOPUP] Found innouser with email ${customerEmail}, userId: ${existingUser.id}`);
-
-            // Update walletuser with userId
-            await prisma.walletuser.update({
-              where: { id: walletUser.id },
-              data: { userId: existingUser.id }
-            });
-            console.warn(`[TOPUP] ✅ Updated walletuser.userId to ${existingUser.id}`);
-
-            // Now create topup record
-            await createTopupForExistingUser(existingUser.id, amountEuro);
-            console.warn(`[TOPUP] ✅ Topup record created for user ID: ${existingUser.id}`);
-          } else {
-            console.error(`[TOPUP] ❌ Email ${customerEmail} not found in innouser table. Cannot link walletuser.`);
-            console.error(`[TOPUP] Top-up completed but not tracked in database.`);
-          }
+          // Now create topup record
+          await createTopupForExistingUser(existingUser.id, amountEuro);
+          console.warn(`[FLOW 2] ✅ Topup record created for user ID: ${existingUser.id}`);
         } else {
-          // userId exists, proceed normally
-          const existingUser = await findInnoUserByEmail(customerEmail);
-          if (existingUser) {
-            if (existingUser.id !== walletUser.userId) {
-              console.warn(`[TOPUP] ⚠️ Email mismatch: walletuser.userId=${walletUser.userId}, but email maps to userId=${existingUser.id}`);
-              console.warn(`[TOPUP] Updating email in innouser to ${customerEmail}`);
-            }
-            await createTopupForExistingUser(existingUser.id, amountEuro);
-            console.warn(`[TOPUP] ✅ Topup record created for user ID: ${existingUser.id}`);
-          } else {
-            console.error(`[TOPUP] ❌ Email ${customerEmail} not found in database. Top-up completed but not tracked.`);
-          }
+          console.error(`[FLOW 2] ❌ Email ${customerEmail} not found in innouser table. Cannot link walletuser.`);
+          console.error(`[FLOW 2] Top-up completed but not tracked in database.`);
         }
       } else {
-        console.error(`[TOPUP] ❌ CRITICAL: No walletuser found for accountName '${accountName}'!`);
-        console.error(`[TOPUP] This should never happen for a top-up flow. Account may not exist.`);
+        // userId exists, proceed normally
+        const existingUser = await findInnoUserByEmail(customerEmail);
+        if (existingUser) {
+          if (existingUser.id !== walletUser.userId) {
+            console.warn(`[FLOW 2] ⚠️ Email mismatch: walletuser.userId=${walletUser.userId}, but email maps to userId=${existingUser.id}`);
+            console.warn(`[FLOW 2] Updating email in innouser to ${customerEmail}`);
+          }
+          await createTopupForExistingUser(existingUser.id, amountEuro);
+          console.warn(`[FLOW 2] ✅ Topup record created for user ID: ${existingUser.id}`);
+        } else {
+          console.error(`[FLOW 2] ❌ Email ${customerEmail} not found in database. Top-up completed but not tracked.`);
+        }
       }
     } catch (dbError) {
-      console.error('[TOPUP] ❌ Database update failed, but transfers succeeded:', dbError);
+      console.error('[FLOW 2] ❌ Database update failed, but transfers succeeded:', dbError);
       // Don't throw - the payment went through, just log the DB issue
     }
   } else {
-    console.warn(`[TOPUP] No customer email provided, skipping database update`);
+    console.warn(`[FLOW 2] No customer email provided, skipping database update`);
   }
 
   return NextResponse.json({
-    message: 'Top-up completed successfully',
+    message: 'Top-up completed successfully (Flow 2)',
     accountName,
     amountEuro,
-    userCredit,
-    userTxId,
-    userHbdTxId,
-    restaurantTxId,
-    orderProcessed: !!restaurantTxId
+    euroTxId: userTxId,
+    hbdTxId: userHbdTxId,
   }, { status: 200 });
 }
 
@@ -579,18 +755,26 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
   console.log(`[${timestamp}] [WEBHOOK ACCOUNT] Processing account creation: ${session.id}`);
   console.log(`[${timestamp}] [WEBHOOK ACCOUNT] Full metadata:`, JSON.stringify(session.metadata, null, 2));
 
-  const { accountName, orderAmountEuro, orderMemo } = session.metadata!;
+  const { accountName, orderAmountEuro, orderMemo, mockAccountCreation } = session.metadata!;
   const amountEuro = (session.amount_total || 0) / 100;
   const customerEmail = session.customer_details?.email;
   const orderCost = orderAmountEuro ? parseFloat(orderAmountEuro) : 0;
+  const isMockMode = mockAccountCreation === 'true';
 
   console.log(`[${timestamp}] [WEBHOOK ACCOUNT] Extracted order info:`, {
     accountName,
     orderAmountEuro,
     orderMemo,
     orderMemoLength: orderMemo?.length,
-    orderCost
+    orderCost,
+    mockMode: isMockMode
   });
+
+  // MOCK MODE: Skip actual Hive account creation for dev/test
+  if (isMockMode) {
+    console.log(`[${timestamp}] [WEBHOOK ACCOUNT] 🎭 MOCK MODE ENABLED - Simulating account creation`);
+    return await handleMockAccountCreation(session, accountName, amountEuro, customerEmail, orderCost, orderMemo);
+  }
 
   if (!orderMemo && orderCost > 0) {
     console.error(`[${timestamp}] [WEBHOOK ACCOUNT] ⚠️ CRITICAL: Order cost ${orderCost} but NO MEMO! Transfer will fail to match order!`);
@@ -762,13 +946,23 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
       memoPrivate: keychain.memo.privateKey,
       memoPublic: keychain.memo.publicKey,
       euroBalance: totalEuro,
+      email: customerEmail ? customerEmail : null,
       expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
     },
   });
-  console.log(`[ACCOUNT] Credential session created: ${credentialSession.id} with balance ${totalEuro} EURO`);
+  console.log(`[ACCOUNT] Credential session created: ${credentialSession.id} with balance ${totalEuro} EURO${customerEmail ? ` and email ${customerEmail}` : ''}`);
+
+  // Determine transfer memo based on flow (account creation vs top-up)
+  const flow = session.metadata?.flow;
+  const isAccountCreation = flow === 'new_account' || flow === 'create_account_only' || flow === 'create_account_and_pay';
+  const transferMemo = isAccountCreation
+    ? 'Bienvenue dans le système Innopay! / Welcome to Innopay!'
+    : 'Solde mis à jour! / Balance updated!';
+
+  console.log(`[ACCOUNT] Using transfer memo for flow '${flow}': ${transferMemo}`);
 
   // Transfer EURO tokens to user (for display purposes, like casino chips)
-  const euroTxId = await transferEuroTokens(accountName, totalEuro, 'Account balance');
+  const euroTxId = await transferEuroTokens(accountName, totalEuro, transferMemo);
   console.log(`[ACCOUNT] EURO tokens transferred to user: ${euroTxId}`);
 
   // Transfer HBD to user (real value that user paid for)
@@ -779,7 +973,7 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
     const hbdAmount = convertEurToHbd(totalEuro, eurUsdRate);
 
     try {
-      userHbdTxId = await transferHbd(accountName, hbdAmount, 'Account balance');
+      userHbdTxId = await transferHbd(accountName, hbdAmount, transferMemo);
       console.log(`[ACCOUNT] Transferred ${hbdAmount} HBD to user (rate: ${eurUsdRate}): ${userHbdTxId}`);
     } catch (hbdError: any) {
       console.warn(`[ACCOUNT] ⚠️ Failed to transfer HBD to user, recording debt:`, hbdError.message);
@@ -876,6 +1070,105 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
     restaurantHbdTxId,
     restaurantEuroTxId,
     credentialToken: credentialSession.id,
+  }, { status: 201 });
+}
+
+// ========================================
+// MOCK ACCOUNT CREATION HANDLER (dev/test only)
+// ========================================
+async function handleMockAccountCreation(
+  session: Stripe.Checkout.Session,
+  accountName: string,
+  amountEuro: number,
+  customerEmail: string | null | undefined,
+  orderCost: number,
+  orderMemo?: string
+) {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] [MOCK ACCOUNT] ========================================`);
+  console.log(`[${timestamp}] [MOCK ACCOUNT] Creating MOCK account: ${accountName}`);
+  console.log(`[${timestamp}] [MOCK ACCOUNT] Amount: ${amountEuro} EUR, Order: ${orderCost} EUR`);
+
+  // Idempotency check
+  const existingCredentialSession = await prisma.accountCredentialSession.findFirst({
+    where: { stripeSessionId: session.id }
+  });
+
+  if (existingCredentialSession) {
+    console.log(`[MOCK ACCOUNT] Session ${session.id} already processed, returning success (idempotency)`);
+    return NextResponse.json({
+      message: 'Session already processed (mock)',
+      accountName: existingCredentialSession.accountName
+    }, { status: 200 });
+  }
+
+  // Validate metadata
+  if (!accountName) {
+    throw new Error('Missing accountName in session metadata');
+  }
+
+  // Generate MOCK credentials (random strings that look real but don't work on blockchain)
+  const mockSeed = `mock_seed_${accountName}_${Date.now()}`;
+  const mockMasterPassword = `P5K${Math.random().toString(36).substring(2, 15).toUpperCase()}`;
+
+  const mockKeychain = {
+    masterPassword: mockMasterPassword,
+    owner: {
+      privateKey: `5K${Math.random().toString(36).substring(2, 50).toUpperCase()}`,
+      publicKey: `STM${Math.random().toString(36).substring(2, 50).toUpperCase()}`
+    },
+    active: {
+      privateKey: `5K${Math.random().toString(36).substring(2, 50).toUpperCase()}`,
+      publicKey: `STM${Math.random().toString(36).substring(2, 50).toUpperCase()}`
+    },
+    posting: {
+      privateKey: `5K${Math.random().toString(36).substring(2, 50).toUpperCase()}`,
+      publicKey: `STM${Math.random().toString(36).substring(2, 50).toUpperCase()}`
+    },
+    memo: {
+      privateKey: `5K${Math.random().toString(36).substring(2, 50).toUpperCase()}`,
+      publicKey: `STM${Math.random().toString(36).substring(2, 50).toUpperCase()}`
+    }
+  };
+
+  const mockHiveTxId = `mock_tx_${Date.now()}`;
+  console.log(`[MOCK ACCOUNT] Generated mock credentials and tx ID: ${mockHiveTxId}`);
+
+  // Calculate user balance (loaded amount - order cost, no bonus in mock mode)
+  const totalEuro = amountEuro - orderCost;
+  console.log(`[MOCK ACCOUNT] Mock balance: ${totalEuro} EURO (${amountEuro} loaded - ${orderCost} order, no bonus in mock mode)`);
+
+  // Store mock credentials for temporary retrieval (expires in 5 minutes)
+  const credentialSession = await prisma.accountCredentialSession.create({
+    data: {
+      accountName,
+      stripeSessionId: session.id,
+      masterPassword: mockKeychain.masterPassword,
+      ownerPrivate: mockKeychain.owner.privateKey,
+      ownerPublic: mockKeychain.owner.publicKey,
+      activePrivate: mockKeychain.active.privateKey,
+      activePublic: mockKeychain.active.publicKey,
+      postingPrivate: mockKeychain.posting.privateKey,
+      postingPublic: mockKeychain.posting.publicKey,
+      memoPrivate: mockKeychain.memo.privateKey,
+      memoPublic: mockKeychain.memo.publicKey,
+      euroBalance: totalEuro,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
+    },
+  });
+  console.log(`[MOCK ACCOUNT] Credential session created: ${credentialSession.id} with balance ${totalEuro} EURO`);
+
+  console.log(`[MOCK ACCOUNT] ✅ Mock account creation complete - NO blockchain transactions performed`);
+  console.log(`[MOCK ACCOUNT] ⚠️ WARNING: This is a MOCK account. Credentials are fake and balance is simulated.`);
+  console.log(`[MOCK ACCOUNT] ⚠️ Any transfer attempts with this account will FAIL.`);
+
+  return NextResponse.json({
+    message: 'Mock account created successfully (NO BLOCKCHAIN ACTIVITY)',
+    accountName,
+    hiveTxId: mockHiveTxId,
+    credentialToken: credentialSession.id,
+    mockMode: true,
+    warning: 'This is a mock account. No actual blockchain account was created. Balance is simulated.'
   }, { status: 201 });
 }
 

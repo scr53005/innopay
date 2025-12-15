@@ -24,12 +24,16 @@ const client = new Client([
  * - masterPassword: The master password
  * - accountName: The account name (to derive key)
  *
+ * Body Option 3:
+ * - operation: The Hive operation object
+ * - useInnopayAuthority: true (uses innopay's active key from environment)
+ *
  * Security: Private key/password transmitted over HTTPS, used immediately for signing,
  * and not stored. Used only for this one-time broadcast.
  */
 export async function POST(req: NextRequest) {
   try {
-    const { operation, activePrivateKey, masterPassword, accountName } = await req.json();
+    const { operation, activePrivateKey, masterPassword, accountName, useInnopayAuthority } = await req.json();
 
     console.log('[SIGN-API] Received sign request');
 
@@ -45,29 +49,15 @@ export async function POST(req: NextRequest) {
       return errorResponse;
     }
 
-    if (!activePrivateKey && (!masterPassword || !accountName)) {
+    if (!activePrivateKey && (!masterPassword || !accountName) && !useInnopayAuthority) {
       const errorResponse = NextResponse.json(
-        { error: 'Must provide either activePrivateKey OR (masterPassword + accountName)' },
+        { error: 'Must provide either activePrivateKey OR (masterPassword + accountName) OR useInnopayAuthority' },
         { status: 400 }
       );
       errorResponse.headers.set('Access-Control-Allow-Origin', '*');
       errorResponse.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
       errorResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type');
       return errorResponse;
-    }
-
-    // Get or derive the private key
-    let key: PrivateKey;
-    if (activePrivateKey) {
-      // Option 1: Use provided active key
-      console.log('[SIGN-API] Using provided active key...');
-      key = PrivateKey.fromString(activePrivateKey);
-      console.log('[SIGN-API] Key parsed successfully');
-    } else {
-      // Option 2: Derive active key from master password
-      console.log('[SIGN-API] Deriving active key from master password...');
-      key = PrivateKey.fromSeed(`${accountName}active${masterPassword}`);
-      console.log('[SIGN-API] Key derived successfully');
     }
 
     // Get current blockchain block details for transaction validity
@@ -86,17 +76,77 @@ export async function POST(req: NextRequest) {
       extensions: [],
     };
 
-    // Sign and broadcast the transaction
-    console.log('[SIGN-API] Signing and broadcasting operation...');
-    const signedTransaction = client.broadcast.sign(baseTransaction, [key]);
-    const broadcastResult = await client.broadcast.send(signedTransaction);
+    let broadcastResult: any;
+    let usedFallback = false;
 
-    console.log('[SIGN-API] Broadcast successful! TX:', broadcastResult.id);
+    // CASCADE APPROACH: Try user's key first, fallback to innopay authority on failure
+    if (useInnopayAuthority) {
+      // Explicit request to use innopay authority
+      console.log('[SIGN-API] Using innopay authority (explicit)...');
+      const innopayActiveKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
+      if (!innopayActiveKey) {
+        throw new Error('HIVE_ACTIVE_KEY_INNOPAY not configured in environment');
+      }
+      const key = PrivateKey.fromString(innopayActiveKey);
+      const signedTransaction = client.broadcast.sign(baseTransaction, [key]);
+      broadcastResult = await client.broadcast.send(signedTransaction);
+      console.log('[SIGN-API] Broadcast successful with innopay authority! TX:', broadcastResult.id);
+    } else {
+      // Try user's own key first
+      let key: PrivateKey;
+      let keySource: string;
+
+      if (activePrivateKey) {
+        // Option 1: Use provided active key
+        console.log('[SIGN-API] Using provided active key...');
+        key = PrivateKey.fromString(activePrivateKey);
+        keySource = 'provided active key';
+      } else {
+        // Option 2: Derive active key from master password
+        console.log('[SIGN-API] Deriving active key from master password...');
+        key = PrivateKey.fromSeed(`${accountName}active${masterPassword}`);
+        keySource = 'derived from master password';
+      }
+
+      try {
+        // Attempt to sign and broadcast with user's key
+        console.log('[SIGN-API] Attempting to sign with user key...');
+        const signedTransaction = client.broadcast.sign(baseTransaction, [key]);
+        broadcastResult = await client.broadcast.send(signedTransaction);
+        console.log('[SIGN-API] Broadcast successful with user key! TX:', broadcastResult.id);
+      } catch (userKeyError: any) {
+        // User's key failed - check if it's an authority error
+        const errorMessage = userKeyError.message || '';
+        console.warn('[SIGN-API] User key failed:', errorMessage);
+
+        if (errorMessage.includes('Missing Active Authority') ||
+            errorMessage.includes('Missing required active authority') ||
+            errorMessage.includes('missing authority')) {
+          // Authority error - try fallback to innopay authority
+          console.log('[SIGN-API] Falling back to innopay authority...');
+
+          const innopayActiveKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
+          if (!innopayActiveKey) {
+            throw new Error('User key failed and HIVE_ACTIVE_KEY_INNOPAY not configured for fallback');
+          }
+
+          const innopayKey = PrivateKey.fromString(innopayActiveKey);
+          const signedTransaction = client.broadcast.sign(baseTransaction, [innopayKey]);
+          broadcastResult = await client.broadcast.send(signedTransaction);
+          usedFallback = true;
+          console.log('[SIGN-API] Broadcast successful with innopay authority (fallback)! TX:', broadcastResult.id);
+        } else {
+          // Other error - rethrow
+          throw userKeyError;
+        }
+      }
+    }
 
     // Add CORS headers for cross-origin requests from indiesmenu
     const response = NextResponse.json({
       success: true,
-      txId: broadcastResult.id
+      txId: broadcastResult.id,
+      usedFallback // Include whether fallback was used
     }, { status: 200 });
 
     response.headers.set('Access-Control-Allow-Origin', '*');

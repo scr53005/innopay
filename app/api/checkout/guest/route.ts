@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
       success_url: successUrl,
       cancel_url: cancelUrl,
       metadata: {
-        flow: 'guest',
+        flow: 'guest_checkout',
         amountEuro: amountEuro.toString(),
         hbdAmount: hbdAmount.toFixed(3),
         recipient,

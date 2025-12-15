@@ -1,10 +1,25 @@
 // app/api/checkout/account/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import { detectFlow, getRedirectUrl, FLOW_METADATA, type FlowContext } from '@/lib/flows';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-06-30.basil',
 });
+
+// CORS headers for cross-origin requests from indiesmenu
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*', // In production, set this to specific origin
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+/**
+ * OPTIONS handler for CORS preflight requests
+ */
+export async function OPTIONS() {
+  return NextResponse.json({}, { headers: corsHeaders });
+}
 
 /**
  * POST /api/checkout/account
@@ -30,23 +45,55 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
  */
 export async function POST(req: NextRequest) {
   try {
-    const { flow = 'account_creation', accountName, amount, email, campaign, orderAmountEuro, orderMemo, redirectParams } = await req.json();
+    const {
+      accountName,
+      amount,
+      email,
+      campaign,
+      orderAmountEuro,
+      orderMemo,
+      redirectParams,
+      hasLocalStorageAccount,
+      accountBalance,
+      mockAccountCreation,
+      returnUrl,  // Custom return URL for Flow 7 (pay_with_topup)
+    } = await req.json();
 
-    console.log(`[${new Date().toISOString()}] [CHECKOUT API] Received request:`, {
-      flow,
+    // DETECT FLOW using the systematic flow management system
+    const flowContext: FlowContext = {
+      hasLocalStorageAccount: hasLocalStorageAccount || false,
+      accountName,
+      table: redirectParams?.table,
+      orderAmount: redirectParams?.orderAmount || orderAmountEuro?.toString(),
+      orderMemo: redirectParams?.orderMemo || orderMemo,
+      topupAmount: amount?.toString(),
+      accountBalance,
+    };
+
+    const detectedFlow = detectFlow(flowContext);
+    const flowMetadata = FLOW_METADATA[detectedFlow];
+
+    // Extract order data from redirectParams for metadata (Flow 7)
+    const finalOrderAmountEuro = orderAmountEuro || (redirectParams?.orderAmount ? parseFloat(redirectParams.orderAmount) : undefined);
+    const finalOrderMemo = orderMemo || redirectParams?.orderMemo;
+
+    console.log(`[${new Date().toISOString()}] [CHECKOUT API] Flow Detection:`, {
+      detectedFlow,
+      category: flowMetadata.category,
+      description: flowMetadata.description,
       accountName,
       amount,
       orderAmountEuro,
       orderMemo,
       orderMemoLength: orderMemo?.length,
-      redirectParams
+      redirectParams,
     });
 
     // Validate required fields
     if (!accountName || !amount) {
       return NextResponse.json(
         { error: 'Missing required fields: accountName, amount' },
-        { status: 400 }
+        { status: 400, headers: corsHeaders }
       );
     }
 
@@ -60,23 +107,23 @@ export async function POST(req: NextRequest) {
     if (accountName.length < 3 || accountName.length > 16) {
       return NextResponse.json(
         { error: 'Account name must be between 3 and 16 characters' },
-        { status: 400 }
+        { status: 400, headers: corsHeaders }
       );
     }
 
     if (!/^[a-z0-9\-\.]+$/.test(accountName)) {
       return NextResponse.json(
         { error: 'Account name can only contain lowercase letters, numbers, hyphens, and dots' },
-        { status: 400 }
+        { status: 400, headers: corsHeaders }
       );
     }
 
     // Validate minimum amount (TEMP: reduced for testing - was 30 EUR for account creation, 15 EUR for top-up)
-    const minAmount = flow === 'topup' ? 15 : 3;
+    const minAmount = detectedFlow === 'topup' ? 15 : 3;
     if (amount < minAmount) {
       return NextResponse.json(
-        { error: `Minimum amount is ${minAmount} EUR for ${flow === 'topup' ? 'top-up' : 'account creation'}` },
-        { status: 400 }
+        { error: `Minimum amount is ${minAmount} EUR for ${flowMetadata.category === 'internal' && detectedFlow === 'topup' ? 'top-up' : 'account creation'}` },
+        { status: 400, headers: corsHeaders }
       );
     }
 
@@ -84,11 +131,18 @@ export async function POST(req: NextRequest) {
 
     console.log(`Account creation checkout: ${accountName}, amount: ${amount} EUR`);
 
-    // Prepare metadata
+    // Prepare metadata with detected flow
     const metadata: any = {
-      flow,
+      flow: detectedFlow,  // Use detected flow instead of passed parameter
+      flowCategory: flowMetadata.category,
       accountName,
     };
+
+    // Add mock flag if enabled (for dev/test environments)
+    if (mockAccountCreation) {
+      metadata.mockAccountCreation = 'true';
+      console.log(`[${new Date().toISOString()}] [CHECKOUT API] Mock account creation enabled`);
+    }
 
     // Add campaign ID if provided (to track bonus eligibility)
     if (campaign) {
@@ -96,29 +150,45 @@ export async function POST(req: NextRequest) {
     }
 
     // Add order info if provided (for indiesmenu orders)
-    if (orderAmountEuro) {
-      metadata.orderAmountEuro = orderAmountEuro.toString();
-      metadata.orderMemo = orderMemo || 'Table order';
+    if (finalOrderAmountEuro) {
+      // CRITICAL: Order amount without memo is INVALID - restaurant can't match payment to order
+      if (!finalOrderMemo || finalOrderMemo.trim() === '') {
+        console.error(`[${new Date().toISOString()}] [CHECKOUT API] ❌ CRITICAL ERROR: Order amount ${finalOrderAmountEuro} but NO MEMO!`);
+        return NextResponse.json(
+          {
+            error: 'Invalid order: memo is required when order amount is specified',
+            details: 'Cannot process restaurant payment without order memo for order matching',
+          },
+          { status: 400, headers: corsHeaders }
+        );
+      }
+
+      metadata.orderAmountEuro = finalOrderAmountEuro.toString();
+      metadata.orderMemo = finalOrderMemo;
       console.log(`[${new Date().toISOString()}] [CHECKOUT API] Adding order metadata:`, {
         orderAmountEuro: metadata.orderAmountEuro,
         orderMemo: metadata.orderMemo,
         memoLength: metadata.orderMemo.length
       });
-      if (!orderMemo) {
-        console.warn(`[${new Date().toISOString()}] [CHECKOUT API] ⚠️ WARNING: No orderMemo provided, using fallback 'Table order'`);
-      }
     }
 
-    // Build product name and description based on flow type
+    // Build product name and description based on flow category
     let productName: string;
     let productDescription: string;
 
-    if (flow === 'topup') {
-      // Top-up flow: No campaign bonuses for returning users
+    if (flowMetadata.category === 'internal' && detectedFlow === 'topup') {
+      // Internal top-up flow
       productName = 'Innopay Account Top-up';
       productDescription = `Top-up Innopay account "${accountName}" with ${amount} EUR`;
+    } else if (flowMetadata.category === 'external') {
+      // External flow (restaurant)
+      productName = 'Innopay Payment';
+      productDescription = `Process payment for restaurant order`;
+      if (orderAmountEuro) {
+        productDescription += ` (Order: ${orderAmountEuro} EUR)`;
+      }
     } else {
-      // Account creation flow: Include campaign bonuses
+      // Account creation flows
       productName = 'Innopay Account Creation & Top-up';
       productDescription = `Create Innopay account "${accountName}" and top-up with ${amount} EUR `;
       productDescription += `\n\n Please provide a valid e-mail during checkout to receive account details. `;
@@ -160,16 +230,50 @@ export async function POST(req: NextRequest) {
       payment_intent_data: {
         setup_future_usage: undefined,
       },
-      success_url: redirectParams?.orderAmount
-        ? `${baseUrl.replace('wallet.innopay.lu', 'menu.indiesmenu.lu').replace('localhost:3000', 'localhost:3001')}/?${redirectParams.table ? `table=${redirectParams.table}&` : ''}topup_success=true`
-        : flow === 'topup'
-          ? `${baseUrl}/?topup_success=true&session_id={CHECKOUT_SESSION_ID}`
-          : `${baseUrl}/user/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: redirectParams?.orderAmount
-        ? `${baseUrl.replace('wallet.innopay.lu', 'menu.indiesmenu.lu').replace('localhost:3000', 'localhost:3001')}/?${redirectParams.table ? `table=${redirectParams.table}&` : ''}cancelled=true`
-        : flow === 'topup'
-          ? `${baseUrl}/?cancelled=true`
-          : `${baseUrl}/user?cancelled=true`,
+      // Use flow-based redirect URLs
+      ...(() => {
+        // FLOW 7: If custom returnUrl is provided (pay_with_topup from indiesmenu)
+        if (returnUrl) {
+          console.log(`[${new Date().toISOString()}] [CHECKOUT API] Using custom returnUrl for Flow 7:`, returnUrl);
+
+          // Append order_success=true to match what the menu page expects
+          // Note: The webhook also provides credentials via credential_token
+          const separator = returnUrl.includes('?') ? '&' : '?';
+          const successUrl = `${returnUrl}${separator}order_success=true&session_id={CHECKOUT_SESSION_ID}`;
+          const cancelUrl = `${returnUrl}${separator}topup_cancelled=true`;
+
+          return {
+            success_url: successUrl,
+            cancel_url: cancelUrl,
+          };
+        }
+
+        // For create_account_and_pay, calculate the remaining balance after order
+        const optimisticAmount = detectedFlow === 'create_account_and_pay' && orderAmountEuro
+          ? amount - parseFloat(orderAmountEuro.toString())
+          : amount;
+
+        const redirectUrls = getRedirectUrl(detectedFlow, baseUrl, {
+          table: redirectParams?.table,
+          sessionId: '{CHECKOUT_SESSION_ID}',
+          amount: optimisticAmount, // Pass remaining balance for optimistic display
+        });
+
+        // Special handling for INTERNAL account creation flow only
+        // External flows (create_account_only, create_account_and_pay) should redirect to restaurant
+        if (detectedFlow === 'new_account') {
+          return {
+            success_url: `${baseUrl}/user/success?session_id={CHECKOUT_SESSION_ID}&amount=${amount}`,
+            cancel_url: `${baseUrl}/user?cancelled=true`,
+          };
+        }
+
+        // For external flows, use flow-based redirect URLs
+        return {
+          success_url: redirectUrls.success,
+          cancel_url: redirectUrls.cancel,
+        };
+      })(),
       metadata,
     };
 
@@ -189,7 +293,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       sessionId: session.id,
       url: session.url,
-    });
+    }, { headers: corsHeaders });
 
   } catch (error: any) {
     console.error('Error creating account checkout session:', error);
@@ -198,7 +302,7 @@ export async function POST(req: NextRequest) {
         error: 'Failed to create checkout session',
         message: process.env.NODE_ENV === 'development' ? error.message : undefined
       },
-      { status: 500 }
+      { status: 500, headers: corsHeaders }
     );
   }
 }

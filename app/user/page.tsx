@@ -6,11 +6,41 @@ import 'react-toastify/dist/ReactToastify.css';
 import { useDropzone } from 'react-dropzone'; // For image picker
 import confetti from 'canvas-confetti';
 import Image from 'next/image';
+import MiniWallet, { WalletReopenButton } from '@/app/components/MiniWallet';
 
 // Check if in dev/test environment
 const isDevOrTest = process.env.NEXT_PUBLIC_ENV !== 'production';
 const innopayLogoUrl = "/innopay.svg";
 const defaultAvatarUrl = "/images/Koala-BlueBg.png";
+
+// Helper function to get spoke URL based on environment (hub-and-spoke architecture)
+const getSpokeUrl = (spoke: string): string => {
+  if (typeof window === 'undefined') {
+    // SSR fallback - return localhost for 'indies' spoke
+    return spoke === 'indies' ? 'http://localhost:3001' : '/';
+  }
+
+  const hostname = window.location.hostname;
+
+  // Production environment
+  if (hostname === 'wallet.innopay.lu') {
+    if (spoke === 'indies') return 'https://indies.innopay.lu';
+    // Future spokes can be added here
+    return '/';
+  }
+
+  // Mobile testing (Android/iOS on local network)
+  if (hostname.startsWith('192.168.')) {
+    if (spoke === 'indies') return 'http://192.168.178.55:3001';
+    // Future spokes: add mobile testing URLs here
+    return '/';
+  }
+
+  // Desktop/localhost testing
+  if (spoke === 'indies') return 'http://localhost:3001';
+  // Future spokes: add localhost ports here (e.g., 'spoke2': 'http://localhost:3002')
+  return '/';
+};
 
 export type Metadata = { 
   name: string;
@@ -40,6 +70,45 @@ const isFormFilled = (metadata: Metadata) => {
   );
 };
 
+// Language type
+type Language = 'fr' | 'en' | 'de' | 'lb';
+
+// Translations for success messages
+const translations = {
+  fr: {
+    accountIs: "Votre compte Innopay est:",
+    registeredWith: "et vous vous êtes enregistré avec l'email:",
+    callToAction: "Améliorez votre profil pour gagner des réductions ou explorez les boutiques et restaurants Innopay à proximité.",
+    beautifyProfile: "Améliorer mon profil",
+    exploreShops: "Explorer les boutiques Innopay",
+    returnToMerchant: "Revenir au site marchand"
+  },
+  en: {
+    accountIs: "Your Innopay account is:",
+    registeredWith: "and you registered with email:",
+    callToAction: "Beautify your profile to earn discounts or explore the nearby Innopay shops and restaurants.",
+    beautifyProfile: "Beautify profile",
+    exploreShops: "Explore Innopay shops",
+    returnToMerchant: "Return to merchant site"
+  },
+  de: {
+    accountIs: "Ihr Innopay-Konto ist:",
+    registeredWith: "und Sie haben sich mit der E-Mail registriert:",
+    callToAction: "Verschönern Sie Ihr Profil, um Rabatte zu verdienen oder erkunden Sie die nahegelegenen Innopay-Geschäfte und Restaurants.",
+    beautifyProfile: "Profil verschönern",
+    exploreShops: "Innopay-Geschäfte erkunden",
+    returnToMerchant: "Zurück zur Händlerseite"
+  },
+  lb: {
+    accountIs: "Äert Innopay Konto ass:",
+    registeredWith: "an Dir hutt Iech mat der E-Mail registréiert:",
+    callToAction: "Verschéinert Äert Profil fir Rabatter ze verdéngen oder entdeckt déi no Innopay Geschäfter a Restauranten.",
+    beautifyProfile: "Profil verschéineren",
+    exploreShops: "Innopay Geschäfter entdecken",
+    returnToMerchant: "Zréck op d'Händler-Säit"
+  }
+};
+
 export default function HiveAccountCreationPage() {
   const [accountName, setAccountName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -50,6 +119,9 @@ export default function HiveAccountCreationPage() {
     seed: '',
     masterPassword: '',
   });
+
+  // Language state
+  const [language, setLanguage] = useState<Language>('fr');
 
   // State for metadata form
   const [metadata, setMetadata] = useState({
@@ -75,8 +147,12 @@ export default function HiveAccountCreationPage() {
   const [backgroundUploading, setBackgroundUploading] = useState(false);
 
   // New state for existing account from localStorage
-  const [existingAccount, setExistingAccount] = useState<{ accountName: string; masterPassword: string; seed: string } | null>(null);
+  const [existingAccount, setExistingAccount] = useState<{ accountName: string; masterPassword: string; seed: string; email?: string } | null>(null);
   const [showUpdateForm, setShowUpdateForm] = useState(false);
+
+  // State for account balance (for MiniWallet)
+  const [accountBalance, setAccountBalance] = useState<number | null>(null);
+  const [showWalletBalance, setShowWalletBalance] = useState(true); // Show wallet by default when account exists
 
   const [isUsernameValid, setIsUsernameValid] = useState(false);
   const [validationMessage, setValidationMessage] = useState('');
@@ -101,12 +177,30 @@ export default function HiveAccountCreationPage() {
   } | null>(null);
   const [loadingCampaign, setLoadingCampaign] = useState(true);
 
+  // State for user choice (Import vs Create)
+  const [userChoice, setUserChoice] = useState<'import' | 'create' | null>(null);
+
+  // State for import account functionality
+  const [importEmail, setImportEmail] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState('');
+  const [importAttempts, setImportAttempts] = useState(5);
+  const [importStep, setImportStep] = useState<'email' | 'code' | 'select'>('email');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [multipleAccounts, setMultipleAccounts] = useState<Array<{
+    accountName: string;
+    creationDate: string;
+    euroBalance: number;
+  }>>([]);
+
   // State for amount selection
   const [topupAmount, setTopupAmount] = useState(5); // Default 5€ (TEMP: reduced for testing)
   const [minimumAmount, setMinimumAmount] = useState(3); // TEMP: reduced from 30€ to 3€ for testing
   const [orderAmount, setOrderAmount] = useState<number | null>(null); // Amount from indiesmenu order
   const [discount, setDiscount] = useState<number | null>(null); // Discount from indiesmenu order
   const [orderMemo, setOrderMemo] = useState<string | null>(null); // Memo from indiesmenu order (table, order details)
+  const [restaurant, setRestaurant] = useState<string>('indies'); // Restaurant identifier (default: indies)
+  const [restaurantAccount, setRestaurantAccount] = useState<string>('indies.cafe'); // Restaurant Hive account (default: indies.cafe)
 
   // State for draggable validation toast
   const [toastPosition, setToastPosition] = useState({ x: 0, y: -60 }); // Start closer to input
@@ -118,6 +212,10 @@ export default function HiveAccountCreationPage() {
 
   // Ref for debouncing HAF availability check
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Ref to prevent double-fetching in React StrictMode (dev only)
+  const hasFetchedUsername = useRef(false);
+  const hasFetchedCampaign = useRef(false);
 
   // Refs for revoking object URLs
   const avatarPreviewRef = useCallback((url: string | null) => {
@@ -131,22 +229,226 @@ export default function HiveAccountCreationPage() {
     }
   }, [backgroundPreviewUrl]);
 
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // FLOW 5 EXISTING ACCOUNT HANDLER
+  // When user arrives for account creation but already has an account
+  // ═══════════════════════════════════════════════════════════════════════════════
+  const handleExistingAccountFlow5 = async (
+    accountName: string,
+    masterPassword: string,
+    orderAmount: number,
+    table: string | null,
+    orderMemo: string | null,
+    restaurant: string,
+    restaurantAccount: string
+  ) => {
+    try {
+      console.log('[FLOW 5 EXISTING ACCOUNT] Unified approach - checking balance');
+
+      // Step 1: Fetch robust EURO balance
+      const balanceResponse = await fetch(`/api/balance/euro?account=${accountName}`);
+      if (!balanceResponse.ok) {
+        throw new Error('Failed to fetch balance');
+      }
+      const balanceData = await balanceResponse.json();
+      const euroBalance = balanceData.balance;
+
+      console.log('[FLOW 5 EXISTING ACCOUNT] Balance:', euroBalance, 'Order:', orderAmount);
+
+      // Step 2: Branch based on balance
+      if (euroBalance >= orderAmount) {
+        // BRANCH A: Sufficient balance - Execute payment directly in innopay
+        console.log('[FLOW 5 BRANCH A] Sufficient balance - executing payment in innopay');
+
+        alert('Balance suffisant! Paiement en cours...');
+
+        console.log('[FLOW 5 BRANCH A] Calling execute-order-payment API');
+
+        // Call the execute-order-payment API
+        const paymentResponse = await fetch('/api/execute-order-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            accountName,
+            orderAmount,
+            orderMemo: orderMemo || '',  // Empty string will be caught by API validation
+            restaurantAccount,
+            table: table || undefined
+          })
+        });
+
+        if (!paymentResponse.ok) {
+          const errorData = await paymentResponse.json();
+          throw new Error(errorData.message || 'Payment execution failed');
+        }
+
+        const paymentData = await paymentResponse.json();
+        console.log('[FLOW 5 BRANCH A] Payment successful:', paymentData);
+        console.log('[FLOW 5 BRANCH A] Transaction IDs:', {
+          customerEuroTx: paymentData.customerEuroTxId,
+          restaurantHbdTx: paymentData.restaurantHbdTxId,
+          restaurantEuroTx: paymentData.restaurantEuroTxId
+        });
+
+        // Redirect to restaurant with success
+        alert('Paiement réussi! Redirection vers le restaurant...');
+        window.location.href = paymentData.redirectUrl;
+
+      } else {
+        // BRANCH B: Insufficient balance - Redirect to Stripe topup with order context
+        console.log('[FLOW 5 BRANCH B] Insufficient balance - redirecting to Stripe topup');
+
+        const deficit = orderAmount - euroBalance;
+
+        // Round deficit UP to nearest euro first
+        const deficitRoundedUp = Math.ceil(deficit);
+
+        // Then round UP to nearest 5€ increment
+        const topupAmount = Math.max(
+          Math.ceil(deficitRoundedUp / 5) * 5, // Round up to nearest 5€
+          15 // Minimum 15€
+        );
+
+        console.log('[FLOW 5 BRANCH B] Topup calculation:', {
+          deficitRaw: deficit,
+          deficitRoundedUp: deficitRoundedUp,
+          topupAmount: topupAmount
+        });
+
+        alert(`Balance insuffisant (${euroBalance.toFixed(2)}€). Rechargement de ${topupAmount}€ nécessaire.`);
+
+        // Redirect to Stripe checkout with order context in metadata
+        const checkoutResponse = await fetch('/api/checkout/account', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: topupAmount, // Already rounded to nearest 5€
+            accountName,
+            email: localStorage.getItem('innopay_email') || undefined,
+            redirectParams: {
+              table,
+              orderAmount: orderAmount.toString(),
+              orderMemo
+            },
+            hasLocalStorageAccount: true,
+            accountBalance: euroBalance
+          })
+        });
+
+        if (!checkoutResponse.ok) {
+          throw new Error('Failed to create Stripe checkout');
+        }
+
+        const checkoutData = await checkoutResponse.json();
+
+        if (checkoutData.url) {
+          console.log('[FLOW 5 BRANCH B] Redirecting to Stripe:', checkoutData.url);
+          window.location.href = checkoutData.url;
+        } else {
+          throw new Error('No checkout URL received');
+        }
+      }
+
+    } catch (error: any) {
+      console.error('[FLOW 5 EXISTING ACCOUNT] Error:', error);
+      alert(`Erreur: ${error.message}`);
+    }
+  };
+
+  // 🔧 DEBUG: Load Eruda for mobile debugging (REMOVE AFTER TESTING)
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/eruda';
+    script.onload = () => {
+      if ((window as any).eruda) {
+        (window as any).eruda.init();
+        console.log('🔧 Eruda mobile debugger loaded - tap floating button to open console');
+      }
+    };
+    document.body.appendChild(script);
+
+    return () => {
+      // Cleanup on unmount
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    };
+  }, []);
+
   // Load existing account from localStorage on mount + check for order amount from URL
   useEffect(() => {
-    // Check URL for order amount and discount (from indiesmenu)
+    // Load import attempts from localStorage
+    const storedAttempts = localStorage.getItem('innopay_import_attempts');
+    if (storedAttempts) {
+      setImportAttempts(parseInt(storedAttempts, 10));
+    }
+
+    // Check URL for account_created flag (from /user/success after new_account flow)
     const params = new URLSearchParams(window.location.search);
+    const accountCreated = params.get('account_created');
+
+    if (accountCreated === 'true') {
+      console.log('[USER PAGE] ✨ New account creation detected! Showing celebration...');
+
+      // Trigger confetti celebration
+      triggerConfetti();
+
+      // Get account details from localStorage (already stored by success page)
+      const accountName = localStorage.getItem('innopay_accountName');
+      const masterPassword = localStorage.getItem('innopay_masterPassword');
+      const balance = localStorage.getItem('innopay_lastBalance');
+      const email = localStorage.getItem('innopay_email');
+
+      if (accountName && masterPassword) {
+        setSuccess(true);
+        setResults({
+          accountName,
+          masterPassword,
+          seed: '', // Seed not needed for display
+        });
+        setExistingAccount({
+          accountName,
+          masterPassword,
+          seed: '', // Seed not needed
+          email: email || undefined,
+        });
+
+        // Set balance from localStorage (optimistic balance from credential session)
+        if (balance) {
+          const balanceNum = parseFloat(balance);
+          if (!isNaN(balanceNum)) {
+            setAccountBalance(balanceNum);
+            console.log('[USER PAGE] Account created:', accountName, 'Balance:', balanceNum, '€ (from localStorage)');
+          }
+        }
+      }
+
+      // Clean up URL
+      window.history.replaceState({}, '', '/user');
+    }
 
     const orderParam = params.get('order_amount');
     if (orderParam) {
       const parsedOrder = parseFloat(orderParam);
-      if (!isNaN(parsedOrder) && parsedOrder > 0) {
+      if (!isNaN(parsedOrder) && parsedOrder >= 0) { // Changed from > 0 to >= 0 to support create_account_only (order=0)
         setOrderAmount(parsedOrder);
-        // Set minimum to max(3, orderAmount) - TEMP: reduced from 30€ for testing
-        const calculatedMin = Math.max(3, parsedOrder);
-        setMinimumAmount(calculatedMin);
-        // Set initial topup to the minimum
-        setTopupAmount(calculatedMin);
-        console.log(`[ORDER] Detected order amount: ${parsedOrder}€, minimum set to: ${calculatedMin}€`);
+
+        if (parsedOrder > 0) {
+          // create_account_and_pay: minimum must cover both account creation AND order
+          // Round UP to nearest 5€ increment with minimum 15€
+          const baseAmount = Math.max(3, parsedOrder);
+          const calculatedMin = Math.max(
+            Math.ceil(baseAmount / 5) * 5,
+            15
+          );
+          setMinimumAmount(calculatedMin);
+          setTopupAmount(calculatedMin);
+          console.log(`[ORDER] create_account_and_pay flow: order=${parsedOrder}€, rounded to: ${calculatedMin}€`);
+        } else {
+          // create_account_only: minimum is just the account creation minimum (3€)
+          // Keep default minimumAmount (3€) - no need to adjust
+          console.log(`[ORDER] create_account_only flow: order_amount=0, minimum remains at account creation minimum (3€)`);
+        }
       }
     }
 
@@ -166,14 +468,114 @@ export default function HiveAccountCreationPage() {
       console.log(`[${new Date().toISOString()}] [ACCOUNT CREATION FRONTEND] Memo length:`, memoParam.length);
     }
 
-    console.log('Checking localStorage for existing account...');
-    const acc = localStorage.getItem('innopayAccountName');
-    const pass = localStorage.getItem('innopayMasterPassword');
-    const seed = localStorage.getItem('innopaySeed');
-    if (acc && pass && seed) {
-      setExistingAccount({ accountName: acc, masterPassword: pass, seed });
-      // Set results state for rendering welcome message
-      setResults({ accountName: acc, masterPassword: pass, seed });
+    // Read restaurant identification parameters
+    const restaurantParam = params.get('restaurant');
+    if (restaurantParam) {
+      setRestaurant(restaurantParam);
+      console.log(`[RESTAURANT] Detected restaurant: ${restaurantParam}`);
+    }
+
+    const restaurantAccountParam = params.get('restaurant_account');
+    if (restaurantAccountParam) {
+      setRestaurantAccount(restaurantAccountParam);
+      console.log(`[RESTAURANT] Detected restaurant account: ${restaurantAccountParam}`);
+    }
+
+    // FIRST PRIORITY: Check localStorage for existing account
+    console.log('[USER PAGE] Checking localStorage for existing account...');
+    const acc = localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName');
+    const pass = localStorage.getItem('innopay_masterPassword') || localStorage.getItem('innopayMasterPassword');
+    const seed = localStorage.getItem('innopay_seed') || localStorage.getItem('innopaySeed');
+
+    if (acc && pass) {
+      // Account exists! Show existing account view
+      console.log('[USER PAGE] ✅ Existing account found in localStorage:', acc);
+
+      // Check if this is Flow 5 (create_account_and_pay) with existing account
+      const orderParam = params.get('order_amount');
+      const tableParam = params.get('table');
+      // Try both 'memo' (from indiesmenu) and 'order_memo' (legacy) for backward compatibility
+      const memoParam = params.get('memo') || params.get('order_memo');
+
+      if (orderParam && parseFloat(orderParam) > 0) {
+        // Flow 5 with existing account - need to redirect back to indiesmenu with credentials
+        console.log('[FLOW 5 EXISTING ACCOUNT] Detected Flow 5 with existing account');
+        console.log('[FLOW 5 EXISTING ACCOUNT] Order:', orderParam, 'Table:', tableParam);
+
+        // Handle Flow 5 existing account redirect
+        // Get restaurant parameters from state (set earlier from URL params)
+        const restaurantParam = params.get('restaurant') || 'indies';
+        const restaurantAccountParam = params.get('restaurant_account') || 'indies.cafe';
+
+        handleExistingAccountFlow5(acc, pass, parseFloat(orderParam), tableParam, memoParam, restaurantParam, restaurantAccountParam);
+        return; // Exit early - redirect will happen
+      }
+
+      // Try to get email from localStorage (stored during account creation)
+      const email = localStorage.getItem('innopay_email');
+
+      setExistingAccount({ accountName: acc, masterPassword: pass, seed: seed || '', email: email || undefined });
+      setResults({ accountName: acc, masterPassword: pass, seed: seed || '' });
+      setSuccess(true); // Show success state (existing account view)
+
+      // Check if this is a mock account (starts with "mockaccount")
+      const isMockAccount = acc.startsWith('mockaccount');
+
+      if (isMockAccount) {
+        // For mock accounts, use cached balance from localStorage (don't fetch from blockchain)
+        console.log('[USER PAGE] Mock account detected:', acc);
+        const cachedBalance = localStorage.getItem('innopay_lastBalance');
+        if (cachedBalance) {
+          const balanceNum = parseFloat(cachedBalance);
+          if (!isNaN(balanceNum)) {
+            setAccountBalance(balanceNum);
+            console.log('[USER PAGE] Using cached balance for mock account:', balanceNum, '€');
+          } else {
+            setAccountBalance(0);
+          }
+        } else {
+          setAccountBalance(0);
+        }
+      } else {
+        // For real accounts, fetch balance from Hive-Engine
+        const fetchBalance = async () => {
+          try {
+            const response = await fetch('https://api.hive-engine.com/rpc/contracts', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                jsonrpc: '2.0',
+                method: 'find',
+                params: {
+                  contract: 'tokens',
+                  table: 'balances',
+                  query: { account: acc, symbol: 'EURO' },
+                },
+                id: 1,
+              }),
+            });
+
+            if (response.ok) {
+              const data = await response.json();
+              if (data.result && data.result.length > 0) {
+                const balance = parseFloat(data.result[0].balance);
+                setAccountBalance(balance);
+                console.log('[USER PAGE] Balance fetched from Hive-Engine:', balance, '€');
+
+                // Save to localStorage for optimistic balance calculations
+                localStorage.setItem('innopay_lastBalance', balance.toString());
+              } else {
+                setAccountBalance(0);
+                localStorage.setItem('innopay_lastBalance', '0');
+              }
+            }
+          } catch (e) {
+            console.error("[USER PAGE] Failed to fetch balance:", e);
+            setAccountBalance(0);
+          }
+        };
+        fetchBalance();
+      }
 
       // Fetch metadata for existing account
       const fetchMetadata = async () => {
@@ -191,17 +593,23 @@ export default function HiveAccountCreationPage() {
             }
           }
         } catch (e) {
-          console.error("Failed to fetch existing account metadata:", e);
+          console.error("[USER PAGE] Failed to fetch existing account metadata:", e);
         }
       };
-      fetchMetadata();      
-
-      console.log('Existing account found in localStorage:', acc);
+      fetchMetadata();
     } else {
-      console.log('No existing account found in localStorage.');
+      // NO ACCOUNT EXISTS - prepare for account creation
+      console.log('[USER PAGE] No existing account found. Preparing account creation form...');
 
       // Fetch suggested username for lazy users (with sessionStorage cache)
       const fetchSuggestedUsername = async () => {
+        // Prevent double-fetch in React StrictMode (development only)
+        if (hasFetchedUsername.current) {
+          console.log('[SUGGESTED USERNAME] Skipping fetch (already initiated)');
+          return;
+        }
+        hasFetchedUsername.current = true;
+
         // Try to load from sessionStorage first (instant render on refresh)
         const cached = sessionStorage.getItem('innopay_suggested_username');
         if (cached) {
@@ -242,6 +650,13 @@ export default function HiveAccountCreationPage() {
 
       // Fetch active campaign
       const fetchActiveCampaign = async () => {
+        // Prevent double-fetch in React StrictMode (development only)
+        if (hasFetchedCampaign.current) {
+          console.log('[CAMPAIGN] Skipping fetch (already initiated)');
+          return;
+        }
+        hasFetchedCampaign.current = true;
+
         try {
           const response = await fetch('/api/campaigns/active');
           if (response.ok) {
@@ -469,10 +884,12 @@ export default function HiveAccountCreationPage() {
         console.log(`[ACCOUNT CREATION] Amount adjusted from ${topupAmount}€ to minimum ${finalAmount}€`);
       }
 
-      // Prepare checkout request
+      // Prepare checkout request with flow context
       const checkoutBody: any = {
         accountName: accountName,
         amount: finalAmount,
+        hasLocalStorageAccount: false, // Always false on account creation page
+        mockAccountCreation: mockAccountCreation, // Pass mock flag for dev/test
       };
 
       // Add campaign info if available
@@ -480,21 +897,37 @@ export default function HiveAccountCreationPage() {
         checkoutBody.campaign = activeCampaign;
       }
 
-      // Add order info if coming from indiesmenu
-      if (orderAmount && orderAmount > 0) {
+      // Add redirect parameters if coming from restaurant (orderAmount exists, even if 0)
+      if (orderAmount !== null && orderAmount !== undefined) {
+        // Get table parameter from URL if present
+        const params = new URLSearchParams(window.location.search);
+        const table = params.get('table');
+
+        checkoutBody.redirectParams = {
+          table: table,
+          orderAmount: orderAmount.toString(),
+          orderMemo: orderMemo || '',  // Empty string will trigger error in checkout API if order amount > 0
+        };
+
+        // Also add as top-level for backward compatibility
         checkoutBody.orderAmountEuro = orderAmount;
-        checkoutBody.orderMemo = orderMemo || `Table order - ${finalAmount}€`;
-        console.log(`[${new Date().toISOString()}] [ACCOUNT CREATION FRONTEND] Including order info in checkout body:`, {
+        checkoutBody.orderMemo = orderMemo || '';  // Empty string will trigger error in checkout API if order amount > 0
+
+        console.log(`[${new Date().toISOString()}] [ACCOUNT CREATION FRONTEND] Including flow context:`, {
+          hasLocalStorageAccount: false,
+          redirectParams: checkoutBody.redirectParams,
           orderAmountEuro: orderAmount,
           orderMemo: checkoutBody.orderMemo,
-          memoLength: checkoutBody.orderMemo?.length
+          memoLength: checkoutBody.orderMemo?.length,
+          flowType: orderAmount > 0 ? 'create_account_and_pay' : 'create_account_only'
         });
-        if (!orderMemo) {
-          console.warn(`[${new Date().toISOString()}] [ACCOUNT CREATION FRONTEND] ⚠️ WARNING: No memo provided, using fallback`);
+
+        if (orderAmount > 0 && !orderMemo) {
+          console.warn(`[${new Date().toISOString()}] [ACCOUNT CREATION FRONTEND] ⚠️ WARNING: Order amount > 0 but no memo provided, using fallback`);
         }
       }
 
-      console.log('[ACCOUNT CREATION] Creating checkout session:', checkoutBody);
+      console.log('[ACCOUNT CREATION] Creating checkout session with flow context:', checkoutBody);
 
       const response = await fetch('/api/checkout/account', {
         method: 'POST',
@@ -721,11 +1154,196 @@ export default function HiveAccountCreationPage() {
     maxFiles: 1,
   });
 
- /* flex flex-col items-center space-y-4 p-6 sm:p-8 bg-gradient-to-r from-blue-50 to-blue-100 border-2 border-blue-500 rounded-xl shadow-lg w-full max-w-md mb-6 mx-auto
- w-[80%] max-w-[300px] */ 
+  // Handle email submission (request verification code)
+  const handleRequestCode = async () => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const sanitizedEmail = importEmail.trim().toLowerCase();
+
+    if (!emailRegex.test(sanitizedEmail)) {
+      setImportError('Invalid email format / Format d\'email invalide');
+      setTimeout(() => setImportError(''), 3000);
+      return;
+    }
+
+    setImportLoading(true);
+    setImportError('');
+
+    try {
+      console.log('[VERIFY] Requesting code for:', sanitizedEmail);
+
+      const response = await fetch('/api/verify/request-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: sanitizedEmail, language: 'en' }) // TODO: Detect user language
+      });
+
+      const data = await response.json();
+      console.log('[VERIFY] Request response:', data);
+
+      if (data.found === true) {
+        // Code sent! Move to code entry step
+        setImportStep('code');
+        setImportLoading(false);
+      } else if (data.found === false) {
+        // Email not found - decrement attempts
+        const newAttempts = importAttempts - 1;
+        setImportAttempts(newAttempts);
+        localStorage.setItem('innopay_import_attempts', newAttempts.toString());
+
+        if (newAttempts <= 0) {
+          setImportError('Rien dans la base de données, désolé!');
+
+          // After showing error for 3 seconds, hide import form and show create account
+          setTimeout(() => {
+            setImportError('');
+            setImportLoading(false);
+            setUserChoice('create'); // Switch to create account view
+          }, 3000);
+        } else {
+          setImportError(`Vous avez peut-être utilisé une adresse mail différente (${newAttempts} tentatives restantes)`);
+
+          setTimeout(() => {
+            setImportError('');
+            setImportLoading(false);
+          }, 3000);
+        }
+      } else if (data.error) {
+        setImportError(data.error);
+        setTimeout(() => {
+          setImportError('');
+          setImportLoading(false);
+        }, 3000);
+      }
+    } catch (error) {
+      console.error('[VERIFY] Network error:', error);
+      setImportError('Erreur de connexion au serveur');
+      setTimeout(() => {
+        setImportError('');
+        setImportLoading(false);
+      }, 3000);
+    }
+  };
+
+  // Handle verification code submission
+  const handleVerifyCode = async () => {
+    if (!verificationCode || verificationCode.length !== 6) {
+      setImportError('Please enter a 6-digit code / Entrez un code à 6 chiffres');
+      setTimeout(() => setImportError(''), 3000);
+      return;
+    }
+
+    setImportLoading(true);
+    setImportError('');
+
+    try {
+      console.log('[VERIFY] Checking code:', verificationCode);
+
+      const response = await fetch('/api/verify/check-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: importEmail.trim().toLowerCase(),
+          code: verificationCode
+        })
+      });
+
+      const data = await response.json();
+      console.log('[VERIFY] Check response:', data);
+
+      if (data.success === true) {
+        if (data.single === true) {
+          // Single account - auto-import
+          console.log('[VERIFY] Single account found:', data.accountName);
+
+          localStorage.setItem('innopay_accountName', data.accountName);
+          localStorage.setItem('innopay_masterPassword', data.masterPassword || '');
+
+          if (data.keys) {
+            localStorage.setItem('innopay_activePrivate', data.keys.active);
+            localStorage.setItem('innopay_postingPrivate', data.keys.posting);
+            localStorage.setItem('innopay_memoPrivate', data.keys.memo);
+          }
+
+          // Redirect to main page
+          window.location.href = '/';
+
+        } else {
+          // Multiple accounts - show selection
+          console.log('[VERIFY] Multiple accounts found:', data.accounts);
+          setMultipleAccounts(data.accounts);
+          setImportStep('select');
+          setImportLoading(false);
+        }
+      } else if (data.error) {
+        setImportError(data.error);
+        setTimeout(() => {
+          setImportError('');
+          setImportLoading(false);
+        }, 3000);
+      }
+    } catch (error) {
+      console.error('[VERIFY] Network error:', error);
+      setImportError('Erreur de connexion au serveur');
+      setTimeout(() => {
+        setImportError('');
+        setImportLoading(false);
+      }, 3000);
+    }
+  };
+
+  // Handle account selection (when multiple accounts found)
+  const handleSelectAccount = async (accountName: string) => {
+    setImportLoading(true);
+    setImportError('');
+
+    try {
+      console.log('[VERIFY] Selecting account:', accountName);
+
+      const response = await fetch('/api/verify/get-credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountName,
+          email: importEmail.trim().toLowerCase()
+        })
+      });
+
+      const data = await response.json();
+      console.log('[VERIFY] Credentials response:', data);
+
+      if (data.accountName) {
+        localStorage.setItem('innopay_accountName', data.accountName);
+        localStorage.setItem('innopay_masterPassword', data.masterPassword || '');
+
+        if (data.keys) {
+          localStorage.setItem('innopay_activePrivate', data.keys.active);
+          localStorage.setItem('innopay_postingPrivate', data.keys.posting);
+          localStorage.setItem('innopay_memoPrivate', data.keys.memo);
+        }
+
+        // Redirect to main page
+        window.location.href = '/';
+      } else if (data.error) {
+        setImportError(data.error);
+        setTimeout(() => {
+          setImportError('');
+          setImportLoading(false);
+        }, 3000);
+      }
+    } catch (error) {
+      console.error('[VERIFY] Network error:', error);
+      setImportError('Erreur de connexion au serveur');
+      setTimeout(() => {
+        setImportError('');
+        setImportLoading(false);
+      }, 3000);
+    }
+  };
+
   const renderAccountCreationForm = () => (
     <>
-      <div className="flex flex-col items-center mb-4 p-4 bg-gradient-to-r from-blue-50 to-blue-100 border-2 border-blue-500 rounded-lg shadow-lg w-9/10 text-center">
+      {/* Logo in blue frame (positioned near top of page) */}
+      <div className="flex flex-col items-center mt-8 mb-8 p-4 bg-gradient-to-r from-blue-50 to-blue-100 border-2 border-blue-500 rounded-lg shadow-lg w-9/10 text-center">
         <div className="relative w-[80%] h-auto aspect-video">
           <Image
             src={innopayLogoUrl}
@@ -735,10 +1353,216 @@ export default function HiveAccountCreationPage() {
             priority={true}
           />
         </div>
-        <h1 className="text-3xl sm:text-4xl font-bold text-blue-900 text-center">
-          Créez votre compte Innopay
-        </h1>
       </div>
+
+      {/* Show two-button choice if user hasn't made a choice yet */}
+      {userChoice === null && (
+        <div className="flex flex-col items-center gap-6 w-full max-w-3xl px-4 sm:px-0">
+          <p className="text-lg text-center text-gray-700 mb-2">
+            Bienvenue! Choisissez une option:
+          </p>
+
+          {/* Side-by-side buttons on desktop, stacked on mobile */}
+          <div className="flex flex-col sm:flex-row items-center gap-4 w-full">
+            {/* Create Account - Primary Action (shown first/left) */}
+            <button
+              onClick={() => setUserChoice('create')}
+              className="w-full sm:w-1/2 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-bold py-4 px-6 rounded-lg transition duration-300 shadow-lg order-1"
+            >
+              Créez votre compte Innopay
+              <span className="block text-sm font-normal mt-1 opacity-90">Create your Innopay account</span>
+            </button>
+
+            {/* Import Account - Secondary Action (shown second/right, mother-of-pearl grey) */}
+            <button
+              onClick={() => setUserChoice('import')}
+              className="w-full sm:w-1/2 bg-gradient-to-r from-gray-100 to-gray-200 hover:from-gray-200 hover:to-gray-300 text-gray-900 font-semibold py-4 px-6 rounded-lg transition duration-300 shadow-md border border-gray-300 order-2"
+            >
+              Importer un compte
+              <span className="block text-sm font-normal mt-1 opacity-75">Import an account</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Show import form if user chose import */}
+      {userChoice === 'import' && (
+        <div className="w-full max-w-md px-4 sm:px-0">
+          <button
+            onClick={() => setUserChoice(null)}
+            className="mb-4 text-blue-600 hover:text-blue-800 text-sm flex items-center gap-1"
+          >
+            <span>←</span> Retour / Back
+          </button>
+
+          <h2 className="text-2xl font-bold text-gray-900 mb-4 text-center">
+            Importer un compte
+          </h2>
+          <p className="text-sm text-gray-600 mb-6 text-center">
+            Enter your email to recover your account.
+            <br />
+            <span className="italic">Entrez votre email pour récupérer votre compte.</span>
+          </p>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Email
+              </label>
+              <input
+                type="email"
+                value={importEmail}
+                onChange={(e) => setImportEmail(e.target.value)}
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter' && !importLoading && importStep === 'email') {
+                    handleRequestCode();
+                  }
+                }}
+                placeholder="your.email@example.com"
+                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white"
+                disabled={importLoading}
+                autoFocus
+              />
+            </div>
+
+            {importError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-sm">
+                {importError}
+              </div>
+            )}
+
+            <div className="text-xs text-gray-500">
+              Attempts remaining: {importAttempts} / 5
+            </div>
+
+            {/* Step 1: Email entry */}
+            {importStep === 'email' && (
+              <button
+                onClick={handleRequestCode}
+                disabled={importLoading || importAttempts <= 0}
+                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-indigo-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {importLoading ? (
+                  <span className="flex items-center justify-center">
+                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Sending code...
+                  </span>
+                ) : (
+                  'Send Verification Code / Envoyer le code'
+                )}
+              </button>
+            )}
+
+            {/* Step 2: Code entry */}
+            {importStep === 'code' && (
+              <div className="space-y-4">
+                <div className="bg-green-50 border border-green-200 text-green-700 px-3 py-2 rounded-lg text-sm">
+                  ✉️ Code sent to {importEmail}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Verification Code / Code de vérification
+                  </label>
+                  <input
+                    type="text"
+                    value={verificationCode}
+                    onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter' && !importLoading && verificationCode.length === 6) {
+                        handleVerifyCode();
+                      }
+                    }}
+                    placeholder="123456"
+                    maxLength={6}
+                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white text-center text-2xl font-mono tracking-widest"
+                    disabled={importLoading}
+                    autoFocus
+                  />
+                </div>
+
+                <button
+                  onClick={handleVerifyCode}
+                  disabled={importLoading || verificationCode.length !== 6}
+                  className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-indigo-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {importLoading ? (
+                    <span className="flex items-center justify-center">
+                      <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Verifying...
+                    </span>
+                  ) : (
+                    'Verify Code / Vérifier le code'
+                  )}
+                </button>
+
+                <button
+                  onClick={() => {
+                    setImportStep('email');
+                    setVerificationCode('');
+                    setImportError('');
+                  }}
+                  className="w-full text-blue-600 hover:text-blue-800 text-sm"
+                >
+                  ← Use a different email / Utiliser un autre email
+                </button>
+              </div>
+            )}
+
+            {/* Step 3: Account selection (multiple accounts) */}
+            {importStep === 'select' && (
+              <div className="space-y-4">
+                <div className="bg-blue-50 border border-blue-200 text-blue-700 px-3 py-2 rounded-lg text-sm">
+                  📋 {multipleAccounts.length} accounts found / comptes trouvés
+                </div>
+
+                <div className="space-y-3">
+                  {multipleAccounts.map((account) => (
+                    <div
+                      key={account.accountName}
+                      className="border-2 border-gray-200 rounded-lg p-4 hover:border-blue-500 transition-colors cursor-pointer"
+                      onClick={() => handleSelectAccount(account.accountName)}
+                    >
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <div className="font-semibold text-gray-900">{account.accountName}</div>
+                          <div className="text-sm text-gray-500">
+                            Created: {new Date(account.creationDate).toLocaleDateString()}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-lg font-bold text-blue-600">{account.euroBalance.toFixed(2)} €</div>
+                          <div className="text-xs text-gray-500">Balance</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Show account creation form if user chose create */}
+      {userChoice === 'create' && (
+        <>
+          <button
+            onClick={() => setUserChoice(null)}
+            className="mb-4 text-blue-600 hover:text-blue-800 text-sm flex items-center gap-1"
+          >
+            <span>←</span> Retour / Back
+          </button>
+
+          <h1 className="text-3xl sm:text-4xl font-bold text-blue-900 text-center mb-8">
+            Créez votre compte Innopay
+          </h1>
 
       {/* Loading state while fetching suggested username */}
       {loadingSuggestedUsername ? (
@@ -790,8 +1614,8 @@ export default function HiveAccountCreationPage() {
             }
           }}
           placeholder="Choisissez un nom d'utilisateur"
-          className={`w-full p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition-colors duration-300
-            ${accountName.length > 0 ? (isUsernameValid ? 'bg-green-200/50' : 'bg-red-200/50') : ''}`}
+          className={`w-full p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition-colors duration-300 text-gray-900
+            ${accountName.length > 0 ? (isUsernameValid ? 'bg-green-200/50' : 'bg-red-200/50') : 'bg-white'}`}
         />
     {/* Checkbox for account creation confirmation */}
     <label className="flex items-start space-x-3 mb-4 cursor-pointer group">
@@ -904,7 +1728,7 @@ export default function HiveAccountCreationPage() {
             setTopupAmount(minimumAmount);
           }
         }}
-        className="w-full p-4 border-2 border-blue-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg font-semibold"
+        className="w-full p-4 border-2 border-blue-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg font-semibold text-gray-900 bg-white"
       />
       <p className="mt-2 text-sm text-black font-medium">
         Vous pouvez entrer n'importe quel montant ≥ {minimumAmount}€. Choisissez un palier de campagne ci-dessus pour une sélection rapide.
@@ -918,7 +1742,31 @@ export default function HiveAccountCreationPage() {
           <input
             type="checkbox"
             checked={mockAccountCreation}
-            onChange={(e) => setMockAccountCreation(e.target.checked)}
+            onChange={(e) => {
+              const isChecked = e.target.checked;
+              setMockAccountCreation(isChecked);
+
+              // When checked, generate a random mock account name
+              if (isChecked) {
+                const randomNum = Math.floor(Math.random() * 10000);
+                const mockName = `mockaccount${randomNum}`;
+                setAccountName(mockName);
+                setIsUsernameValid(true);
+                setUsingSuggestedUsername(false);
+                console.log('[MOCK] Generated mock account name:', mockName);
+              } else {
+                // When unchecked, restore suggested username if available
+                if (suggestedUsername) {
+                  setAccountName(suggestedUsername);
+                  setIsUsernameValid(true);
+                  setUsingSuggestedUsername(true);
+                  console.log('[MOCK] Restored suggested username:', suggestedUsername);
+                } else {
+                  setAccountName('');
+                  setIsUsernameValid(false);
+                }
+              }
+            }}
             className="h-4 w-4 text-blue-500 focus:ring-blue-500 border-gray-300 rounded"
           />
           <span className="text-sm text-gray-700">Mock account creation</span>
@@ -954,6 +1802,8 @@ export default function HiveAccountCreationPage() {
   )}
         </>
       )}
+        </>
+      )}
     </>
   );
 
@@ -981,21 +1831,178 @@ export default function HiveAccountCreationPage() {
             </div>
             {!showUpdateForm ? (
               <>
-                <div className="mt-6 px-4 py-6 w-full bg-yellow-100 border border-yellow-400 text-blue-800 rounded-lg text-left">
-                  <h2 className="text-xl font-bold mb-2">Account Reminder</h2>
-                  <p className="mb-4 text-sm leading-snug break-words">
-                    Your Innopay account is <span className="font-mono font-bold text-blue-900 break-all">{existingAccount?.accountName}</span> and your master password is <br/><span className="font-mono font-bold text-blue-900 break-all">{existingAccount?.masterPassword}</span>.
+                {/* Language Selector */}
+                <div className="w-full flex justify-center gap-2 mb-4">
+                  {(['fr', 'en', 'de', 'lb'] as Language[]).map((lang) => (
+                    <button
+                      key={lang}
+                      onClick={() => setLanguage(lang)}
+                      className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
+                        language === lang
+                          ? 'bg-blue-600 text-white shadow-md'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      {lang.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Success Message */}
+                <div className="mt-6 px-4 py-6 w-full bg-gradient-to-r from-blue-50 to-blue-100 border-2 border-blue-500 rounded-lg text-center">
+                  <p className="text-lg font-semibold text-blue-900 mb-3">
+                    {translations[language].accountIs}
                   </p>
-                  <p className="text-sm">
-                    Please use these credentials to access your account.
+                  <p className="font-mono font-bold text-2xl text-blue-900 break-all mb-4">
+                    {existingAccount?.accountName}
+                  </p>
+                  {existingAccount?.email && (
+                    <>
+                      <p className="text-sm text-blue-800 mb-1">
+                        {translations[language].registeredWith}
+                      </p>
+                      <p className="font-mono text-base text-blue-900 break-all mb-4">
+                        {existingAccount.email}
+                      </p>
+                    </>
+                  )}
+                  <p className="text-base text-gray-700 mt-4">
+                    {translations[language].callToAction}
                   </p>
                 </div>
-                <button
-                  onClick={() => setShowUpdateForm(true)}
-                  className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300"
-                >
-                  Update Profile
-                </button>
+
+                {/* MiniWallet Component - Fixed with proper onClose */}
+                {accountBalance !== null && showWalletBalance && (
+                  <div className="w-full my-4">
+                    <MiniWallet
+                      balance={{
+                        accountName: existingAccount?.accountName || '',
+                        euroBalance: accountBalance
+                      }}
+                      onClose={() => setShowWalletBalance(false)}
+                      visible={showWalletBalance}
+                      title="Votre portefeuille Innopay"
+                      initialPosition={{
+                        x: typeof window !== 'undefined' ? (window.innerWidth / 2) - 150 : 0,
+                        y: 20
+                      }}
+                    />
+                  </div>
+                )}
+
+                {/* Wallet Reopen Button */}
+                {accountBalance !== null && !showWalletBalance && (
+                  <WalletReopenButton
+                    onClick={() => setShowWalletBalance(true)}
+                    visible={true}
+                  />
+                )}
+
+                {/* Action Buttons - Explorer above Beautify, with dynamic behavior based on restaurant param */}
+                <div className="w-full flex flex-col sm:flex-row gap-4 mt-6">
+                  {(() => {
+                    const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+                    const restaurant = params.get('restaurant');
+                    const table = params.get('table');
+
+                    // Determine button text and action based on restaurant parameter
+                    const exploreButtonText = restaurant
+                      ? translations[language].returnToMerchant
+                      : translations[language].exploreShops;
+
+                    const exploreButtonAction = async () => {
+                      if (restaurant) {
+                        // Return to restaurant site with environment-aware URL (hub-and-spoke architecture)
+                        const spokeBaseUrl = getSpokeUrl(restaurant);
+                        const restaurantUrl = restaurant === 'indies'
+                          ? `${spokeBaseUrl}/menu`
+                          : spokeBaseUrl; // Use spoke URL directly for other spokes
+
+                        const returnUrl = new URL(restaurantUrl, window.location.origin);
+                        if (table) returnUrl.searchParams.set('table', table);
+
+                        // CRITICAL: Create credential session for Flow 4 consistency with Flow 5
+                        // This allows the spoke to import credentials just like Flow 5 does
+                        const accountName = existingAccount?.accountName || localStorage.getItem('innopay_accountName');
+                        const masterPassword = localStorage.getItem('innopay_masterPassword');
+                        const activePrivate = localStorage.getItem('innopay_activePrivate');
+                        const activePublic = localStorage.getItem('innopay_activePublic');
+                        const postingPrivate = localStorage.getItem('innopay_postingPrivate');
+                        const postingPublic = localStorage.getItem('innopay_postingPublic');
+                        const memoPrivate = localStorage.getItem('innopay_memoPrivate');
+                        const memoPublic = localStorage.getItem('innopay_memoPublic');
+                        const ownerPrivate = localStorage.getItem('innopay_ownerPrivate');
+                        const ownerPublic = localStorage.getItem('innopay_ownerPublic');
+
+                        if (accountName && masterPassword && activePrivate && postingPrivate && memoPrivate) {
+                          try {
+                            console.log('[FLOW 4] Creating credential session for return to spoke:', restaurant);
+
+                            // Create credential session
+                            const response = await fetch('/api/account/create-credential-session', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                accountName,
+                                masterPassword,
+                                keys: {
+                                  owner: { privateKey: ownerPrivate || '', publicKey: ownerPublic || '' },
+                                  active: { privateKey: activePrivate, publicKey: activePublic || '' },
+                                  posting: { privateKey: postingPrivate, publicKey: postingPublic || '' },
+                                  memo: { privateKey: memoPrivate, publicKey: memoPublic || '' }
+                                },
+                                euroBalance: accountBalance || 0,
+                                email: localStorage.getItem('innopay_email')
+                              })
+                            });
+
+                            if (response.ok) {
+                              const data = await response.json();
+                              const credentialToken = data.credentialToken;
+
+                              console.log('[FLOW 4] Credential session created:', credentialToken);
+
+                              // Add credential_token to URL for spoke to import credentials
+                              returnUrl.searchParams.set('credential_token', credentialToken);
+                              returnUrl.searchParams.set('account_created', 'true');
+
+                              console.log('[FLOW 4] Redirecting to spoke with credentials:', returnUrl.toString());
+                            } else {
+                              console.error('[FLOW 4] Failed to create credential session:', response.status);
+                            }
+                          } catch (error) {
+                            console.error('[FLOW 4] Error creating credential session:', error);
+                          }
+                        }
+
+                        window.location.href = returnUrl.toString();
+                      } else {
+                        // Navigate to Innopay shops
+                        window.location.href = '/';
+                      }
+                    };
+
+                    return (
+                      <>
+                        {/* Explorer/Return Button - Now FIRST (more prominent) */}
+                        <button
+                          onClick={exploreButtonAction}
+                          className="flex-1 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold py-4 px-6 rounded-lg transition duration-300 shadow-lg"
+                        >
+                          {exploreButtonText}
+                        </button>
+
+                        {/* Beautify Profile Button - Now SECOND */}
+                        <button
+                          onClick={() => setShowUpdateForm(true)}
+                          className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300"
+                        >
+                          {translations[language].beautifyProfile}
+                        </button>
+                      </>
+                    );
+                  })()}
+                </div>
               </>
             ) : (
               <div className="w-full">
@@ -1029,7 +2036,7 @@ export default function HiveAccountCreationPage() {
                       id="name"
                       value={metadata.name}
                       onChange={(e) => setMetadata({ ...metadata, name: e.target.value })}
-                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-gray-900 bg-white"
                     />
                   </div>
                   <div>
@@ -1062,7 +2069,7 @@ export default function HiveAccountCreationPage() {
                       rows={4}
                       value={metadata.about}
                       onChange={(e) => setMetadata({ ...metadata, about: e.target.value })}
-                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-gray-900 bg-white"
                     ></textarea>
                   </div>
                   <div>
@@ -1072,7 +2079,7 @@ export default function HiveAccountCreationPage() {
                       id="website"
                       value={metadata.website}
                       onChange={(e) => setMetadata({ ...metadata, website: e.target.value })}
-                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-gray-900 bg-white"
                     />
                   </div>
                   <div>
@@ -1082,7 +2089,7 @@ export default function HiveAccountCreationPage() {
                       id="location"
                       value={metadata.location}
                       onChange={(e) => setMetadata({ ...metadata, location: e.target.value })}
-                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                      className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-gray-900 bg-white"
                     />
                   </div>
                   <div>
@@ -1147,6 +2154,40 @@ export default function HiveAccountCreationPage() {
         draggable
         pauseOnHover
       />
+
+      {/* DEV ONLY: Clear localStorage button */}
+      {(typeof window !== 'undefined') && (window.location.hostname === 'localhost' ||
+        window.location.hostname.includes('127.0.0.1') ||
+        window.location.hostname.startsWith('192.168.')) && (
+        <div className="fixed top-2 right-2 z-[10001]">
+          <button
+            onClick={() => {
+              if (confirm('Clear all localStorage and reset import attempts (dev only)?')) {
+                // Clear all innopay-related items
+                localStorage.removeItem('innopay_accountName');
+                localStorage.removeItem('innopay_masterPassword');
+                localStorage.removeItem('innopay_activePrivate');
+                localStorage.removeItem('innopay_postingPrivate');
+                localStorage.removeItem('innopay_memoPrivate');
+                localStorage.removeItem('innopay_credentialToken');
+                localStorage.removeItem('innopay_accounts');
+                localStorage.removeItem('innopay_wallet_credentials');
+
+                // Reset import attempts counter to 5
+                localStorage.setItem('innopay_import_attempts', '5');
+
+                console.log('[DEV] localStorage cleared and import attempts reset to 5');
+                alert('localStorage cleared & counter reset to 5! Reloading...');
+                window.location.reload();
+              }
+            }}
+            className="bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-1 rounded shadow-lg font-mono"
+            title="Development only: Clear localStorage and reset import counter"
+          >
+            🧹 Clear LS
+          </button>
+        </div>
+      )}
     </div>
   );
 }

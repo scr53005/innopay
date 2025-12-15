@@ -17,15 +17,16 @@ model bip39seedandaccount {
 }
 
 model innouser {
-  id                  Int                  @id @default(autoincrement())
-  email               String               @unique
+  id                  Int                   @id @default(autoincrement())
+  email               String                @unique
   phoneNumber         String?
-  createdAt           DateTime             @default(now())
-  verified            Boolean              @default(false)
+  createdAt           DateTime              @default(now())
+  verified            Boolean               @default(false)
   bip39seedandaccount bip39seedandaccount?
   topup               topup[]
   bonus               bonus[]
   walletuser          walletuser[]
+  email_verification  email_verification[]
 }
 
 model topup {
@@ -118,6 +119,7 @@ model accountCredentialSession {
   memoPrivate     String   @db.Text
   memoPublic      String   @db.Text
   euroBalance     Decimal  @db.Decimal(10, 2) @default(0.00)
+  email           String?  @db.VarChar(255)
   retrieved       Boolean  @default(false)
   expiresAt       DateTime
   createdAt       DateTime @default(now())
@@ -138,4 +140,22 @@ model outstanding_debt {
   paid_at       DateTime?
   payment_tx_id String?   @db.Char(40)
   notes         String?   @db.Text
+}
+
+model email_verification {
+  id          String    @id @default(cuid())
+  user_id     Int
+  email       String    @db.VarChar(255)
+  code        String    @db.VarChar(6)
+  created_at  DateTime  @default(now())
+  expires_at  DateTime
+  attempts    Int       @default(0)
+  verified    Boolean   @default(false)
+  verified_at DateTime?
+  ip_address  String?   @db.VarChar(45)
+
+  innouser    innouser  @relation(fields: [user_id], references: [id])
+
+  @@index([email, verified])
+  @@index([user_id, verified])
 }
