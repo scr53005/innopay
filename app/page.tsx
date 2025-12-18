@@ -541,8 +541,9 @@ function TopUpContent() {
           console.error('[LANDING] Error fetching credentials:', err);
           // Clean up the invalid token
           localStorage.removeItem('innopay_credentialToken');
-          // Redirect to account creation since credentials couldn't be fetched
-          router.push('/user');
+          // Redirect to account creation since credentials couldn't be fetched (preserve params)
+          const currentParams = window.location.search;
+          router.push(`/user${currentParams}`);
         });
 
       return; // Don't do other checks while fetching credentials
@@ -577,7 +578,8 @@ function TopUpContent() {
     // If no search params and no valid account, redirect to account creation
     if (!hasSearchParams && !accountName) {
       console.log('[LANDING] No search params and no account found - redirecting to /user');
-      router.push('/user');
+      const currentParams = window.location.search;
+      router.push(`/user${currentParams}`);
       return;
     }
 
@@ -792,9 +794,10 @@ function TopUpContent() {
           // Final attempt used
           setImportError('No account found in database, sorry! / Rien dans la base de données, désolé!');
 
-          // Redirect to /user after 3 seconds
+          // Redirect to /user after 3 seconds (preserve params for flow context)
           setTimeout(() => {
-            router.push('/user');
+            const currentParams = window.location.search;
+            router.push(`/user${currentParams}`);
           }, 3000);
         } else {
           // Still have attempts remaining
@@ -1033,7 +1036,9 @@ function TopUpContent() {
               <button
                 onClick={() => {
                   setShowImportModal(false);
-                  router.push('/user');
+                  // Preserve URL params (flow context, restaurant, table, order info)
+                  const currentParams = window.location.search;
+                  router.push(`/user${currentParams}`);
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
                 onTouchStart={(e) => e.stopPropagation()}
@@ -1062,7 +1067,9 @@ function TopUpContent() {
               <button
                 onClick={() => {
                   setShowImportModal(false);
-                  router.push('/user');
+                  // Preserve URL params (flow context, restaurant, table, order info)
+                  const currentParams = window.location.search;
+                  router.push(`/user${currentParams}`);
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
                 onTouchStart={(e) => e.stopPropagation()}

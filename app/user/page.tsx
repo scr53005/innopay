@@ -1906,14 +1906,37 @@ export default function HiveAccountCreationPage() {
                     const restaurant = params.get('restaurant');
                     const table = params.get('table');
 
-                    // Determine button text and action based on restaurant parameter
-                    const exploreButtonText = restaurant
-                      ? translations[language].returnToMerchant
-                      : translations[language].exploreShops;
+                    // Determine button text based on flow type and restaurant parameter
+                    const flow = params.get('flow');
+                    let exploreButtonText;
+
+                    if (flow === 'pay_with_topup') {
+                      // Flow 7: Need to topup first
+                      exploreButtonText = language === 'fr' ? 'Continuer vers le paiement'
+                                        : language === 'de' ? 'Weiter zur Zahlung'
+                                        : language === 'lb' ? 'Weidergoen zur Bezuelung'
+                                        : 'Continue to payment';
+                    } else if (restaurant) {
+                      // Flow 4 & 5: Return to merchant
+                      exploreButtonText = translations[language].returnToMerchant;
+                    } else {
+                      exploreButtonText = translations[language].exploreShops;
+                    }
 
                     const exploreButtonAction = async () => {
+                      // Check flow type - Flow 7 requires topup first
+                      const flow = params.get('flow');
+
+                      if (flow === 'pay_with_topup') {
+                        // FLOW 7: Redirect to landing page (/) for topup with all params preserved
+                        console.log('[FLOW 7] Redirecting to landing page for topup');
+                        const currentParams = window.location.search;
+                        window.location.href = `/${currentParams}`;
+                        return;
+                      }
+
                       if (restaurant) {
-                        // Return to restaurant site with environment-aware URL (hub-and-spoke architecture)
+                        // FLOW 4 & 5: Return to restaurant site with environment-aware URL (hub-and-spoke architecture)
                         const spokeBaseUrl = getSpokeUrl(restaurant);
                         const restaurantUrl = restaurant === 'indies'
                           ? `${spokeBaseUrl}/menu`

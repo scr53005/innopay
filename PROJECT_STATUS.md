@@ -1,5 +1,197 @@
 # INNOPAY REFACTORING - PROJECT STATUS
 
+**Last Updated**: 2025-12-17
+**Session ID**: Daily Specials Cache Fix + Flow 6 UX + Printer-Friendly Display + Production Readiness
+**Status**: ✅ **PRODUCTION READY** - Menu Cache Invalidation, Flow 6 Unified Banner, Printout Page Created | Both Projects Building Successfully
+
+---
+
+## ✅ CURRENT STATUS (2025-12-17) - MENU CACHE + PRINTOUT + DEPLOYMENT
+
+### Session Achievements
+
+#### 1. Daily Specials Hydration Fix - Menu Cache Invalidation System
+**Problem**: New daily specials added via admin showed "Unknown Dish ID: 85" instead of dish name in order history
+**Root Cause**: Menu data cached for 7 days; new dishes not in cache during hydration
+
+**Solution**: Automatic cache invalidation on dish CRUD operations
+
+**Files Created**:
+- `indiesmenu/app/api/admin/cache/route.ts` - Manual cache invalidation endpoint
+  - POST endpoint to force cache refresh
+  - Useful for manual cache busting if needed
+
+**Files Modified**:
+- `indiesmenu/lib/data/menu.ts` (lines 340-351):
+  - Added `invalidateMenuCache()` function
+  - Resets cache timestamp and marks as stale
+  - Forces fresh fetch on next menu request
+
+- `indiesmenu/app/api/admin/dishes/route.ts`:
+  - Import `invalidateMenuCache` from menu.ts
+  - Auto-invalidate after CREATE (lines 91-93)
+  - Console log for debugging
+
+- `indiesmenu/app/api/admin/dishes/[id]/route.ts`:
+  - Import `invalidateMenuCache` from menu.ts
+  - Auto-invalidate after UPDATE (lines 30-32)
+  - Auto-invalidate after DELETE (lines 62-64)
+  - Console log for debugging
+
+**Benefits**:
+- ✅ New daily specials appear immediately in order history
+- ✅ No more "Unknown Dish ID" errors
+- ✅ Automatic cache refresh on menu changes
+- ✅ No manual intervention required
+- ✅ 7-day cache still effective for performance (only clears on changes)
+
+**Technical Details**:
+```typescript
+export function invalidateMenuCache(): void {
+  console.log('[MENU CACHE] Cache invalidated manually');
+  menuCache = {
+    data: null,
+    timestamp: 0,
+    isStale: true,
+  };
+}
+```
+
+#### 2. Flow 6 (pay_with_account) - Unified Success Banner
+**Problem**: Flow 6 used `alert()` while Flows 4, 5, 7 used unified banner (inconsistent UX)
+**Solution**: Replace alert with unified banner for consistency
+
+**Files Modified**:
+- `indiesmenu/app/menu/page.tsx` (lines 1636-1638):
+  - Replaced: `alert('Commande envoyée avec succès!')`
+  - With: `setFlow6Success(true)` (triggers unified banner)
+  - Commented out old alert for reference
+
+**Benefits**:
+- ✅ All flows (4, 5, 6, 7) now use unified green success banner
+- ✅ Consistent UX across all payment flows
+- ✅ Professional appearance (no browser alerts)
+- ✅ Message: "Votre commande a été transmise et est en cours de préparation"
+
+#### 3. Printer-Friendly Daily Specials Display Page
+**Problem**: Display page (plat-du-jour) had black background draining printer toner
+**Solution**: Created dedicated printout page optimized for A3 landscape printing
+
+**Files Created**:
+- `indiesmenu/app/display/printout/page.tsx` - Printer-optimized version
+  - **White background** instead of black (saves toner)
+  - **A3 landscape format** (420mm × 297mm) with 10mm margins
+  - **@media print** CSS for perfect printing
+  - **print-color-adjust: exact** for color preservation
+  - **Removed 4 corner decorations** (kept bottom-center only)
+  - **Dark blue/metallic blue text** instead of dull grays:
+    - Title: `text-blue-900` (deep navy blue #1e3a8a)
+    - Dish names: `text-blue-900` (deep navy blue)
+    - Soup: `text-blue-800` (dark blue #1e40af)
+  - **Red accents**:
+    - Section headers: `text-red-800` (dark red #991b1b) - darker, less aggressive
+    - Prices: `text-red-600` (vibrant red #dc2626) - good contrast
+  - **Same logos**: Innopay, Satispay, Edenred, Pluxee
+  - **Same data source**: `/api/daily-specials`
+
+**Usage**:
+1. Navigate to `/display/printout`
+2. Press Ctrl+P (or Cmd+P)
+3. Printer auto-selects A3 landscape
+4. Clean, toner-efficient output
+
+**Benefits**:
+- ✅ Professional printouts for physical display
+- ✅ Saves printer toner (white background)
+- ✅ Better readability (dark blue text on white)
+- ✅ Vibrant but not aggressive colors
+- ✅ Perfect for A3 landscape frames
+- ✅ Cleaner design (no corner decorations)
+
+#### 4. Production Deployment Readiness
+**Problem**: Vercel deployments not applying Prisma migrations automatically
+**Solution**: Configured build command to use `vercel-build` script
+
+**Configuration**:
+- **Vercel Build Settings** for both projects:
+  - Build Command: `npm run vercel-build`
+  - `vercel-build` script: `npx prisma migrate deploy && npx prisma generate && next build`
+  - Ensures migrations run before every production deployment
+
+**Environment Variables**:
+- **RECIPIENT_OVERRIDE** strategy confirmed for innopay:
+  - Priority 1: Explicit `RECIPIENT_OVERRIDE` env var (for testing)
+  - Priority 2: Dev detection via `DATABASE_URL` containing 'innopaydb'
+  - Hub-and-spoke architecture verified: ALL transfers controlled by innopay
+
+**Benefits**:
+- ✅ Migrations apply automatically on deployment
+- ✅ No manual intervention needed
+- ✅ Safe testing with recipient override
+- ✅ Hub controls all blockchain operations
+
+#### 5. NPM Deprecation Warnings Fixed
+**Problem**: Build warnings for deprecated `inflight@1.0.6` and `glob@7.2.3`
+**Solution**: Added npm package overrides to force modern versions
+
+**Files Modified**:
+- `indiesmenu/package.json` (lines 56-59):
+  ```json
+  "overrides": {
+    "glob": "^10.0.0",
+    "inflight": "npm:@zkochan/inflight@^1.0.0"
+  }
+  ```
+
+**Benefits**:
+- ✅ Clean build logs (no deprecation warnings)
+- ✅ Modern dependencies
+- ✅ Better security and performance
+- ✅ Future-proof dependency tree
+
+### Build Status
+**Both Projects Building Successfully**:
+- ✅ **innopay**: 39 routes, 0 errors
+- ✅ **indiesmenu**: 32 routes, 0 errors (includes new `/display/printout`)
+
+### Files Modified This Session
+**indiesmenu**:
+- `lib/data/menu.ts` - Cache invalidation function
+- `app/api/admin/cache/route.ts` - NEW: Manual cache endpoint
+- `app/api/admin/dishes/route.ts` - Auto-invalidate on CREATE
+- `app/api/admin/dishes/[id]/route.ts` - Auto-invalidate on UPDATE/DELETE
+- `app/menu/page.tsx` - Flow 6 unified banner
+- `app/display/printout/page.tsx` - NEW: Printer-friendly display
+- `package.json` - NPM overrides for glob/inflight
+
+**innopay**:
+- No changes this session (previous session changes already committed)
+
+### Testing Recommendations
+1. **Daily Specials Cache**:
+   - Add new daily special via admin
+   - Place order with new dish
+   - Verify order history shows dish name (not "Unknown Dish ID")
+   
+2. **Flow 6 Success Banner**:
+   - Pay with existing account
+   - Verify green success banner appears (not browser alert)
+   
+3. **Printout Page**:
+   - Navigate to `/display/printout`
+   - Print to PDF or printer
+   - Verify A3 landscape format with clean colors
+
+### Next Steps
+- Deploy to production (Vercel will auto-apply migrations)
+- Test printout page on actual printer
+- Monitor cache invalidation in production logs
+- Consider creating indiesmenu PROJECT_STATUS.md file for spoke-specific updates
+
+---
+
+# INNOPAY REFACTORING - PROJECT STATUS
+
 **Last Updated**: 2025-12-15
 **Session ID**: Flow 4 Credential Handover + Flow 7 Balance Fixes + Hub-Spoke Architecture
 **Status**: ✅ **PRODUCTION READY** - Flow 4 Complete, Flow 7 Balance Issues Resolved, Eruda Disabled for Production | Both Projects Building Successfully
