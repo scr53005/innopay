@@ -1,8 +1,199 @@
 # INNOPAY REFACTORING - PROJECT STATUS
 
-**Last Updated**: 2025-12-17
-**Session ID**: Daily Specials Cache Fix + Flow 6 UX + Printer-Friendly Display + Production Readiness
-**Status**: ✅ **PRODUCTION READY** - Menu Cache Invalidation, Flow 6 Unified Banner, Printout Page Created | Both Projects Building Successfully
+**Last Updated**: 2025-12-18
+**Session ID**: Flow 7 Complete Fix + Code Documentation Improvements
+**Status**: ✅ **PRODUCTION READY** - Flow 7 Fully Functional with Cart Clearing, Balance Updates, Distriate Suffix | Both Projects Building Successfully
+
+---
+
+## ✅ CURRENT STATUS (2025-12-18) - FLOW 7 COMPLETE + DOCUMENTATION
+
+### Session Achievements
+
+#### 1. Flow 7 Memo URL Decoding Fix
+**Problem**: Memo arriving URL-encoded in webhook (`d%3A4%3B%20TABLE%20201%20`) instead of decoded text
+**Root Cause**: `getRedirectParams()` function not decoding `order_memo` URL parameter
+
+**Solution**: Added URL decoding to `getRedirectParams()` function
+
+**Files Modified**:
+- `innopay/app/page.tsx` (line 324):
+  ```typescript
+  const orderMemo = searchParams.get('order_memo')
+    ? decodeURIComponent(searchParams.get('order_memo')!)
+    : undefined;
+  ```
+
+**Impact**: ✅ Memos now properly decoded before passing to Stripe metadata and webhook
+
+---
+
+#### 2. Flow 7 Return URL Fallback Fix - **CRITICAL**
+**Problem**: Cart not clearing, balance not updating, success banner not showing after Flow 7 topup. User returned to menu page but Flow 7 success detection failed.
+**Root Cause**: `orderContext?.returnUrl` was `undefined` when checkout form submitted. React state lost during navigation (`/` → `/user` → `/`) meant `orderContext` was null on second landing page visit. This caused Stripe to use default redirect instead of returning to indiesmenu with `order_success=true`.
+
+**Solution**: Added fallback to extract `return_url` directly from URL parameters when `orderContext` is null
+
+**Files Modified**:
+- `innopay/app/page.tsx` (lines 685-707):
+  ```typescript
+  // Extract return_url from URL params as fallback if orderContext doesn't have it
+  const returnUrlFromParams = searchParams.get('return_url')
+    ? decodeURIComponent(searchParams.get('return_url')!)
+    : undefined;
+  const finalReturnUrl = orderContext?.returnUrl || returnUrlFromParams;
+
+  console.log('[LANDING] Return URL:', {
+    fromContext: orderContext?.returnUrl,
+    fromParams: returnUrlFromParams,
+    final: finalReturnUrl
+  });
+
+  const requestBody = {
+    // ... other fields
+    returnUrl: finalReturnUrl, // ✅ Fallback ensures URL always available
+  };
+  ```
+
+**Why This Was Critical**:
+- This was THE root cause preventing Flow 7 from working
+- Without correct returnUrl, Stripe couldn't redirect back to indiesmenu with success parameters
+- Cart clearing and balance updates depend on `order_success=true` being in URL
+
+**Impact**:
+- ✅ Stripe now redirects to correct URL with `order_success=true&session_id=...`
+- ✅ Cart clears automatically after Flow 7 topup
+- ✅ Success banner displays correctly
+- ✅ Flow 7 works even when user navigates through import modal
+
+---
+
+#### 3. Flow 7 Distriate Suffix Implementation
+**Problem**: Flow 7 memos missing distriate tracking suffix (e.g., `kcs-inno-wa6x-nmgi`) that Flows 5 and 6 have
+**Root Cause**: Flow 7 was calling `getMemo()` which returns base memo only. Other flows use `generateDistriatedHiveOp()` which adds suffix.
+
+**Solution**: Created new `getMemoWithDistriate()` function in CartContext using same pattern as `orderNow()`
+
+**Files Modified**:
+- `indiesmenu/app/context/CartContext.tsx`:
+  - Added `getMemoWithDistriate()` to CartContextType interface (line 34)
+  - Added default implementation to CartContext (line 54)
+  - Implemented function (lines 211-222):
+    ```typescript
+    const getMemoWithDistriate = useCallback(() => {
+      const baseMemo = getMemo();
+      const params = { recipient: 'temp', amountHbd: '0.001', memo: baseMemo };
+      generateDistriatedHiveOp(params); // Modifies params.memo to add suffix
+      return params.memo;
+    }, [getMemo]);
+    ```
+  - Exported in provider value (line 286)
+
+- `indiesmenu/app/menu/page.tsx`:
+  - Added `getMemoWithDistriate` to useCart() destructuring (line 27)
+  - Changed Flow 7 from `getMemo()` to `getMemoWithDistriate()` (line 1463)
+
+**Impact**:
+- ✅ Flow 7 memos now include distriate tracking suffix
+- ✅ Consistent with Flow 5 and Flow 6 behavior
+- ✅ Better order tracking and reconciliation
+
+---
+
+#### 4. Flow 7 Balance Display Refresh Fix
+**Problem**: EURO balance in MiniWallet not updating after Flow 7 topup completion
+**Root Cause**: `refreshBalanceTrigger` was incremented but no useEffect listened to it. Balance state wasn't refreshed from localStorage after webhook updated it.
+
+**Solution**: Modified Flow 7 success handler to directly fetch and update balance from localStorage
+
+**Files Modified**:
+- `indiesmenu/app/menu/page.tsx` (lines 323-334):
+  ```typescript
+  setTimeout(() => {
+    console.log('[FLOW 7] Fetching fresh balance from localStorage');
+    const accountName = localStorage.getItem('innopay_accountName');
+    const lastBalance = localStorage.getItem('innopay_lastBalance');
+    if (accountName && lastBalance) {
+      setWalletBalance({
+        accountName,
+        euroBalance: parseFloat(lastBalance)
+      });
+      console.log('[FLOW 7] Balance updated:', lastBalance);
+    }
+  }, 5000); // 5 seconds to allow webhook to update localStorage
+  ```
+
+**Impact**:
+- ✅ MiniWallet displays updated balance after Flow 7 topup
+- ✅ User sees correct balance without manual page refresh
+- ✅ 5-second delay allows webhook processing to complete
+
+---
+
+#### 5. Code Documentation Improvements - Architectural Decision Dating
+**Problem**: Confusing comments referencing outdated implementations. Comments at line 1452 mentioned "(Flow 2 + Flow 6)" which referred to old architecture, while comment at line 1486 described current "unified webhook" approach.
+
+**Solution**: Standardized comment headers across all flows with:
+- Visual separators (dashed lines)
+- Architecture name with date stamp showing when approach was adopted
+- Brief flow description
+- Status indicators (e.g., "✅ STABLE - DO NOT BREAK")
+- Date stamps on specific changes
+
+**Files Modified**:
+- `indiesmenu/app/menu/page.tsx`:
+  - **Flow 6 & 7 Entry Point** (lines 1357-1364): Added "EXISTING ACCOUNT PAYMENT (Nov 2025)" header
+  - **Flow 6 vs 7 Decision Point** (lines 1431-1437): Clarified balance check decision logic with date
+  - **Flow 7 Implementation** (lines 1452-1460): "UNIFIED WEBHOOK ARCHITECTURE (Dec 2025)" with flow diagram
+  - **Flow 6 Implementation** (lines 1498-1506): "TWO-LEG DUAL-CURRENCY ARCHITECTURE (Nov 2025)"
+
+**Comment Pattern Established**:
+```typescript
+// ─────────────────────────────────────────────────────────────────────────
+// FLOW X: name - ARCHITECTURE TYPE (Month Year)
+// ─────────────────────────────────────────────────────────────────────────
+// Architecture: Brief description of flow
+//               → Step 2
+//               → Step 3
+// Reference: FLOWS.md lines X-Y
+// Status: ✅ STABLE / 🚧 IN DEVELOPMENT
+// ─────────────────────────────────────────────────────────────────────────
+
+// Specific change (added/modified Month Day, Year)
+const example = something();
+```
+
+**Impact**:
+- ✅ Clear architectural decision timeline
+- ✅ Easy to identify when implementations changed
+- ✅ No confusion about old vs current approaches
+- ✅ Better onboarding for future developers
+
+---
+
+### Build Status
+
+**innopay**: ✅ 39 routes, 0 errors
+**indiesmenu**: ✅ 32 routes, 0 errors
+
+### Flow 7 Complete Fix Summary
+
+Flow 7 (`pay_with_topup`) now works end-to-end:
+1. ✅ User redirects to innopay with order context (memo decoded correctly)
+2. ✅ User completes topup via Stripe
+3. ✅ Stripe redirects back to indiesmenu with `order_success=true&session_id=...` (returnUrl fallback ensures correct redirect)
+4. ✅ Cart clears automatically
+5. ✅ Green success banner displays
+6. ✅ Balance updates in MiniWallet after 5 seconds
+7. ✅ Memo includes distriate tracking suffix
+
+**Critical Fix**: The returnUrl fallback (Issue #2) was the root cause preventing cart clearing and balance updates. This fix ensures Flow 7 works even when React state is lost during navigation.
+
+**Documentation**: All major flow sections now have dated architectural headers making it clear what implementation is current and when decisions were made.
+
+---
+
+## Previous Session (2025-12-17) - MENU CACHE + PRINTOUT + DEPLOYMENT
 
 ---
 

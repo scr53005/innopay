@@ -321,7 +321,7 @@ function TopUpContent() {
   const getRedirectParams = () => {
     const table = searchParams.get('table');
     const orderAmount = searchParams.get('order_amount');
-    const orderMemo = searchParams.get('order_memo');
+    const orderMemo = searchParams.get('order_memo') ? decodeURIComponent(searchParams.get('order_memo')!) : undefined;
 
     // Return params if there's an order (indicated by order_amount)
     if (orderAmount && parseFloat(orderAmount) > 0) {
@@ -682,8 +682,19 @@ function TopUpContent() {
           }
         : getRedirectParams();
 
+      // Extract return_url from URL params as fallback if orderContext doesn't have it
+      const returnUrlFromParams = searchParams.get('return_url')
+        ? decodeURIComponent(searchParams.get('return_url')!)
+        : undefined;
+      const finalReturnUrl = orderContext?.returnUrl || returnUrlFromParams;
+
       console.log('[LANDING] Redirect params:', redirectParams);
       console.log('[LANDING] Order context:', orderContext);
+      console.log('[LANDING] Return URL:', {
+        fromContext: orderContext?.returnUrl,
+        fromParams: returnUrlFromParams,
+        final: finalReturnUrl
+      });
 
       // Build flow context for systematic flow detection
       const requestBody = {
@@ -693,7 +704,7 @@ function TopUpContent() {
         redirectParams, // Pass table, orderAmount, orderMemo if present
         hasLocalStorageAccount: hasAccount, // For flow detection
         accountBalance: walletBalance?.euroBalance, // For payment flow decisions
-        returnUrl: orderContext?.returnUrl, // Custom return URL for Flow 7
+        returnUrl: finalReturnUrl, // Custom return URL for Flow 7 - with fallback to URL params
       };
 
       console.log('[LANDING] Submitting checkout with flow context:', {
