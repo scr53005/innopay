@@ -40,7 +40,8 @@ export async function OPTIONS() {
  *     remainingSlots100: number
  *   },
  *   orderAmountEuro?: number,  // Optional: if coming from indiesmenu order
- *   orderMemo?: string  // Optional: memo for restaurant transfer
+ *   orderMemo?: string,  // Optional: memo for restaurant transfer
+ *   restaurantAccount?: string  // Optional: restaurant Hive account (defaults to 'indies.cafe')
  * }
  */
 export async function POST(req: NextRequest) {
@@ -57,6 +58,7 @@ export async function POST(req: NextRequest) {
       accountBalance,
       mockAccountCreation,
       returnUrl,  // Custom return URL for Flow 7 (pay_with_topup)
+      restaurantAccount,  // Restaurant Hive account (for hub-and-spokes multi-restaurant)
     } = await req.json();
 
     // DETECT FLOW using the systematic flow management system
@@ -165,10 +167,16 @@ export async function POST(req: NextRequest) {
 
       metadata.orderAmountEuro = finalOrderAmountEuro.toString();
       metadata.orderMemo = finalOrderMemo;
+
+      // Add restaurant account for hub-and-spokes multi-restaurant architecture
+      // Defaults to 'indies.cafe' if not specified
+      metadata.restaurantAccount = restaurantAccount || 'indies.cafe';
+
       console.log(`[${new Date().toISOString()}] [CHECKOUT API] Adding order metadata:`, {
         orderAmountEuro: metadata.orderAmountEuro,
         orderMemo: metadata.orderMemo,
-        memoLength: metadata.orderMemo.length
+        memoLength: metadata.orderMemo.length,
+        restaurantAccount: metadata.restaurantAccount
       });
     }
 

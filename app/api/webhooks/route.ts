@@ -747,6 +747,99 @@ async function handleFlow2PureTopup(
 }
 
 // ========================================
+// RESTAURANT PAYMENT PROCESSOR
+// ========================================
+/**
+ * Process payment to restaurant account (from innopay).
+ * This is semantically independent of account creation and should be called early
+ * to ensure paid orders are broadcasted even if account creation fails.
+ *
+ * @param restaurantAccount - The restaurant's Hive account name
+ * @param orderCost - Amount in EUR to pay to restaurant
+ * @param orderMemo - Memo for the transfer (order details)
+ * @param sessionId - Stripe session ID for idempotency
+ * @returns Transaction IDs or undefined if payment failed/skipped
+ */
+async function processRestaurantPayment(
+  restaurantAccount: string,
+  orderCost: number,
+  orderMemo: string | undefined,
+  sessionId: string
+): Promise<{ hbdTxId?: string; euroTxId?: string }> {
+  const timestamp = new Date().toISOString();
+
+  // Early validation
+  if (orderCost <= 0) {
+    console.log(`[${timestamp}] [RESTAURANT PAYMENT] No order cost, skipping restaurant payment`);
+    return {};
+  }
+
+  if (!orderMemo) {
+    console.error(`[${timestamp}] [RESTAURANT PAYMENT] ❌ CRITICAL: Order cost ${orderCost} EUR but NO MEMO! Skipping transfer to prevent order mismatch!`);
+    return {};
+  }
+
+  console.log(`[${timestamp}] [RESTAURANT PAYMENT] ========================================`);
+  console.log(`[${timestamp}] [RESTAURANT PAYMENT] Processing payment to ${restaurantAccount}`);
+  console.log(`[${timestamp}] [RESTAURANT PAYMENT] Order details:`, {
+    orderCost,
+    orderMemo,
+    orderMemoLength: orderMemo.length,
+    recipient: restaurantAccount,
+    sessionId
+  });
+
+  let restaurantHbdTxId: string | undefined;
+  let restaurantEuroTxId: string | undefined;
+
+  try {
+    // Fetch current EUR/USD rate
+    const rateData = await getEurUsdRateServerSide();
+    const eurUsdRate = rateData.conversion_rate;
+    const hbdAmountForOrder = convertEurToHbd(orderCost, eurUsdRate);
+
+    console.log(`[${timestamp}] [RESTAURANT PAYMENT] Calculated HBD amount: ${hbdAmountForOrder} (rate: ${eurUsdRate})`);
+
+    // Try HBD transfer first (preferred) - from innopay to restaurant
+    try {
+      console.log(`[${timestamp}] [RESTAURANT PAYMENT] 🔄 Attempting HBD transfer to ${restaurantAccount} with memo:`, orderMemo);
+      restaurantHbdTxId = await transferHbd(restaurantAccount, hbdAmountForOrder, orderMemo);
+      console.log(`[${timestamp}] [RESTAURANT PAYMENT] ✅ HBD transferred to restaurant: ${restaurantHbdTxId}`);
+    } catch (hbdError: any) {
+      // Fallback to EURO tokens if HBD insufficient - from innopay to restaurant
+      console.warn(`[${timestamp}] [RESTAURANT PAYMENT] ⚠️ HBD transfer failed, using EURO token fallback:`, hbdError.message);
+
+      // Try to record debt - innopay owes HBD to restaurant (non-blocking)
+      try {
+        await prisma.outstanding_debt.create({
+          data: {
+            creditor: getRecipientForEnvironment(restaurantAccount),
+            amount_hbd: hbdAmountForOrder,
+            euro_tx_id: sessionId, // Use session ID as reference since no euroTxId yet
+            eur_usd_rate: eurUsdRate,
+            reason: 'restaurant_order_payment',
+            notes: `HBD shortage at ${timestamp} - Paid with EURO instead`
+          }
+        });
+        console.log(`📝 [DEBT] Recorded ${hbdAmountForOrder} HBD debt to restaurant ${restaurantAccount}`);
+      } catch (debtError) {
+        console.error(`[${timestamp}] [RESTAURANT PAYMENT] WARNING: Failed to record debt:`, debtError);
+      }
+
+      // Transfer EURO tokens as fallback
+      console.log(`[${timestamp}] [RESTAURANT PAYMENT] 🔄 Attempting EURO token transfer with memo:`, orderMemo);
+      restaurantEuroTxId = await transferEuroTokens(restaurantAccount, orderCost, orderMemo);
+      console.log(`[${timestamp}] [RESTAURANT PAYMENT] ✅ EURO tokens transferred to restaurant: ${restaurantEuroTxId}`);
+    }
+  } catch (transferError) {
+    console.error(`[${timestamp}] [RESTAURANT PAYMENT] ❌ Restaurant payment failed:`, transferError);
+    // Don't throw - let calling code decide how to handle
+  }
+
+  return { hbdTxId: restaurantHbdTxId, euroTxId: restaurantEuroTxId };
+}
+
+// ========================================
 // ACCOUNT CREATION FLOW HANDLER
 // ========================================
 async function handleAccountCreation(session: Stripe.Checkout.Session) {
@@ -755,11 +848,16 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
   console.log(`[${timestamp}] [WEBHOOK ACCOUNT] Processing account creation: ${session.id}`);
   console.log(`[${timestamp}] [WEBHOOK ACCOUNT] Full metadata:`, JSON.stringify(session.metadata, null, 2));
 
-  const { accountName, orderAmountEuro, orderMemo, mockAccountCreation } = session.metadata!;
+  const { accountName, orderAmountEuro, orderMemo, mockAccountCreation, restaurantAccount } = session.metadata!;
   const amountEuro = (session.amount_total || 0) / 100;
   const customerEmail = session.customer_details?.email;
   const orderCost = orderAmountEuro ? parseFloat(orderAmountEuro) : 0;
   const isMockMode = mockAccountCreation === 'true';
+  const flow = session.metadata?.flow;
+
+  // Extract restaurant account from metadata or use default
+  // For hub-and-spokes multi-restaurant architecture
+  const targetRestaurant = restaurantAccount || 'indies.cafe';
 
   console.log(`[${timestamp}] [WEBHOOK ACCOUNT] Extracted order info:`, {
     accountName,
@@ -767,7 +865,9 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
     orderMemo,
     orderMemoLength: orderMemo?.length,
     orderCost,
-    mockMode: isMockMode
+    mockMode: isMockMode,
+    flow,
+    restaurantAccount: targetRestaurant
   });
 
   // MOCK MODE: Skip actual Hive account creation for dev/test
@@ -791,6 +891,29 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
       message: 'Session already processed',
       accountName: existingCredentialSession.accountName
     }, { status: 200 });
+  }
+
+  // ========================================
+  // CRITICAL: Process restaurant payment EARLY (especially for flow 5)
+  // This ensures paid orders are broadcasted even if account creation fails
+  // ========================================
+  let restaurantHbdTxId: string | undefined;
+  let restaurantEuroTxId: string | undefined;
+
+  if (flow === 'create_account_and_pay' || orderCost > 0) {
+    console.log(`[${timestamp}] [WEBHOOK ACCOUNT] 🍽️ Processing restaurant payment EARLY (flow: ${flow})`);
+    const paymentResult = await processRestaurantPayment(
+      targetRestaurant,
+      orderCost,
+      orderMemo,
+      session.id
+    );
+    restaurantHbdTxId = paymentResult.hbdTxId;
+    restaurantEuroTxId = paymentResult.euroTxId;
+    console.log(`[${timestamp}] [WEBHOOK ACCOUNT] Restaurant payment complete:`, {
+      hbdTxId: restaurantHbdTxId,
+      euroTxId: restaurantEuroTxId
+    });
   }
 
   // Validate metadata
@@ -953,7 +1076,6 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
   console.log(`[ACCOUNT] Credential session created: ${credentialSession.id} with balance ${totalEuro} EURO${customerEmail ? ` and email ${customerEmail}` : ''}`);
 
   // Determine transfer memo based on flow (account creation vs top-up)
-  const flow = session.metadata?.flow;
   const isAccountCreation = flow === 'new_account' || flow === 'create_account_only' || flow === 'create_account_and_pay';
   const transferMemo = isAccountCreation
     ? 'Bienvenue dans le système Innopay! / Welcome to Innopay!'
@@ -998,67 +1120,8 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
     }
   }
 
-  // Handle restaurant payment if coming from indiesmenu order
-  let restaurantHbdTxId: string | undefined;
-  let restaurantEuroTxId: string | undefined;
-
-  if (orderCost > 0 && orderMemo) {
-    const restaurantTimestamp = new Date().toISOString();
-    console.log(`[${restaurantTimestamp}] [WEBHOOK ACCOUNT] ========================================`);
-    console.log(`[${restaurantTimestamp}] [WEBHOOK ACCOUNT] Processing restaurant order payment`);
-    console.log(`[${restaurantTimestamp}] [WEBHOOK ACCOUNT] Order details:`, {
-      orderCost,
-      orderMemo,
-      orderMemoLength: orderMemo.length,
-      recipient: 'indies.cafe'
-    });
-
-    try {
-      // Fetch current EUR/USD rate
-      const rateData = await getEurUsdRateServerSide();
-      const eurUsdRate = rateData.conversion_rate;
-      const hbdAmountForOrder = convertEurToHbd(orderCost, eurUsdRate);
-
-      console.log(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] Calculated HBD amount: ${hbdAmountForOrder} (rate: ${eurUsdRate})`);
-
-      // Try HBD transfer first (preferred) - from innopay to restaurant
-      try {
-        console.log(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] 🔄 Attempting HBD transfer to indies.cafe with memo:`, orderMemo);
-        restaurantHbdTxId = await transferHbd('indies.cafe', hbdAmountForOrder, orderMemo);
-        console.log(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] ✅ HBD transferred to restaurant: ${restaurantHbdTxId}`);
-      } catch (hbdError: any) {
-        // Fallback to EURO tokens if HBD insufficient - from innopay to restaurant
-        console.warn(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] ⚠️ HBD transfer failed, using EURO token fallback:`, hbdError.message);
-
-        // Try to record debt - innopay owes HBD to restaurant (non-blocking)
-        try {
-          await prisma.outstanding_debt.create({
-            data: {
-              creditor: getRecipientForEnvironment('indies.cafe'),
-              amount_hbd: hbdAmountForOrder,
-              euro_tx_id: euroTxId,
-              eur_usd_rate: eurUsdRate,
-              reason: 'account_creation_order',
-              notes: `HBD shortage at ${new Date().toISOString()} - Paid with EURO instead`
-            }
-          });
-          console.log(`📝 [DEBT] Recorded ${hbdAmountForOrder} HBD debt to restaurant`);
-        } catch (debtError) {
-          console.error('[ACCOUNT] WARNING: Failed to record debt:', debtError);
-        }
-
-        console.log(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] 🔄 Attempting EURO token transfer with memo:`, orderMemo);
-        restaurantEuroTxId = await transferEuroTokens('indies.cafe', orderCost, orderMemo);
-        console.log(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] ✅ EURO tokens transferred to restaurant: ${restaurantEuroTxId}`);
-      }
-    } catch (transferError) {
-      console.error(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] ❌ Restaurant payment failed:`, transferError);
-      // Account is created, but order payment failed - log for manual reconciliation
-      // Don't throw error - account creation was successful
-    }
-  } else if (orderCost > 0 && !orderMemo) {
-    console.error(`[${new Date().toISOString()}] [WEBHOOK ACCOUNT] ❌ CRITICAL ERROR: Order cost ${orderCost} EUR but NO MEMO! Skipping restaurant transfer to prevent order mismatch!`);
-  }
+  // Restaurant payment was already processed early (see line ~900)
+  // This ensures paid orders are broadcasted even if account creation fails
 
   return NextResponse.json({
     message: 'Account created successfully',

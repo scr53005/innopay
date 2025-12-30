@@ -331,7 +331,8 @@ export default function HiveAccountCreationPage() {
               orderMemo
             },
             hasLocalStorageAccount: true,
-            accountBalance: euroBalance
+            accountBalance: euroBalance,
+            restaurantAccount: restaurantAccount // Add for hub-and-spokes multi-restaurant
           })
         });
 
@@ -914,12 +915,18 @@ export default function HiveAccountCreationPage() {
         checkoutBody.orderAmountEuro = orderAmount;
         checkoutBody.orderMemo = orderMemo || '';  // Empty string will trigger error in checkout API if order amount > 0
 
+        // Add restaurant account for hub-and-spokes multi-restaurant architecture
+        if (restaurantAccount) {
+          checkoutBody.restaurantAccount = restaurantAccount;
+        }
+
         console.log(`[${new Date().toISOString()}] [ACCOUNT CREATION FRONTEND] Including flow context:`, {
           hasLocalStorageAccount: false,
           redirectParams: checkoutBody.redirectParams,
           orderAmountEuro: orderAmount,
           orderMemo: checkoutBody.orderMemo,
           memoLength: checkoutBody.orderMemo?.length,
+          restaurantAccount: checkoutBody.restaurantAccount,
           flowType: orderAmount > 0 ? 'create_account_and_pay' : 'create_account_only'
         });
 

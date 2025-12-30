@@ -4,6 +4,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { processOrderPayment } from '@/services/payment-processor';
 import prisma from '@/lib/prisma';
+import { PrivateKey } from '@hiveio/dhive';
 
 /**
  * POST /api/execute-order-payment
@@ -89,20 +90,29 @@ export async function POST(req: NextRequest) {
     // For credential session, we'll use 0 as placeholder since balance is unknown
     const newBalance = 0; // Client will fetch real balance after redirect
 
+    // STEP 4.5: Derive keys from masterPassword for credential injection
+    const masterPassword = walletUser.masterPassword || '';
+    const ownerPrivate = PrivateKey.fromLogin(accountName, masterPassword, 'owner');
+    const activePrivate = PrivateKey.fromLogin(accountName, masterPassword, 'active');
+    const postingPrivate = PrivateKey.fromLogin(accountName, masterPassword, 'posting');
+    const memoPrivate = PrivateKey.fromLogin(accountName, masterPassword, 'memo');
+
+    console.log(`[EXECUTE ORDER] Derived keys for credential injection`);
+
     // STEP 5: Create credential session for return to indiesmenu
     const credentialSession = await prisma.accountCredentialSession.create({
       data: {
         accountName,
         stripeSessionId: `direct_payment_${Date.now()}`, // No Stripe session for direct payment
-        masterPassword: walletUser.masterPassword || '',
-        ownerPrivate: '',
-        ownerPublic: '',
-        activePrivate: '',
-        activePublic: '',
-        postingPrivate: '',
-        postingPublic: '',
-        memoPrivate: '',
-        memoPublic: '',
+        masterPassword,
+        ownerPrivate: ownerPrivate.toString(),
+        ownerPublic: ownerPrivate.createPublic().toString(),
+        activePrivate: activePrivate.toString(),
+        activePublic: activePrivate.createPublic().toString(),
+        postingPrivate: postingPrivate.toString(),
+        postingPublic: postingPrivate.createPublic().toString(),
+        memoPrivate: memoPrivate.toString(),
+        memoPublic: memoPrivate.createPublic().toString(),
         euroBalance: newBalance,
         email: null,
         expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
