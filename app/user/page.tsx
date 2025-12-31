@@ -216,6 +216,7 @@ export default function HiveAccountCreationPage() {
   // Ref to prevent double-fetching in React StrictMode (dev only)
   const hasFetchedUsername = useRef(false);
   const hasFetchedCampaign = useRef(false);
+  const hasExecutedFlow5 = useRef(false); // Prevent duplicate Flow 5 execution
 
   // Refs for revoking object URLs
   const avatarPreviewRef = useCallback((url: string | null) => {
@@ -240,10 +241,20 @@ export default function HiveAccountCreationPage() {
     table: string | null,
     orderMemo: string | null,
     restaurant: string,
-    restaurantAccount: string
+    restaurantAccount: string,
+    returnUrl: string | null
   ) => {
+    // Prevent duplicate execution (React StrictMode, re-renders, etc.)
+    if (hasExecutedFlow5.current) {
+      console.log('[FLOW 5 EXISTING ACCOUNT] ⚠️ Already executed, skipping duplicate call');
+      return;
+    }
+    hasExecutedFlow5.current = true;
+    console.log('[FLOW 5 EXISTING ACCOUNT] 🔒 Execution lock acquired');
+
     try {
       console.log('[FLOW 5 EXISTING ACCOUNT] Unified approach - checking balance');
+      console.log('[FLOW 5 EXISTING ACCOUNT] Return URL:', returnUrl);
 
       // Step 1: Fetch robust EURO balance
       const balanceResponse = await fetch(`/api/balance/euro?account=${accountName}`);
@@ -260,7 +271,7 @@ export default function HiveAccountCreationPage() {
         // BRANCH A: Sufficient balance - Execute payment directly in innopay
         console.log('[FLOW 5 BRANCH A] Sufficient balance - executing payment in innopay');
 
-        alert('Balance suffisant! Paiement en cours...');
+        alert('Balance suffisante! Paiement en cours...');
 
         console.log('[FLOW 5 BRANCH A] Calling execute-order-payment API');
 
@@ -273,7 +284,8 @@ export default function HiveAccountCreationPage() {
             orderAmount,
             orderMemo: orderMemo || '',  // Empty string will be caught by API validation
             restaurantAccount,
-            table: table || undefined
+            table: table || undefined,
+            returnUrl: returnUrl || undefined  // Pass return URL to preserve environment
           })
         });
 
@@ -289,6 +301,13 @@ export default function HiveAccountCreationPage() {
           restaurantHbdTx: paymentData.restaurantHbdTxId,
           restaurantEuroTx: paymentData.restaurantEuroTxId
         });
+
+        // Update balance optimistically (show updated balance in MiniWallet before redirect)
+        const newBalance = euroBalance - orderAmount;
+        localStorage.setItem('innopay_lastBalance', newBalance.toFixed(2));
+        localStorage.setItem('innopay_lastBalance_timestamp', Date.now().toString());
+        setAccountBalance(newBalance);
+        console.log('[FLOW 5 BRANCH A] Updated balance optimistically:', euroBalance, '→', newBalance);
 
         // Redirect to restaurant with success
         alert('Paiement réussi! Redirection vers le restaurant...');
@@ -508,8 +527,9 @@ export default function HiveAccountCreationPage() {
         // Get restaurant parameters from state (set earlier from URL params)
         const restaurantParam = params.get('restaurant') || 'indies';
         const restaurantAccountParam = params.get('restaurant_account') || 'indies.cafe';
+        const returnUrlParam = params.get('return_url'); // Get return URL to preserve environment
 
-        handleExistingAccountFlow5(acc, pass, parseFloat(orderParam), tableParam, memoParam, restaurantParam, restaurantAccountParam);
+        handleExistingAccountFlow5(acc, pass, parseFloat(orderParam), tableParam, memoParam, restaurantParam, restaurantAccountParam, returnUrlParam);
         return; // Exit early - redirect will happen
       }
 

@@ -542,6 +542,67 @@ export async function transferHbd(toAccount: string, amountHbd: number, memo: st
 }
 
 /**
+ * Transfers HBD from a specified account to innopay (using innopay's active authority)
+ * Used when customer needs to pay HBD to innopay for restaurant orders
+ * @param {string} fromAccount - The sender's Hive account name (customer account)
+ * @param {string} toAccount - The recipient's Hive account name (usually 'innopay')
+ * @param {number} amountHbd - The amount of HBD to transfer
+ * @param {string} memo - The memo for the transfer
+ * @returns {Promise<string>} The transaction ID of the transfer
+ */
+export async function transferHbdFromAccount(
+  fromAccount: string,
+  toAccount: string,
+  amountHbd: number,
+  memo: string
+): Promise<string> {
+  // --- Step 1: Override recipient for dev environment ---
+  const recipient = getRecipientForEnvironment(toAccount);
+
+  // --- Step 2: Securely retrieve the innopay private key (has active authority over customer accounts) ---
+  const innopayPrivateKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
+
+  if (!innopayPrivateKey) {
+    throw new Error("Missing HIVE_ACTIVE_KEY_INNOPAY environment variable.");
+  }
+
+  // --- Step 3: Construct the HBD transfer operation ---
+  const transferOperation = [
+    'transfer',
+    {
+      from: fromAccount, // Transfer FROM the customer account
+      to: recipient,
+      amount: `${amountHbd.toFixed(3)} HBD`, // HBD uses 3 decimal places
+      memo: memo,
+    },
+  ];
+
+  // --- Step 4: Get current blockchain block details for transaction validity ---
+  const dynamicGlobalProperties = await hiveClient.database.getDynamicGlobalProperties();
+  const headBlockNumber = dynamicGlobalProperties.head_block_number;
+  const headBlockId = dynamicGlobalProperties.head_block_id;
+  const refBlockNum = headBlockNumber & 0xffff;
+  const refBlockPrefix = Buffer.from(headBlockId, 'hex').readUInt32LE(4);
+  const expirationTime = Math.floor(Date.now() / 1000) + 60; // 60-second expiration
+
+  const baseTransaction: Transaction = {
+    ref_block_num: refBlockNum,
+    ref_block_prefix: refBlockPrefix,
+    expiration: new Date(expirationTime * 1000).toISOString().slice(0, -5),
+    operations: [transferOperation as any],
+    extensions: [],
+  };
+
+  // --- Step 5: Sign and broadcast the transaction using innopay's authority ---
+  console.log(`Broadcasting HBD transfer of ${amountHbd.toFixed(3)} from '${fromAccount}' to '${recipient}' with memo: ${memo}`);
+  const signedTransaction = hiveClient.broadcast.sign(baseTransaction, [PrivateKey.fromString(innopayPrivateKey)]);
+  const broadcastResult = await hiveClient.broadcast.send(signedTransaction);
+
+  console.log("Successfully broadcasted HBD transfer from account:", broadcastResult);
+  return broadcastResult.id;
+}
+
+/**
  * Transfers EURO tokens from a specified account (using innopay authority)
  * Used when a newly created account needs to pay for their order using their EURO balance
  * @param {string} fromAccount - The sender's Hive account name (newly created account)

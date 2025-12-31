@@ -80,19 +80,38 @@ function AccountSuccessContent() {
       setLoading(false);
 
       // STEP 2: Store FULL credentials in localStorage (no need for token!)
+      console.log('[SUCCESS] 💾 Saving credentials to localStorage on innopay domain:', {
+        accountName: credentials.accountName,
+        hasEmail: !!credentials.email,
+        balance: credentials.euroBalance
+      });
+
       localStorage.setItem('innopay_accountName', credentials.accountName);
       localStorage.setItem('innopay_masterPassword', credentials.masterPassword);
       localStorage.setItem('innopay_activePrivate', credentials.keys.active.privateKey);
       localStorage.setItem('innopay_postingPrivate', credentials.keys.posting.privateKey);
       localStorage.setItem('innopay_memoPrivate', credentials.keys.memo.privateKey);
       localStorage.setItem('innopay_lastBalance', credentials.euroBalance.toString());
+      localStorage.setItem('innopay_lastBalance_timestamp', Date.now().toString());
 
       // Store email if available
       if (credentials.email) {
         localStorage.setItem('innopay_email', credentials.email);
-        console.log(`[SUCCESS] Stored full credentials in localStorage including email: ${credentials.email}`);
+      }
+
+      // VERIFY localStorage write
+      const savedAccountName = localStorage.getItem('innopay_accountName');
+      if (savedAccountName === credentials.accountName) {
+        console.log(`[SUCCESS] ✅ Verified: Credentials saved to localStorage on innopay domain:`, {
+          accountName: savedAccountName,
+          domain: window.location.hostname,
+          email: credentials.email || 'none'
+        });
       } else {
-        console.log(`[SUCCESS] Stored full credentials in localStorage (no email available)`);
+        console.error('[SUCCESS] ❌ CRITICAL: localStorage write failed!', {
+          expected: credentials.accountName,
+          actual: savedAccountName
+        });
       }
 
       // STEP 3: Detect which restaurant (if any) the user came from

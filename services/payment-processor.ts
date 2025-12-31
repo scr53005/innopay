@@ -2,7 +2,7 @@
 // Shared payment processing logic for all flows
 
 import { convertEurToHbd, getEurUsdRateServerSide } from './currency';
-import { transferEuroTokens, transferHbd, transferEuroTokensFromAccount, getRecipientForEnvironment } from './hive';
+import { transferEuroTokens, transferHbd, transferEuroTokensFromAccount, transferHbdFromAccount, getRecipientForEnvironment } from './hive';
 import prisma from '@/lib/prisma';
 
 export interface PaymentResult {
@@ -47,6 +47,7 @@ export async function processOrderPayment(params: {
   };
 
   // STEP 1: Transfer EURO from customer to innopay (if requested)
+  // If this fails, record EURO debt and continue - restaurant must still get paid
   if (fromCustomer) {
     console.log(`[PAYMENT] Step 1: Transfer ${orderAmount}€ from ${customerAccount} to innopay`);
     try {
@@ -57,9 +58,28 @@ export async function processOrderPayment(params: {
         'Paiement au restaurant / Payment to restaurant'
       );
       console.log(`[PAYMENT] ✅ Customer EURO transferred to innopay: ${result.customerEuroTxId}`);
-    } catch (customerTransferError: any) {
-      console.error(`[PAYMENT] ❌ Customer EURO transfer failed:`, customerTransferError.message);
-      throw new Error(`Failed to transfer EURO from customer: ${customerTransferError.message}`);
+    } catch (customerEuroError: any) {
+      console.error(`[PAYMENT] ❌ Customer EURO transfer failed:`, customerEuroError.message);
+      console.log(`[PAYMENT] Recording EURO debt from ${customerAccount} to innopay`);
+
+      // Record EURO debt - customer owes innopay (non-blocking, continue payment)
+      try {
+        await prisma.outstanding_debt.create({
+          data: {
+            creditor: 'innopay',
+            debtor: customerAccount,
+            amount_euro: orderAmount,
+            amount_hbd: 0,
+            eur_usd_rate: 1.0, // Will update with actual rate below
+            reason,
+            notes: `EURO transfer failed at ${new Date().toISOString()}: ${customerEuroError.message}`
+          }
+        });
+        console.log(`📝 [DEBT] Recorded ${orderAmount}€ EURO debt from ${customerAccount} to innopay`);
+      } catch (debtError) {
+        console.error('[PAYMENT] WARNING: Failed to record EURO debt:', debtError);
+      }
+      // Continue to pay restaurant even if customer transfer failed
     }
   }
 
@@ -68,37 +88,73 @@ export async function processOrderPayment(params: {
   result.eurUsdRate = rateData.conversion_rate;
   const hbdAmountForOrder = convertEurToHbd(orderAmount, result.eurUsdRate);
 
-  console.log(`[PAYMENT] Step 2: Transfer payment to restaurant (EUR: ${orderAmount}, HBD: ${hbdAmountForOrder}, rate: ${result.eurUsdRate})`);
+  console.log(`[PAYMENT] Step 2: EUR/USD rate: ${result.eurUsdRate}, HBD amount: ${hbdAmountForOrder}`);
 
-  // STEP 3: Try HBD transfer first (preferred) - from innopay to restaurant
+  // STEP 3a: Transfer HBD/EURO from innopay to restaurant (MUST SUCCEED)
+  console.log(`[PAYMENT] Step 3a: Transfer payment to restaurant (EUR: ${orderAmount}, HBD: ${hbdAmountForOrder})`);
   try {
     console.log(`[PAYMENT] Attempting HBD transfer to ${restaurantAccount} with memo:`, orderMemo);
     result.restaurantHbdTxId = await transferHbd(restaurantAccount, hbdAmountForOrder, orderMemo);
     console.log(`[PAYMENT] ✅ HBD transferred to restaurant: ${result.restaurantHbdTxId}`);
   } catch (hbdError: any) {
     // Fallback to EURO tokens if HBD insufficient
-    console.warn(`[PAYMENT] ⚠️ HBD transfer failed, using EURO token fallback:`, hbdError.message);
+    console.warn(`[PAYMENT] ⚠️ HBD transfer to restaurant failed, using EURO token fallback:`, hbdError.message);
 
-    // Try to record debt - innopay owes HBD to restaurant (non-blocking)
+    // Record debt - innopay owes HBD to restaurant (non-blocking)
     try {
       await prisma.outstanding_debt.create({
         data: {
           creditor: getRecipientForEnvironment(restaurantAccount),
+          debtor: 'innopay',
           amount_hbd: hbdAmountForOrder,
-          euro_tx_id: result.customerEuroTxId || 'DIRECT_PAYMENT',
           eur_usd_rate: result.eurUsdRate,
           reason,
           notes: `HBD shortage at ${new Date().toISOString()} - ${reason}`
         }
       });
-      console.log(`📝 [DEBT] Recorded ${hbdAmountForOrder} HBD debt to restaurant (${reason})`);
+      console.log(`📝 [DEBT] Recorded ${hbdAmountForOrder} HBD debt from innopay to restaurant`);
     } catch (debtError) {
       console.error('[PAYMENT] WARNING: Failed to record debt:', debtError);
     }
 
-    console.log(`[PAYMENT] Attempting EURO token transfer with memo:`, orderMemo);
+    console.log(`[PAYMENT] Attempting EURO token transfer to restaurant with memo:`, orderMemo);
     result.restaurantEuroTxId = await transferEuroTokens(restaurantAccount, orderAmount, orderMemo);
     console.log(`[PAYMENT] ✅ EURO tokens transferred to restaurant: ${result.restaurantEuroTxId}`);
+  }
+
+  // STEP 3b: Transfer HBD from customer to innopay (using innopay's active authority)
+  // This attempts to get HBD from customer for the HBD we'll owe or just paid to restaurant
+  if (fromCustomer) {
+    console.log(`[PAYMENT] Step 3b: Attempting HBD transfer from ${customerAccount} to innopay`);
+    try {
+      result.customerHbdTxId = await transferHbdFromAccount(
+        customerAccount,
+        'innopay',
+        hbdAmountForOrder,
+        'HBD payment to innopay'
+      );
+      console.log(`[PAYMENT] ✅ Customer HBD transferred to innopay: ${result.customerHbdTxId}`);
+    } catch (customerHbdError: any) {
+      console.warn(`[PAYMENT] ⚠️ Customer HBD transfer failed (likely insufficient HBD):`, customerHbdError.message);
+
+      // Record HBD debt - customer owes innopay HBD (non-blocking)
+      try {
+        await prisma.outstanding_debt.create({
+          data: {
+            creditor: 'innopay',
+            debtor: customerAccount,
+            amount_hbd: hbdAmountForOrder,
+            euro_tx_id: result.customerEuroTxId || null,
+            eur_usd_rate: result.eurUsdRate,
+            reason,
+            notes: `HBD transfer failed at ${new Date().toISOString()}: ${customerHbdError.message}`
+          }
+        });
+        console.log(`📝 [DEBT] Recorded ${hbdAmountForOrder} HBD debt from ${customerAccount} to innopay`);
+      } catch (debtError) {
+        console.error('[PAYMENT] WARNING: Failed to record HBD debt:', debtError);
+      }
+    }
   }
 
   console.log(`[PAYMENT] ✅ Order payment complete`);

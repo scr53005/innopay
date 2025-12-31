@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { accountName, orderAmount, orderMemo, restaurantAccount, table } = body;
+    const { accountName, orderAmount, orderMemo, restaurantAccount, table, returnUrl } = body;
 
     // Validate required parameters
     if (!accountName || !orderAmount || !orderMemo || !restaurantAccount) {
@@ -45,7 +45,8 @@ export async function POST(req: NextRequest) {
       orderAmount,
       restaurantAccount,
       memoLength: orderMemo.length,
-      table
+      table,
+      returnUrl
     });
 
     // STEP 1: Verify account exists in walletuser table
@@ -122,11 +123,20 @@ export async function POST(req: NextRequest) {
     console.log(`[EXECUTE ORDER] Credential session created: ${credentialSession.id}`);
 
     // STEP 6: Build redirect URL for return to restaurant
-    const { getRestaurantUrl } = await import('@/services/utils');
-    const restaurantUrl = getRestaurantUrl('indies', '/menu');
+    // Use returnUrl from request if provided (preserves environment), otherwise use getRestaurantUrl
+    let baseRestaurantUrl: string;
+    if (returnUrl) {
+      baseRestaurantUrl = returnUrl;
+      console.log(`[EXECUTE ORDER] Using provided return URL: ${returnUrl}`);
+    } else {
+      const { getRestaurantUrl } = await import('@/services/utils');
+      baseRestaurantUrl = getRestaurantUrl('indies', '/menu');
+      console.log(`[EXECUTE ORDER] Using getRestaurantUrl fallback: ${baseRestaurantUrl}`);
+    }
 
-    const redirectUrl = new URL(restaurantUrl);
+    const redirectUrl = new URL(baseRestaurantUrl);
     redirectUrl.searchParams.set('order_success', 'true');
+    redirectUrl.searchParams.set('existing_account', 'true'); // Trigger Flow 5 existing account handling
     redirectUrl.searchParams.set('credential_token', credentialSession.id);
     if (table) redirectUrl.searchParams.set('table', table);
 
