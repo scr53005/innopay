@@ -573,6 +573,7 @@ async function handleFlow7UnifiedApproach(
   const redirectUrl = new URL(restaurantUrl);
   redirectUrl.searchParams.set('order_success', 'true');
   redirectUrl.searchParams.set('credential_token', credentialSession.id);
+  redirectUrl.searchParams.set('flow', '7'); // Indicate this was Flow 7 (topup + order)
   if (table) redirectUrl.searchParams.set('table', table);
 
   console.log(`[FLOW 7] ✅ Flow 7 complete - redirect to: ${redirectUrl.toString()}`);

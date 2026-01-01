@@ -81,7 +81,16 @@ const translations = {
     callToAction: "Améliorez votre profil pour gagner des réductions ou explorez les boutiques et restaurants Innopay à proximité.",
     beautifyProfile: "Améliorer mon profil",
     exploreShops: "Explorer les boutiques Innopay",
-    returnToMerchant: "Revenir au site marchand"
+    returnToMerchant: "Revenir au site marchand",
+    accountFoundTitle: "Compte trouvé",
+    accountFoundMessage: "Vous avez déjà un compte Innopay",
+    currentBalance: "Solde actuel:",
+    okButton: "OK",
+    insufficientBalanceTitle: "Rechargement nécessaire",
+    insufficientBalanceMessage: "Le solde de votre compte n'est pas suffisant pour la commande en cours, un rechargement est nécessaire.",
+    orderAmount: "Montant de la commande:",
+    topupRequired: "Rechargement requis:",
+    continueButton: "Continuer"
   },
   en: {
     accountIs: "Your Innopay account is:",
@@ -89,7 +98,16 @@ const translations = {
     callToAction: "Beautify your profile to earn discounts or explore the nearby Innopay shops and restaurants.",
     beautifyProfile: "Beautify profile",
     exploreShops: "Explore Innopay shops",
-    returnToMerchant: "Return to merchant site"
+    returnToMerchant: "Return to merchant site",
+    accountFoundTitle: "Account Found",
+    accountFoundMessage: "You already have an Innopay account",
+    currentBalance: "Current balance:",
+    okButton: "OK",
+    insufficientBalanceTitle: "Top-up Required",
+    insufficientBalanceMessage: "Your account balance is not sufficient for the current order, a top-up is required.",
+    orderAmount: "Order amount:",
+    topupRequired: "Top-up required:",
+    continueButton: "Continue"
   },
   de: {
     accountIs: "Ihr Innopay-Konto ist:",
@@ -97,7 +115,16 @@ const translations = {
     callToAction: "Verschönern Sie Ihr Profil, um Rabatte zu verdienen oder erkunden Sie die nahegelegenen Innopay-Geschäfte und Restaurants.",
     beautifyProfile: "Profil verschönern",
     exploreShops: "Innopay-Geschäfte erkunden",
-    returnToMerchant: "Zurück zur Händlerseite"
+    returnToMerchant: "Zurück zur Händlerseite",
+    accountFoundTitle: "Konto gefunden",
+    accountFoundMessage: "Sie haben bereits ein Innopay-Konto",
+    currentBalance: "Aktueller Saldo:",
+    okButton: "OK",
+    insufficientBalanceTitle: "Aufladung erforderlich",
+    insufficientBalanceMessage: "Ihr Kontoguthaben reicht für die aktuelle Bestellung nicht aus, eine Aufladung ist erforderlich.",
+    orderAmount: "Bestellbetrag:",
+    topupRequired: "Aufladung erforderlich:",
+    continueButton: "Fortsetzen"
   },
   lb: {
     accountIs: "Äert Innopay Konto ass:",
@@ -105,7 +132,16 @@ const translations = {
     callToAction: "Verschéinert Äert Profil fir Rabatter ze verdéngen oder entdeckt déi no Innopay Geschäfter a Restauranten.",
     beautifyProfile: "Profil verschéineren",
     exploreShops: "Innopay Geschäfter entdecken",
-    returnToMerchant: "Zréck op d'Händler-Säit"
+    returnToMerchant: "Zréck op d'Händler-Säit",
+    accountFoundTitle: "Konto fonnt",
+    accountFoundMessage: "Dir hutt schonn en Innopay Konto",
+    currentBalance: "Aktuellen Solde:",
+    okButton: "OK",
+    insufficientBalanceTitle: "Oplueden néideg",
+    insufficientBalanceMessage: "Äert Kontoguthaben ass net genuch fir déi aktuell Bestellung, en Oplueden ass néideg.",
+    orderAmount: "Bestellmontant:",
+    topupRequired: "Oplueden néideg:",
+    continueButton: "Weidermachen"
   }
 };
 
@@ -153,6 +189,13 @@ export default function HiveAccountCreationPage() {
   // State for account balance (for MiniWallet)
   const [accountBalance, setAccountBalance] = useState<number | null>(null);
   const [showWalletBalance, setShowWalletBalance] = useState(true); // Show wallet by default when account exists
+
+  // State for Flow 5→7 modals
+  const [showAccountFoundModal, setShowAccountFoundModal] = useState(false);
+  const [showInsufficientBalanceModal, setShowInsufficientBalanceModal] = useState(false);
+  const [modalAccountInfo, setModalAccountInfo] = useState<{ accountName: string; balance: number; email?: string } | null>(null);
+  const [modalTopupInfo, setModalTopupInfo] = useState<{ currentBalance: number; orderAmount: number; topupAmount: number } | null>(null);
+  const [proceedWithFlow, setProceedWithFlow] = useState<(() => void) | null>(null);
 
   const [isUsernameValid, setIsUsernameValid] = useState(false);
   const [validationMessage, setValidationMessage] = useState('');
@@ -266,14 +309,22 @@ export default function HiveAccountCreationPage() {
 
       console.log('[FLOW 5 EXISTING ACCOUNT] Balance:', euroBalance, 'Order:', orderAmount);
 
-      // Step 2: Branch based on balance
-      if (euroBalance >= orderAmount) {
-        // BRANCH A: Sufficient balance - Execute payment directly in innopay
-        console.log('[FLOW 5 BRANCH A] Sufficient balance - executing payment in innopay');
+      // Step 1.5: Show account found modal with balance
+      const email = localStorage.getItem('innopay_email');
+      setModalAccountInfo({ accountName, balance: euroBalance, email: email || undefined });
+      setAccountBalance(euroBalance); // Set balance for display
+      setShowAccountFoundModal(true);
 
-        alert('Balance suffisante! Paiement en cours...');
+      // Create continuation function based on balance
+      const continueFlow = async () => {
+        setShowAccountFoundModal(false); // Close account found modal
 
-        console.log('[FLOW 5 BRANCH A] Calling execute-order-payment API');
+        // Step 2: Branch based on balance
+        if (euroBalance >= orderAmount) {
+          // BRANCH A: Sufficient balance - Execute payment directly in innopay
+          console.log('[FLOW 5 BRANCH A] Sufficient balance - executing payment in innopay');
+
+          console.log('[FLOW 5 BRANCH A] Calling execute-order-payment API');
 
         // Call the execute-order-payment API
         const paymentResponse = await fetch('/api/execute-order-payment', {
@@ -302,39 +353,44 @@ export default function HiveAccountCreationPage() {
           restaurantEuroTx: paymentData.restaurantEuroTxId
         });
 
-        // Update balance optimistically (show updated balance in MiniWallet before redirect)
-        const newBalance = euroBalance - orderAmount;
-        localStorage.setItem('innopay_lastBalance', newBalance.toFixed(2));
-        localStorage.setItem('innopay_lastBalance_timestamp', Date.now().toString());
-        setAccountBalance(newBalance);
-        console.log('[FLOW 5 BRANCH A] Updated balance optimistically:', euroBalance, '→', newBalance);
+          // Update balance optimistically (show updated balance in MiniWallet before redirect)
+          const newBalance = euroBalance - orderAmount;
+          localStorage.setItem('innopay_lastBalance', newBalance.toFixed(2));
+          localStorage.setItem('innopay_lastBalance_timestamp', Date.now().toString());
+          setAccountBalance(newBalance);
+          console.log('[FLOW 5 BRANCH A] Updated balance optimistically:', euroBalance, '→', newBalance);
 
-        // Redirect to restaurant with success
-        alert('Paiement réussi! Redirection vers le restaurant...');
-        window.location.href = paymentData.redirectUrl;
+          // Redirect to restaurant with success
+          window.location.href = paymentData.redirectUrl;
 
-      } else {
-        // BRANCH B: Insufficient balance - Redirect to Stripe topup with order context
-        console.log('[FLOW 5 BRANCH B] Insufficient balance - redirecting to Stripe topup');
+        } else {
+          // BRANCH B: Insufficient balance - Show modal then redirect to Stripe topup
+          console.log('[FLOW 5 BRANCH B] Insufficient balance - need topup');
 
-        const deficit = orderAmount - euroBalance;
+          const deficit = orderAmount - euroBalance;
 
-        // Round deficit UP to nearest euro first
-        const deficitRoundedUp = Math.ceil(deficit);
+          // Round deficit UP to nearest euro first
+          const deficitRoundedUp = Math.ceil(deficit);
 
-        // Then round UP to nearest 5€ increment
-        const topupAmount = Math.max(
-          Math.ceil(deficitRoundedUp / 5) * 5, // Round up to nearest 5€
-          15 // Minimum 15€
-        );
+          // Then round UP to nearest 5€ increment
+          const topupAmount = Math.max(
+            Math.ceil(deficitRoundedUp / 5) * 5, // Round up to nearest 5€
+            15 // Minimum 15€
+          );
 
-        console.log('[FLOW 5 BRANCH B] Topup calculation:', {
-          deficitRaw: deficit,
-          deficitRoundedUp: deficitRoundedUp,
-          topupAmount: topupAmount
-        });
+          console.log('[FLOW 5 BRANCH B] Topup calculation:', {
+            deficitRaw: deficit,
+            deficitRoundedUp: deficitRoundedUp,
+            topupAmount: topupAmount
+          });
 
-        alert(`Balance insuffisant (${euroBalance.toFixed(2)}€). Rechargement de ${topupAmount}€ nécessaire.`);
+          // Show insufficient balance modal
+          setModalTopupInfo({ currentBalance: euroBalance, orderAmount, topupAmount });
+          setShowInsufficientBalanceModal(true);
+
+          // Create topup continuation function
+          const proceedToTopup = async () => {
+            setShowInsufficientBalanceModal(false);
 
         // Redirect to Stripe checkout with order context in metadata
         const checkoutResponse = await fetch('/api/checkout/account', {
@@ -361,17 +417,26 @@ export default function HiveAccountCreationPage() {
 
         const checkoutData = await checkoutResponse.json();
 
-        if (checkoutData.url) {
-          console.log('[FLOW 5 BRANCH B] Redirecting to Stripe:', checkoutData.url);
-          window.location.href = checkoutData.url;
-        } else {
-          throw new Error('No checkout URL received');
+            if (checkoutData.url) {
+              console.log('[FLOW 5 BRANCH B] Redirecting to Stripe:', checkoutData.url);
+              window.location.href = checkoutData.url;
+            } else {
+              throw new Error('No checkout URL received');
+            }
+          };
+
+          // Store topup function for modal to call
+          setProceedWithFlow(() => proceedToTopup);
         }
-      }
+      };
+
+      // Store continue function for account found modal to call
+      setProceedWithFlow(() => continueFlow);
 
     } catch (error: any) {
       console.error('[FLOW 5 EXISTING ACCOUNT] Error:', error);
       alert(`Erreur: ${error.message}`);
+      hasExecutedFlow5.current = false; // Reset lock on error
     }
   };
 
@@ -2205,6 +2270,88 @@ export default function HiveAccountCreationPage() {
         draggable
         pauseOnHover
       />
+
+      {/* Account Found Modal */}
+      {showAccountFoundModal && modalAccountInfo && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <h2 className="text-2xl font-bold text-blue-900 mb-4">
+              {translations[language].accountFoundTitle}
+            </h2>
+            <p className="text-gray-700 mb-4">
+              {translations[language].accountFoundMessage}
+            </p>
+            <div className="bg-blue-50 border-2 border-blue-500 rounded-lg p-4 mb-4">
+              <p className="font-mono font-bold text-xl text-blue-900 break-all mb-3">
+                {modalAccountInfo.accountName}
+              </p>
+              {modalAccountInfo.email && (
+                <p className="text-sm text-gray-700 mb-3">
+                  {modalAccountInfo.email}
+                </p>
+              )}
+              <p className="text-lg font-semibold text-gray-800">
+                {translations[language].currentBalance}
+              </p>
+              <p className="text-2xl font-bold text-green-600">
+                {modalAccountInfo.balance.toFixed(2)} €
+              </p>
+            </div>
+            <button
+              onClick={() => proceedWithFlow && proceedWithFlow()}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors"
+            >
+              {translations[language].okButton}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Insufficient Balance Modal */}
+      {showInsufficientBalanceModal && modalTopupInfo && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <h2 className="text-2xl font-bold text-orange-900 mb-4">
+              {translations[language].insufficientBalanceTitle}
+            </h2>
+            <p className="text-gray-700 mb-4">
+              {translations[language].insufficientBalanceMessage}
+            </p>
+            <div className="bg-orange-50 border-2 border-orange-500 rounded-lg p-4 mb-4">
+              <div className="mb-3">
+                <p className="text-sm text-gray-700">
+                  {translations[language].currentBalance}
+                </p>
+                <p className="text-xl font-bold text-gray-800">
+                  {modalTopupInfo.currentBalance.toFixed(2)} €
+                </p>
+              </div>
+              <div className="mb-3">
+                <p className="text-sm text-gray-700">
+                  {translations[language].orderAmount}
+                </p>
+                <p className="text-xl font-bold text-gray-800">
+                  {modalTopupInfo.orderAmount.toFixed(2)} €
+                </p>
+              </div>
+              <div className="border-t-2 border-orange-300 pt-3 mt-3">
+                <p className="text-sm text-gray-700">
+                  {translations[language].topupRequired}
+                </p>
+                <p className="text-2xl font-bold text-orange-600">
+                  {modalTopupInfo.topupAmount.toFixed(2)} €
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => proceedWithFlow && proceedWithFlow()}
+              className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-4 rounded-lg transition-colors"
+            >
+              {translations[language].continueButton}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* DEV ONLY: Clear localStorage button */}
       {(typeof window !== 'undefined') && (window.location.hostname === 'localhost' ||

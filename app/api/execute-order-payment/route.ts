@@ -138,6 +138,7 @@ export async function POST(req: NextRequest) {
     redirectUrl.searchParams.set('order_success', 'true');
     redirectUrl.searchParams.set('existing_account', 'true'); // Trigger Flow 5 existing account handling
     redirectUrl.searchParams.set('credential_token', credentialSession.id);
+    redirectUrl.searchParams.set('flow', '6'); // Indicate this was Flow 6 (pay with existing account)
     if (table) redirectUrl.searchParams.set('table', table);
 
     console.log(`[EXECUTE ORDER] ✅ Complete - redirect to: ${redirectUrl.toString()}`);
