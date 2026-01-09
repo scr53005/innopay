@@ -13,33 +13,44 @@ const isDevOrTest = process.env.NEXT_PUBLIC_ENV !== 'production';
 const innopayLogoUrl = "/innopay.svg";
 const defaultAvatarUrl = "/images/Koala-BlueBg.png";
 
-// Helper function to get spoke URL based on environment (hub-and-spoke architecture)
-const getSpokeUrl = (spoke: string): string => {
+// Spoke data type (fetched from database)
+type SpokeData = {
+  id: string;
+  name: string;
+  type: string;
+  domain_prod: string;
+  port_dev: number;
+  path: string;
+  attribute_name_1: string | null;
+  attribute_default_1: string | null;
+  attribute_storage_key_1: string | null;
+  active: boolean;
+  ready: boolean;
+};
+
+// Helper function to get spoke base URL based on environment (hub-and-spoke architecture)
+// Uses database-driven spoke data instead of hardcoded values
+const getSpokeBaseUrl = (spokeData: SpokeData): string => {
   if (typeof window === 'undefined') {
-    // SSR fallback - return localhost for 'indies' spoke
-    return spoke === 'indies' ? 'http://localhost:3001' : '/';
+    // SSR fallback
+    return `http://localhost:${spokeData.port_dev}`;
   }
 
   const hostname = window.location.hostname;
 
   // Production environment
   if (hostname === 'wallet.innopay.lu') {
-    if (spoke === 'indies') return 'https://indies.innopay.lu';
-    // Future spokes can be added here
-    return '/';
+    return `https://${spokeData.domain_prod}`;
   }
 
   // Mobile testing (Android/iOS on local network)
+  // Use same IP as hub but spoke's dev port from database
   if (hostname.startsWith('192.168.')) {
-    if (spoke === 'indies') return 'http://192.168.178.55:3001';
-    // Future spokes: add mobile testing URLs here
-    return '/';
+    return `http://${hostname}:${spokeData.port_dev}`;
   }
 
   // Desktop/localhost testing
-  if (spoke === 'indies') return 'http://localhost:3001';
-  // Future spokes: add localhost ports here (e.g., 'spoke2': 'http://localhost:3002')
-  return '/';
+  return `http://localhost:${spokeData.port_dev}`;
 };
 
 export type Metadata = { 
@@ -244,6 +255,7 @@ export default function HiveAccountCreationPage() {
   const [orderMemo, setOrderMemo] = useState<string | null>(null); // Memo from indiesmenu order (table, order details)
   const [restaurant, setRestaurant] = useState<string>('indies'); // Restaurant identifier (default: indies)
   const [restaurantAccount, setRestaurantAccount] = useState<string>('indies.cafe'); // Restaurant Hive account (default: indies.cafe)
+  const [spokeData, setSpokeData] = useState<SpokeData | null>(null); // Spoke data from database
 
   // State for draggable validation toast
   const [toastPosition, setToastPosition] = useState({ x: 0, y: -60 }); // Start closer to input
@@ -559,6 +571,21 @@ export default function HiveAccountCreationPage() {
     if (restaurantParam) {
       setRestaurant(restaurantParam);
       console.log(`[RESTAURANT] Detected restaurant: ${restaurantParam}`);
+
+      // Fetch spoke data from database for environment-aware URL resolution
+      fetch(`/api/spokes/${restaurantParam}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.spoke) {
+            setSpokeData(data.spoke);
+            console.log(`[RESTAURANT] Spoke data loaded:`, data.spoke);
+          } else {
+            console.warn(`[RESTAURANT] Spoke not found in database: ${restaurantParam}`);
+          }
+        })
+        .catch(err => {
+          console.error(`[RESTAURANT] Failed to fetch spoke data:`, err);
+        });
     }
 
     const restaurantAccountParam = params.get('restaurant_account');
@@ -2027,12 +2054,11 @@ export default function HiveAccountCreationPage() {
                         return;
                       }
 
-                      if (restaurant) {
+                      if (restaurant && spokeData) {
                         // FLOW 4 & 5: Return to restaurant site with environment-aware URL (hub-and-spoke architecture)
-                        const spokeBaseUrl = getSpokeUrl(restaurant);
-                        const restaurantUrl = restaurant === 'indies'
-                          ? `${spokeBaseUrl}/menu`
-                          : spokeBaseUrl; // Use spoke URL directly for other spokes
+                        // Uses database-driven spoke data for URL resolution
+                        const spokeBaseUrl = getSpokeBaseUrl(spokeData);
+                        const restaurantUrl = `${spokeBaseUrl}${spokeData.path}`;
 
                         const returnUrl = new URL(restaurantUrl, window.location.origin);
                         if (table) returnUrl.searchParams.set('table', table);
@@ -2044,6 +2070,11 @@ export default function HiveAccountCreationPage() {
                         const finalUrl = await prepareUrlWithCredentials(returnUrl.toString(), '4');
 
                         window.location.href = finalUrl;
+                      } else if (restaurant && !spokeData) {
+                        // Spoke data not yet loaded - wait and retry
+                        console.warn('[FLOW 4/5] Spoke data not loaded yet, retrying...');
+                        setTimeout(exploreButtonAction, 100);
+                        return;
                       } else {
                         // Navigate to Innopay shops
                         window.location.href = '/';

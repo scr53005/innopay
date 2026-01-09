@@ -136,8 +136,7 @@ User comes from or returns to a restaurant platform (e.g., indies.innopay.lu/men
 - **Variant B** uses `credential_token` for credential import from hub (NOT legacy - actively used!)
 - Both variants use `/api/account/credentials` endpoint
 - Credentials stored in localStorage enable mini-wallet for future orders
-- **Variant A**: Page refreshes after 3 seconds to display mini-wallet
-- **Variant B**: No page refresh needed, MiniWallet appears immediately (2026-01-09 fix)
+- No page refresh needed, MiniWallet appears immediately thanks to React Query (2026-01-09 fix)
 - **Spoke banner**: Shows "Votre portefeuille Innopay est prêt, vous pouvez déjà commander" (2026-01-09)
 
 **Implementation files:**
@@ -161,9 +160,11 @@ User comes from or returns to a restaurant platform (e.g., indies.innopay.lu/men
 1. User places order on indies.innopay.lu/menu
 2. Selects "Create Account & Pay"
 3. Redirected to wallet.innopay.lu/user with order params
-4. Enters account name, payment includes order + top-up
-5. Completes Stripe checkout
-6. Returns to indies.innopay.lu/menu
+4. If an account is present in wallet.innopay.lu, it uses this wallet to pay (flow 5 becomes flow 6 or flow 7 depending on whether the amount 
+in the existing wallet is higher or lower than the orderAmount) and returns credential_token for the spoke to import the account from the wallet.
+5. If no account is present in wallet.innopay.lu it enters account name or accepts suggested, payment includes order + top-up
+6. Completes Stripe checkout
+7. Returns to indies.innopay.lu/menu
 
 **Redirect:**
 - Success: `indies.innopay.lu/menu?table={TABLE}&topup_success=true`
@@ -193,18 +194,18 @@ User comes from or returns to a restaurant platform (e.g., indies.innopay.lu/men
 
 **Implementation:** ✅ **FULLY IMPLEMENTED AND WORKING**
 
-This flow does NOT require Stripe checkout. The implementation is in `indiesmenu/app/menu/page.tsx` lines 779-993:
+This flow does NOT require Stripe checkout. The implementation is in `indiesmenu/app/menu/page.tsx` lines 1536-1783:
 
-1. **Balance check** (line 807): Verifies customer's EURO token balance is sufficient
+1. **Balance check** (line 1473): Verifies customer's EURO token balance is sufficient (if not => FLOW 7)
 
-2. **First leg transfer** (lines 860-899): **Customer → innopay**
+2. **First leg transfer**: **Customer → innopay**
    - **HBD transfer attempt**: `orderAmount * eurUsdRate` HBD
    - If insufficient HBD → record `outstanding_debt` (customer owes innopay)
    - **EURO transfer** (collateral): Always succeeds by definition
    - Signs and broadcasts via `/api/sign-and-broadcast` endpoint
    - Updates mini-wallet balance in UI
 
-3. **Second leg transfer** (lines 919-949): **innopay → restaurant**
+3. **Second leg transfer**: **innopay → restaurant**
    - Calls `/api/wallet-payment` endpoint
    - **HBD transfer attempt** to restaurant
    - If insufficient HBD → record `outstanding_debt` (innopay owes restaurant)

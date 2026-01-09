@@ -49,8 +49,9 @@ const getSpokeBaseUrl = (spoke: Spoke): string => {
   }
 
   // Mobile testing (Android/iOS on local network)
+  // Use same IP as hub but spoke's dev port
   if (hostname.startsWith('192.168.')) {
-    return `http://192.168.178.55:${spoke.port_dev}`;
+    return `http://${hostname}:${spoke.port_dev}`;
   }
 
   // Desktop/localhost testing
