@@ -2039,59 +2039,11 @@ export default function HiveAccountCreationPage() {
 
                         // CRITICAL: Create credential session for Flow 4 consistency with Flow 5
                         // This allows the spoke to import credentials just like Flow 5 does
-                        const accountName = existingAccount?.accountName || localStorage.getItem('innopay_accountName');
-                        const masterPassword = localStorage.getItem('innopay_masterPassword');
-                        const activePrivate = localStorage.getItem('innopay_activePrivate');
-                        const activePublic = localStorage.getItem('innopay_activePublic');
-                        const postingPrivate = localStorage.getItem('innopay_postingPrivate');
-                        const postingPublic = localStorage.getItem('innopay_postingPublic');
-                        const memoPrivate = localStorage.getItem('innopay_memoPrivate');
-                        const memoPublic = localStorage.getItem('innopay_memoPublic');
-                        const ownerPrivate = localStorage.getItem('innopay_ownerPrivate');
-                        const ownerPublic = localStorage.getItem('innopay_ownerPublic');
+                        const { prepareUrlWithCredentials } = await import('@/lib/credential-session');
 
-                        if (accountName && masterPassword && activePrivate && postingPrivate && memoPrivate) {
-                          try {
-                            console.log('[FLOW 4] Creating credential session for return to spoke:', restaurant);
+                        const finalUrl = await prepareUrlWithCredentials(returnUrl.toString(), '4');
 
-                            // Create credential session
-                            const response = await fetch('/api/account/create-credential-session', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({
-                                accountName,
-                                masterPassword,
-                                keys: {
-                                  owner: { privateKey: ownerPrivate || '', publicKey: ownerPublic || '' },
-                                  active: { privateKey: activePrivate, publicKey: activePublic || '' },
-                                  posting: { privateKey: postingPrivate, publicKey: postingPublic || '' },
-                                  memo: { privateKey: memoPrivate, publicKey: memoPublic || '' }
-                                },
-                                euroBalance: accountBalance || 0,
-                                email: localStorage.getItem('innopay_email')
-                              })
-                            });
-
-                            if (response.ok) {
-                              const data = await response.json();
-                              const credentialToken = data.credentialToken;
-
-                              console.log('[FLOW 4] Credential session created:', credentialToken);
-
-                              // Add credential_token to URL for spoke to import credentials
-                              returnUrl.searchParams.set('credential_token', credentialToken);
-                              returnUrl.searchParams.set('account_created', 'true');
-
-                              console.log('[FLOW 4] Redirecting to spoke with credentials:', returnUrl.toString());
-                            } else {
-                              console.error('[FLOW 4] Failed to create credential session:', response.status);
-                            }
-                          } catch (error) {
-                            console.error('[FLOW 4] Error creating credential session:', error);
-                          }
-                        }
-
-                        window.location.href = returnUrl.toString();
+                        window.location.href = finalUrl;
                       } else {
                         // Navigate to Innopay shops
                         window.location.href = '/';

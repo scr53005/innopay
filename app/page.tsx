@@ -6,65 +6,95 @@ import Image from 'next/image';
 import Draggable from '@/app/components/Draggable';
 import MiniWallet, { WalletReopenButton } from '@/app/components/MiniWallet';
 import { getAccountCredentials } from '@/app/actions/get-credentials';
+import { useBalance } from '@/hooks/useBalance';
 
 const innopayLogoUrl = "/innopay.svg";
 
-// Helper function to get spoke URL based on environment (hub-and-spoke architecture)
-const getSpokeUrl = (spoke: string): string => {
+// Spoke type from database
+interface Spoke {
+  id: string;
+  name: string;
+  type: string;
+  domain_prod: string;
+  port_dev: number;
+  path: string;
+  attribute_name_1: string | null;
+  attribute_default_1: string | null;
+  attribute_storage_key_1: string | null;
+  attribute_name_2: string | null;
+  attribute_default_2: string | null;
+  attribute_storage_key_2: string | null;
+  attribute_name_3: string | null;
+  attribute_default_3: string | null;
+  attribute_storage_key_3: string | null;
+  image_1: string | null;
+  image_2: string | null;
+  image_3: string | null;
+  has_delivery: boolean;
+  ready: boolean;
+}
+
+// Helper function to get spoke base URL based on environment (hub-and-spoke architecture)
+const getSpokeBaseUrl = (spoke: Spoke): string => {
   if (typeof window === 'undefined') {
-    // SSR fallback - return localhost for 'indies' spoke
-    return spoke === 'indies' ? 'http://localhost:3001' : '/';
+    // SSR fallback
+    return `http://localhost:${spoke.port_dev}`;
   }
 
   const hostname = window.location.hostname;
 
   // Production environment
   if (hostname === 'wallet.innopay.lu') {
-    if (spoke === 'indies') return 'https://indies.innopay.lu';
-    // Future spokes can be added here
-    return '/';
+    return `https://${spoke.domain_prod}`;
   }
 
   // Mobile testing (Android/iOS on local network)
   if (hostname.startsWith('192.168.')) {
-    if (spoke === 'indies') return 'http://192.168.178.55:3001';
-    // Future spokes: add mobile testing URLs here
-    return '/';
+    return `http://192.168.178.55:${spoke.port_dev}`;
   }
 
   // Desktop/localhost testing
-  if (spoke === 'indies') return 'http://localhost:3001';
-  // Future spokes: add localhost ports here (e.g., 'spoke2': 'http://localhost:3002')
-  return '/';
+  return `http://localhost:${spoke.port_dev}`;
 };
 
-// Hardcoded nearby businesses (will be fetched from database in future iteration)
-const nearbyBusinesses = [
-  {
-    id: 'independent-cafe',
-    name: 'Independent Café',
-    image: '/images/businesses/independent-cafe.jpg',
-    table: '0'
-  },
-  {
-    id: 'al21',
-    name: "Al'21 Restaurant",
-    image: '/images/businesses/al21.jpg',
-    table: '0'
-  },
-  {
-    id: 'croque-bedaine',
-    name: 'Le Croque Bedaine',
-    image: '/images/businesses/croque-bedaine.jpg',
-    table: '0'
-  },
-  {
-    id: 'millewee',
-    name: 'Brasserie Millewee',
-    image: '/images/businesses/millewee.PNG',
-    table: '0'
+// Helper function to build full spoke URL with path and query params
+const buildSpokeUrl = (spoke: Spoke): string => {
+  const baseUrl = getSpokeBaseUrl(spoke);
+  const fullPath = `${baseUrl}${spoke.path}`;
+
+  const params = new URLSearchParams();
+
+  // Process each attribute slot (1-3)
+  for (let i = 1; i <= 3; i++) {
+    const name = spoke[`attribute_name_${i}` as keyof Spoke] as string | null;
+    if (!name) continue; // No attribute defined, skip
+
+    const storageKey = spoke[`attribute_storage_key_${i}` as keyof Spoke] as string | null;
+    const defaultValue = spoke[`attribute_default_${i}` as keyof Spoke] as string | null;
+
+    let value: string | null = null;
+
+    // Priority 1: Check localStorage if storage key is defined
+    if (storageKey && typeof window !== 'undefined') {
+      value = localStorage.getItem(storageKey);
+    }
+
+    // Priority 2: Use default if no localStorage value found
+    if (!value && defaultValue) {
+      value = defaultValue;
+    }
+
+    // Only add parameter if we have a value
+    if (value) {
+      params.append(name, value);
+    }
   }
-];
+
+  const queryString = params.toString();
+  return queryString ? `${fullPath}?${queryString}` : fullPath;
+};
+
+// Nearby businesses will be fetched from database
 
 // Translations for the UI
 const translations = {
@@ -139,6 +169,10 @@ function TopUpContent() {
   // State for showing nearby businesses (balance >= 4.99€)
   const [showNearbyBusinesses, setShowNearbyBusinesses] = useState(false);
 
+  // State for spokes (fetched from database)
+  const [spokes, setSpokes] = useState<Spoke[]>([]);
+  const [spokesLoading, setSpokesLoading] = useState(true);
+
   // State for order context from indiesmenu (Flow 7: pay_with_topup)
   const [orderContext, setOrderContext] = useState<{
     table: string;
@@ -148,6 +182,36 @@ function TopUpContent() {
   } | null>(null);
 
   const t = translations[language];
+
+  // Get account name for React Query balance fetching
+  const accountName = typeof window !== 'undefined'
+    ? (localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName'))
+    : null;
+
+  // Fetch balance using React Query (replaces manual fetchWalletBalance)
+  const { balance, isLoading: balanceLoading, refetch: refetchBalance, source: balanceSource } = useBalance(accountName, {
+    enabled: !!accountName && !accountName.startsWith('mockaccount'),
+  });
+
+  // Sync React Query balance to walletBalance state
+  useEffect(() => {
+    if (balance !== null && accountName) {
+      console.log('[React Query] Syncing balance to state:', balance, 'source:', balanceSource);
+      setWalletBalance({
+        accountName,
+        euroBalance: balance
+      });
+      setShowWalletBalance(true);
+
+      // Check if we should show nearby businesses
+      if (balance >= 4.99) {
+        console.log('[React Query] Balance >= 4.99€ - showing nearby businesses');
+        setShowNearbyBusinesses(true);
+      } else {
+        setShowNearbyBusinesses(false);
+      }
+    }
+  }, [balance, accountName, balanceSource]);
 
   // 🔧 DEBUG: Load Eruda for mobile debugging (COMMENTED OUT FOR PRODUCTION)
   // Uncomment for mobile debugging only
@@ -182,6 +246,28 @@ function TopUpContent() {
       }
     }
   }, [searchParams]);
+
+  // Fetch active spokes from database
+  useEffect(() => {
+    const fetchSpokes = async () => {
+      try {
+        setSpokesLoading(true);
+        const response = await fetch('/api/spokes');
+        if (!response.ok) {
+          throw new Error('Failed to fetch spokes');
+        }
+        const data = await response.json();
+        setSpokes(data.spokes || []);
+      } catch (error) {
+        console.error('Error fetching spokes:', error);
+        setSpokes([]); // Fallback to empty array
+      } finally {
+        setSpokesLoading(false);
+      }
+    };
+
+    fetchSpokes();
+  }, []);
 
   // FLOW 7: Handle incoming context from indiesmenu (pay_with_topup)
   // This must run EARLY to overwrite localStorage before account detection
@@ -363,117 +449,13 @@ function TopUpContent() {
     return 0;
   }, []);
 
-  // Decision point: Check if balance needs reconciliation or if we should show nearby businesses
-  const checkBalanceAndShowBusinesses = useCallback((euroBalance: number, accountName: string) => {
-    console.log('[BALANCE CHECK] Checking balance:', euroBalance, '€');
+  // DEPRECATED (2026-01-09): Replaced by React Query useEffect (lines 197-214)
+  // This manual balance check is no longer needed - React Query handles it automatically
+  // const checkBalanceAndShowBusinesses = useCallback(..., []);
 
-    // If balance is 0.00€ and not a mock account, try to fetch and reconcile
-    if (euroBalance === 0 && !accountName.startsWith('mockaccount')) {
-      console.log('[BALANCE CHECK] Zero balance detected for real account - fetching HBD for reconciliation');
-
-      // TODO: Implement reconciliation mechanism
-      // For now, we just fetch HBD balance for logging purposes
-      fetchHBDBalance(accountName).then(hbdBalance => {
-        console.log('[RECONCILIATION] HBD balance:', hbdBalance);
-
-        // TODO: Future iteration - Calculate EURO from HBD using conversion rate
-        // if (Hive-Engine fetch fails) {
-        //   const conversionRate = await fetchEuroDollarRate();
-        //   const estimatedEuro = hbdBalance / conversionRate;
-        //   setWalletBalance({ accountName, euroBalance: estimatedEuro });
-        //   if (estimatedEuro >= 4.99) setShowNearbyBusinesses(true);
-        // }
-      });
-    }
-
-    // Show nearby businesses if balance >= 4.99€
-    if (euroBalance >= 4.99) {
-      console.log('[BALANCE CHECK] Balance >= 4.99€ - showing nearby businesses');
-      setShowNearbyBusinesses(true);
-    } else {
-      setShowNearbyBusinesses(false);
-    }
-  }, [fetchHBDBalance]);
-
-  // Fetch EURO token balance from Hive-Engine
-  const fetchWalletBalance = useCallback(async (accountName: string) => {
-    console.log('[WALLET BALANCE] Fetching balance for:', accountName);
-
-    // Skip blockchain fetch for mock accounts (dev/test only)
-    const isMockAccount = accountName.startsWith('mockaccount');
-    if (isMockAccount) {
-      console.log('[WALLET BALANCE] ⚠️ Mock account detected - skipping Hive-Engine API call');
-
-      // Load balance from localStorage for mock accounts
-      const savedBalance = parseFloat(localStorage.getItem('innopay_lastBalance') || '0');
-      console.log('[WALLET BALANCE] Loading mock account balance from localStorage:', savedBalance);
-
-      setWalletBalance({
-        accountName,
-        euroBalance: savedBalance
-      });
-      setShowWalletBalance(true);
-
-      // Check if we should show nearby businesses for mock accounts
-      checkBalanceAndShowBusinesses(savedBalance, accountName);
-      return;
-    }
-
-    try {
-      const response = await fetch('https://api.hive-engine.com/rpc/contracts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'find',
-          params: {
-            contract: 'tokens',
-            table: 'balances',
-            query: {
-              account: accountName,
-              symbol: 'EURO'
-            }
-          },
-          id: 1
-        })
-      });
-
-      const data = await response.json();
-
-      if (data.result && data.result.length > 0) {
-        const euroBalance = parseFloat(data.result[0].balance);
-        console.log('[WALLET BALANCE] Balance retrieved:', euroBalance);
-
-        const formattedBalance = parseFloat(euroBalance.toFixed(2));
-        setWalletBalance({
-          accountName,
-          euroBalance: formattedBalance
-        });
-        setShowWalletBalance(true);
-
-        // Save to localStorage for optimistic balance calculations
-        localStorage.setItem('innopay_lastBalance', formattedBalance.toString());
-
-        // Check if we should show nearby businesses
-        checkBalanceAndShowBusinesses(formattedBalance, accountName);
-      } else {
-        console.log('[WALLET BALANCE] No EURO tokens found');
-        setWalletBalance({
-          accountName,
-          euroBalance: 0
-        });
-        setShowWalletBalance(true);
-
-        // Save to localStorage for optimistic balance calculations
-        localStorage.setItem('innopay_lastBalance', '0');
-
-        // Check if we should show nearby businesses (will try HBD reconciliation)
-        checkBalanceAndShowBusinesses(0, accountName);
-      }
-    } catch (error) {
-      console.error('[WALLET BALANCE] Error fetching balance:', error);
-    }
-  }, [checkBalanceAndShowBusinesses]);
+  // DEPRECATED (2026-01-09): Replaced by React Query useBalance hook
+  // This manual fetch is no longer used - React Query automatically handles balance fetching
+  // const fetchWalletBalance = useCallback(async (accountName: string) => { ... }, []);
 
   // Check if user has an account in localStorage and fetch balance
   // If no URL params and no account, redirect to account creation
@@ -533,9 +515,9 @@ function TopUpContent() {
           // Remove the token (one-time use)
           localStorage.removeItem('innopay_credentialToken');
 
-          // Set account state and fetch balance
+          // Set account state (React Query will auto-fetch balance)
           setHasAccount(true);
-          fetchWalletBalance(credentials.accountName);
+          // Note: fetchWalletBalance removed - React Query useBalance hook handles this
         })
         .catch(err => {
           console.error('[LANDING] Error fetching credentials:', err);
@@ -585,37 +567,8 @@ function TopUpContent() {
 
     setHasAccount(!!accountName && !!activePrivate && !!masterPassword);
 
-    // Fetch wallet balance if account exists
-    if (accountName) {
-      // Check if returning from successful payment (for optimistic balance)
-      const topupSuccess = searchParams.get('topup_success');
-      const amountParam = searchParams.get('amount');
-
-      if (topupSuccess === 'true' && amountParam) {
-        // Show optimistic balance immediately
-        const topupAmount = parseFloat(amountParam);
-        console.log('[LANDING] Showing optimistic balance with top-up amount:', topupAmount);
-
-        // Get current balance from localStorage if available
-        const lastKnownBalance = parseFloat(localStorage.getItem('innopay_lastBalance') || '0');
-        const optimisticBalance = lastKnownBalance + topupAmount;
-
-        // Save optimistic balance to localStorage for persistence
-        localStorage.setItem('innopay_lastBalance', optimisticBalance.toFixed(2));
-
-        setWalletBalance({
-          accountName,
-          euroBalance: parseFloat(optimisticBalance.toFixed(2))
-        });
-        setShowWalletBalance(true);
-
-        // Fetch real balance from blockchain (will be skipped for mock accounts)
-        fetchWalletBalance(accountName);
-      } else {
-        // Normal balance fetch
-        fetchWalletBalance(accountName);
-      }
-    }
+    // Note: Balance fetching removed - React Query useBalance hook automatically handles this
+    // The hook fetches fresh balance on mount and whenever accountName changes
 
     // If returning from successful top-up, check if we should redirect to indiesmenu
     const topupSuccess = searchParams.get('topup_success');
@@ -638,7 +591,7 @@ function TopUpContent() {
         return;
       }
     }
-  }, [searchParams, fetchWalletBalance, router]);
+  }, [searchParams, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -902,37 +855,75 @@ function TopUpContent() {
               {t.nearbyBusinesses}
             </h2>
             <div className="max-h-56 overflow-y-auto border-2 border-blue-300 rounded-lg p-4 bg-gradient-to-br from-blue-50 to-indigo-50 shadow-lg">
-              <div className="space-y-3">
-                {nearbyBusinesses.map((business) => (
-                  <div
-                    key={business.id}
-                    onClick={() => {
-                      const spokeUrl = getSpokeUrl('indies');
-                      window.location.href = `${spokeUrl}/menu?table=${business.table}`;
-                    }}
-                    className="flex items-center gap-4 p-4 bg-white rounded-lg hover:shadow-xl hover:scale-[1.02] transition-all cursor-pointer border-2 border-gray-200 hover:border-blue-400"
-                  >
-                    <div className="relative w-20 h-20 flex-shrink-0 bg-gray-200 rounded-lg overflow-hidden shadow-md">
-                      <Image
-                        src={business.image}
-                        alt={business.name}
-                        fill
-                        className="object-cover"
-                        unoptimized
-                      />
+              {spokesLoading ? (
+                <div className="flex justify-center items-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                </div>
+              ) : spokes.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  No businesses available
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {spokes.map((spoke) => (
+                    <div
+                      key={spoke.id}
+                      onClick={async () => {
+                        if (!spoke.ready) {
+                          // Show alert for coming soon
+                          alert(`${spoke.name} coming soon!`);
+                          return;
+                        }
+
+                        // Build base spoke URL
+                        const spokeUrl = buildSpokeUrl(spoke);
+
+                        // FLOW 4: Import credentials to spoke if account exists
+                        const { prepareUrlWithCredentials } = await import('@/lib/credential-session');
+                        const finalUrl = await prepareUrlWithCredentials(spokeUrl, '4');
+
+                        // Navigate to spoke
+                        window.location.href = finalUrl;
+                      }}
+                      className={`relative flex items-center gap-4 p-4 bg-white rounded-lg transition-all border-2 ${
+                        spoke.ready
+                          ? 'cursor-pointer hover:shadow-xl hover:scale-[1.02] border-gray-200 hover:border-blue-400'
+                          : 'opacity-75 cursor-not-allowed border-gray-300'
+                      }`}
+                    >
+                      {!spoke.ready && (
+                        <div className="absolute top-2 right-2 bg-blue-500 text-white text-xs px-2 py-1 rounded-full font-semibold shadow-md z-10">
+                          Coming Soon
+                        </div>
+                      )}
+                      <div className="relative w-20 h-20 flex-shrink-0 bg-gray-200 rounded-lg overflow-hidden shadow-md">
+                        {spoke.image_1 && (
+                          <Image
+                            src={spoke.image_1}
+                            alt={spoke.name}
+                            fill
+                            className="object-cover"
+                            unoptimized
+                          />
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-bold text-lg text-gray-900">{spoke.name}</p>
+                        <p className="text-sm text-blue-600 font-medium">
+                          {spoke.ready ? 'Click to view menu' : 'Opening soon'}
+                        </p>
+                      </div>
+                      {spoke.ready && (
+                        <div className="text-blue-500">
+                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                        </div>
+                      )}
                     </div>
-                    <div className="flex-1">
-                      <p className="font-bold text-lg text-gray-900">{business.name}</p>
-                      <p className="text-sm text-blue-600 font-medium">Click to view menu</p>
-                    </div>
-                    <div className="text-blue-500">
-                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                      </svg>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1017,6 +1008,7 @@ function TopUpContent() {
           visible={showWalletBalance}
           onClose={() => setShowWalletBalance(false)}
           title="Your Innopay Wallet"
+          balanceSource={balanceSource || undefined}
           initialPosition={{
             x: typeof window !== 'undefined' ? (window.innerWidth / 2) - 150 : 0, // Centered (300px max-width / 2)
             y: 20  // 20px from top

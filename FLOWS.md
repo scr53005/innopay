@@ -83,37 +83,68 @@ User comes from or returns to a restaurant platform (e.g., indies.innopay.lu/men
 
 ---
 
-#### 4. `create_account_only`
-**Description:** Create account from restaurant platform, but no immediate order
+#### 4. `create_account_only` / `import_credentials`
+**Description:** Create account from restaurant platform OR import existing credentials to spoke
 
-**Detection criteria:**
+**Flow 4 has TWO variants:**
+
+**Variant A: Create Account (from restaurant)**
+- User clicks "Create Innopay Account" on restaurant menu
+- Redirects to hub for account creation + topup
+- Returns with `session_id` for credential fetch
+
+**Variant B: Import Credentials (from hub)** *(Added 2026-01-08)*
+- User with existing account clicks spoke card on hub
+- Hub creates credential session and redirects with `credential_token` + `flow=4`
+- Spoke imports credentials without account creation
+
+**Detection criteria (Variant A):**
 - No order (`orderAmount = 0` or undefined)
 - No localStorage account (`hasLocalStorageAccount = false`)
 - AccountName provided (user is creating an account)
 - Has restaurant context (`table` only - no `orderMemo` since there's no immediate order)
 
-**User journey:**
+**Detection criteria (Variant B):**
+- URL param `flow=4` present
+- URL param `credential_token` present
+- User coming from hub spoke card click
+
+**User journey (Variant A - Create Account):**
 1. User visits indies.innopay.lu/menu
 2. Clicks "Create Innopay Account"
 3. Redirected to wallet.innopay.lu/user with table param
 4. Completes account creation and top-up
 5. Returns to indies.innopay.lu/menu with session_id
 
-**Redirect:**
+**User journey (Variant B - Import Credentials):**
+1. User visits wallet.innopay.lu with existing account
+2. Clicks spoke card (e.g., Indies restaurant)
+3. Hub creates credential session via `/api/account/create-credential-session`
+4. Redirects to indies.innopay.lu/menu?credential_token=XXX&flow=4&account_created=true
+5. Spoke fetches credentials via `/api/account/credentials`
+6. MiniWallet appears with account balance
+
+**Redirect (Variant A):**
 - Success: `indies.innopay.lu/menu?table={TABLE}&account_created=true&session_id={STRIPE_SESSION_ID}`
 - Cancel: `indies.innopay.lu/menu?table={TABLE}&cancelled=true`
 
+**Redirect (Variant B):**
+- Direct navigation: `indies.innopay.lu/menu?credential_token={TOKEN}&flow=4&account_created=true&table={TABLE}`
+
 **Special handling:**
-- ✅ Uses `session_id` (NOT `credential_token` - that's legacy and has been removed)
-- The menu page fetches credentials from `/api/account/session?session_id={SESSION_ID}` (see indiesmenu/app/menu/page.tsx lines 143-214)
-- API returns full credentials including:
-  - `accountName`, `masterPassword`
-  - All keys (owner, active, posting, memo)
-  - `euroBalance` (optimistic balance from credential session)
-  - `email` (if provided during account creation)
-- Credentials are stored in localStorage to enable the mini-wallet for future orders
-- Page refreshes after 3 seconds to display the mini-wallet with the new account
-- **Optimistic balance**: The balance returned is calculated by the webhook as `amountEuro + bonusAmount - orderCost` and stored in `accountCredentialSession.euroBalance` for immediate display before blockchain confirmation
+- **Variant A** uses `session_id` for credential fetch after account creation
+- **Variant B** uses `credential_token` for credential import from hub (NOT legacy - actively used!)
+- Both variants use `/api/account/credentials` endpoint
+- Credentials stored in localStorage enable mini-wallet for future orders
+- **Variant A**: Page refreshes after 3 seconds to display mini-wallet
+- **Variant B**: No page refresh needed, MiniWallet appears immediately (2026-01-09 fix)
+- **Spoke banner**: Shows "Votre portefeuille Innopay est prêt, vous pouvez déjà commander" (2026-01-09)
+
+**Implementation files:**
+- Hub credential session utility: `innopay/lib/credential-session.ts`
+- Hub spoke card handler: `innopay/app/page.tsx` (lines 973-988)
+- Spoke credential fetch: `indiesmenu/app/menu/page.tsx` (lines 215-468)
+- Spoke Flow 4 handler: `indiesmenu/app/menu/page.tsx` (lines 437-458)
 
 ---
 
@@ -482,14 +513,23 @@ interface FlowMetadata {
 ---
 
 #### Test: create_account_only
+**Variant A (Create Account):**
 1. Clear localStorage
 2. Visit indies.innopay.lu/menu
 3. Click "Create Innopay Account" (no order)
 4. Enter account name and amount
 5. Complete checkout
-6. Verify redirect back to indies.innopay.lu/menu?table={TABLE}&account_created=true&credential_token={TOKEN}
+6. Verify redirect back to indies.innopay.lu/menu?table={TABLE}&account_created=true&session_id={SESSION_ID}
 7. Verify credentials fetched and stored in localStorage
 8. Verify page refresh displays mini-wallet
+
+**Variant B (Import Credentials):**
+1. Visit wallet.innopay.lu with existing account in localStorage
+2. Click on Indies spoke card
+3. Verify redirect to indies.innopay.lu/menu?credential_token={TOKEN}&flow=4&account_created=true
+4. Verify credentials fetched and stored in localStorage
+5. Verify MiniWallet appears immediately (no refresh)
+6. Verify unified success banner shows "Votre portefeuille Innopay est prêt"
 
 **Expected logs:**
 ```

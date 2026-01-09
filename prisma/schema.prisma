@@ -161,3 +161,46 @@ model email_verification {
   @@index([email, verified])
   @@index([user_id, verified])
 }
+
+model spoke {
+  // Identity
+  id          String @id @db.VarChar(50)
+  name        String @db.VarChar(100)
+  type        String @db.VarChar(50)
+
+  // Environment URLs
+  domain_prod String @db.VarChar(255)
+  port_dev    Int
+
+  // Routing
+  path        String @db.VarChar(100)
+
+  // Simple Attributes (for basic query params like table number)
+  attribute_name_1        String? @db.VarChar(50)
+  attribute_default_1     String? @db.VarChar(100)
+  attribute_storage_key_1 String? @db.VarChar(100)
+
+  attribute_name_2        String? @db.VarChar(50)
+  attribute_default_2     String? @db.VarChar(100)
+  attribute_storage_key_2 String? @db.VarChar(100)
+
+  attribute_name_3        String? @db.VarChar(50)
+  attribute_default_3     String? @db.VarChar(100)
+  attribute_storage_key_3 String? @db.VarChar(100)
+
+  // Images (for hub's nearby businesses display)
+  image_1 String? @db.VarChar(255)
+  image_2 String? @db.VarChar(255)
+  image_3 String? @db.VarChar(255)
+
+  // Features & Capabilities
+  has_delivery Boolean @default(false)
+
+  // Status
+  active  Boolean @default(true)
+  ready   Boolean @default(false)
+
+  // Metadata
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}

@@ -1,6 +1,6 @@
 # INNOPAY ECOSYSTEM - PROJECT OVERVIEW
 
-**Last Updated**: 2026-01-02
+**Last Updated**: 2026-01-08
 **Architecture**: Hub-and-Spokes Multi-Restaurant Payment System with Centralized Blockchain Polling
 
 ---
@@ -140,6 +140,7 @@ Innopay is the **central payment hub** that handles:
 - `bonus` - Promotional bonus tracking
 - `campaign` - Marketing campaign management
 - `email_verification` - Email verification codes
+- `spoke` - Dynamic spoke registration (businesses accepting Innopay)
 
 ### Dependencies
 
@@ -151,19 +152,36 @@ Innopay is the **central payment hub** that handles:
 - `@storacha/*` - Decentralized storage
 - `resend` - Email service
 
-### Environment-Aware URL Resolution
+### Dynamic Spoke Registry (2026-01-08)
 
-The hub uses `getSpokeUrl(spoke: string)` function to resolve spoke URLs:
+The hub now uses a **database-driven spoke registry** (`spoke` table) instead of hardcoded business lists:
+
+**Spoke Registration System**:
+- `id` - Unique spoke identifier (e.g., 'indies', 'croque-bedaine')
+- `name` - Display name (e.g., 'Independent Café')
+- `type` - Business type ('restaurant', 'shop', 'service')
+- `domain_prod` / `port_dev` - Environment-specific URLs
+- `path` - Spoke-specific routing (e.g., '/menu', '/')
+- `attribute_name_1/2/3` - Dynamic query parameters (e.g., 'table')
+- `attribute_storage_key_1/2/3` - localStorage keys for attribute values
+- `image_1/2/3` - Business images for hub display
+- `ready` - Production readiness flag (false = "Coming Soon" badge)
+- `active` - Visibility toggle
+- `has_delivery` - Future delivery support flag
+
+**URL Building**:
 ```typescript
-// Production
-wallet.innopay.lu → menu.indies.lu
-
-// Mobile Testing
-192.168.x.x:3000 → 192.168.x.x:3001
-
-// Localhost
-localhost:3000 → localhost:3001
+// Hub dynamically builds spoke URLs based on environment and attributes
+const spokeUrl = buildSpokeUrl(spoke);
+// Production:  https://indies.innopay.lu/menu?table=0
+// Mobile:      http://192.168.178.55:3001/menu?table=0
+// Localhost:   http://localhost:3001/menu?table=0
 ```
+
+**Spoke Management**:
+- SQL-based CRUD operations (see `prisma/SPOKE_MANAGEMENT.md`)
+- No API routes needed - direct database access
+- Easy spoke registration without code changes
 
 ---
 
@@ -312,8 +330,8 @@ lastId:indies:EURO        → Last processed EURO transfer ID
 interface Transfer {
   id: string;                // HAF operation ID
   restaurant_id: string;     // 'indies' | 'croque-bedaine'
-  account: string;           // 'indies.cafe' | 'indies-test'
-  from_account: string;      // Customer Hive account
+  to_account: string;        // 'indies.cafe' | 'indies-test' (recipient Hive account)
+  from_account: string;      // Customer Hive account (sender)
   amount: string;            // Transfer amount
   symbol: 'HBD' | 'EURO' | 'OCLT';
   memo: string;              // Order details + table info
@@ -322,6 +340,8 @@ interface Transfer {
   block_num?: number;        // Blockchain block number
 }
 ```
+
+**Note**: The `to_account` field (previously `account`) was standardized on 2026-01-08 to match HAFSQL database column naming and enable environment-based filtering in spokes.
 
 ### API Routes
 
@@ -593,18 +613,40 @@ croque-bedaine/
 
 The hub-and-spokes architecture supports multiple payment flows:
 
-### Flow 4: Create Account Only
-**Trigger**: User clicks "Create Wallet" without placing an order
+### Flow 4: Create Account Only / Import Credentials
+**Trigger**:
+- User clicks "Create Wallet" without placing an order (original)
+- User with existing account clicks spoke card from hub (2026-01-08)
+
 **Process**:
-1. Spoke redirects to hub: `?restaurant=indies&amount=0`
-2. Hub creates Hive account
-3. Hub creates credential session and returns token
-4. Spoke receives credentials and stores in localStorage
-5. MiniWallet appears with account name
+1. Hub checks for existing credentials in localStorage
+2. Hub creates credential session via `/api/account/create-credential-session`
+3. Hub adds `credential_token` + `flow=4` to spoke URL
+4. Spoke detects token and fetches credentials via `/api/account/credentials`
+5. Spoke stores credentials in localStorage
+6. MiniWallet appears with account name and balance
+
+**Credential Session Utility** (2026-01-08):
+- `lib/credential-session.ts` - Reusable credential import logic
+- `prepareUrlWithCredentials()` - High-level orchestration function
+- Used by both main hub (`app/page.tsx`) and user page (`app/user/page.tsx`)
+- Eliminates code duplication (40+ lines → 3 lines)
+
+**React Query Balance Refresh** (2026-01-09):
+- `hooks/useBalance.ts` - Custom hook for automatic balance fetching
+- `app/providers/QueryProvider.tsx` - React Query configuration
+- Stale-while-revalidate: Cached balance shows instantly, fresh data fetches in background
+- Eliminates stale balance bug after topups
 
 **Files**:
-- Hub: `innopay/app/user/page.tsx` (credential handover)
-- Spoke: `indiesmenu/app/menu/page.tsx:502-529` (Flow 4 detection)
+- Hub: `innopay/lib/credential-session.ts` (shared utility)
+- Hub: `innopay/hooks/useBalance.ts` (React Query balance hook)
+- Hub: `innopay/app/providers/QueryProvider.tsx` (React Query provider)
+- Hub: `innopay/app/user/page.tsx` (credential handover after creation)
+- Hub: `innopay/app/page.tsx` (credential import when clicking spoke card + balance display)
+- Hub: `innopay/app/components/MiniWallet.tsx` (cached balance styling)
+- Spoke: `indiesmenu/app/menu/page.tsx:215-468` (Flow 4 detection & handling)
+- Spoke: `indiesmenu/app/menu/page.tsx:2460-2503` (unified success banner)
 
 ### Flow 5: Create Account + Order
 **Trigger**: User with no account places order
@@ -680,6 +722,7 @@ The hub-and-spokes architecture supports multiple payment flows:
 | Database | PostgreSQL + Prisma 6.11 |
 | Payment | Stripe 18.3 |
 | Blockchain | @hiveio/dhive 1.3 |
+| State Management | React Query 5.x (TanStack Query) |
 | Storage | Storacha (decentralized) + Bunny CDN |
 | Email | Resend |
 | Styling | Tailwind CSS 4 |
@@ -961,13 +1004,18 @@ npm run migrate:deploy
 4. **React Query**: Smart caching, automatic refetching, optimistic updates
 5. **Tailwind CSS**: Utility-first styling, consistent across projects
 
-### Current Status (2026-01-02)
+### Current Status (2026-01-09)
 
 **Hub (innopay)**:
 - ✅ Production ready
 - ✅ All payment flows working
 - ✅ Debt tracking implemented
 - ✅ Credential handover working
+- ✅ Dynamic spoke registry (database-driven)
+- ✅ Credential import from hub → spoke (Flow 4)
+- ✅ Refactored credential session utility (DRY principle)
+- ✅ React Query balance refresh (auto-fetches on mount)
+- ✅ Cached balance styling in MiniWallet (italic + light blue)
 
 **Merchant-Hub (merchant-hub)**:
 - ✅ Core infrastructure complete
@@ -975,6 +1023,7 @@ npm run migrate:deploy
 - ✅ Distributed leader election working
 - ✅ Redis Streams integration complete
 - ✅ Multi-environment support (prod + dev accounts)
+- ✅ `to_account` field standardized (replaces `account`)
 - ✅ Vercel Cron fallback configured
 - 🚧 Co page integration pending (Indies & Croque)
 - 🚧 Transfer consumption logic needed
@@ -985,15 +1034,22 @@ npm run migrate:deploy
 - ✅ All flows tested and working
 - ✅ Balance refresh optimized
 - ✅ React Query migration (Phases 1-3 complete)
+- ✅ `to_account` field added to Transfer interface
+- ✅ Credential import via Flow 4 (from hub)
+- ✅ Flow 4 detection and handling (proper banner)
+- ✅ Unified success banner (Flows 4, 5, 6, 7)
 - 🔧 Optional optimizations remaining (Phases 4-5)
 - 🚧 Merchant-hub integration pending
 
 **Spoke 2 (croque-bedaine)**:
 - 🚧 In development
 - 🚧 Hub integration TBD
-- 🚧 Merchant-hub integration TBD
+- ✅ Environment detection system (`lib/environment.ts`)
+- ✅ `to_account` field added to Transfer interface
+- ✅ Environment-based filtering (DEV: 'croque-test', PROD: 'croque.bedaine')
 - ✅ Modern UI with shadcn/ui
 - ✅ Vite build setup complete
+- 🚧 Merchant-hub integration pending
 
 ---
 
@@ -1023,12 +1079,32 @@ npm run migrate:deploy
 
 ---
 
-**Last Updated**: 2026-01-02
+**Last Updated**: 2026-01-09
 **Maintainer**: Development Team
 **Questions**: Refer to individual project documentation or code comments
 
-**New in 2026-01-02**:
-- 🆕 Merchant-Hub: Centralized HAF polling infrastructure with O(1) scaling
-- 🆕 Batched queries: 3 total queries regardless of restaurant count
-- 🆕 Distributed leader election for polling coordination
-- 🆕 Multi-environment support (prod + dev accounts polled simultaneously)
+**New in 2026-01-09**:
+- 🆕 React Query in Innopay Hub: Automatic balance refresh on page load, eliminates stale balance bug
+- 🆕 Cached Balance Styling: MiniWallet shows italic + light blue for cached balance, normal + white for fresh
+- 🆕 Flow 4 Detection Fixed: Indiesmenu properly detects `flow=4` URL parameter and handles credential imports
+- 🆕 Unified Success Banner: Single banner for all flows (4, 5, 6, 7) with conditional messaging
+  - Flow 4: "Votre portefeuille Innopay est prêt, vous pouvez déjà commander"
+  - Flows 5/6/7: "Votre commande a été transmise et est en cours de préparation"
+- 🆕 Balance Auto-Refresh Architecture:
+  - Innopay: `hooks/useBalance.ts` + `app/providers/QueryProvider.tsx`
+  - Stale-while-revalidate pattern: Shows cached instantly, fetches fresh in background
+  - No URL parameters needed - works automatically on mount
+
+**New in 2026-01-08**:
+- 🆕 Dynamic Spoke Registry: Database-driven spoke management with `spoke` table
+- 🆕 `to_account` Field Standardization: Consistent naming across merchant-hub, indiesmenu, croque-bedaine
+- 🆕 Credential Import Flow: Flow 4 now works when clicking spoke cards from hub
+- 🆕 Credential Session Utility: Reusable `lib/credential-session.ts` eliminates duplication
+- 🆕 Environment-Based Filtering: Croque-bedaine filters transfers by DEV/PROD `to_account`
+- 🆕 Spoke Management: SQL-based CRUD operations documented in `prisma/SPOKE_MANAGEMENT.md`
+
+**Previous Updates (2026-01-02)**:
+- Merchant-Hub: Centralized HAF polling infrastructure with O(1) scaling
+- Batched queries: 3 total queries regardless of restaurant count
+- Distributed leader election for polling coordination
+- Multi-environment support (prod + dev accounts polled simultaneously)
