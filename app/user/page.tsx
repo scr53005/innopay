@@ -419,7 +419,8 @@ export default function HiveAccountCreationPage() {
             },
             hasLocalStorageAccount: true,
             accountBalance: euroBalance,
-            restaurantAccount: restaurantAccount // Add for hub-and-spokes multi-restaurant
+            restaurantId: restaurant, // Spoke ID for return URL lookup
+            restaurantAccount: restaurantAccount // Hive account for payment
           })
         });
 
@@ -616,9 +617,19 @@ export default function HiveAccountCreationPage() {
         console.log('[FLOW 5 EXISTING ACCOUNT] Order:', orderParam, 'Table:', tableParam);
 
         // Handle Flow 5 existing account redirect
-        // Get restaurant parameters from state (set earlier from URL params)
-        const restaurantParam = params.get('restaurant') || 'indies';
-        const restaurantAccountParam = params.get('restaurant_account') || 'indies.cafe';
+        // Get restaurant parameters from URL - no defaults to avoid wrong spoke redirects
+        const restaurantParam = params.get('restaurant');
+        const restaurantAccountParam = params.get('restaurant_account');
+
+        if (!restaurantParam || !restaurantAccountParam) {
+          console.warn('[FLOW 5 EXISTING ACCOUNT] Missing restaurant params - cannot determine spoke:', {
+            restaurant: restaurantParam,
+            restaurant_account: restaurantAccountParam
+          });
+          // Don't proceed with redirect if we don't know where to go
+          // User will see existing account view and can manually navigate
+          return;
+        }
         const returnUrlParam = params.get('return_url'); // Get return URL to preserve environment
 
         handleExistingAccountFlow5(acc, pass, parseFloat(orderParam), tableParam, memoParam, restaurantParam, restaurantAccountParam, returnUrlParam);
@@ -714,6 +725,16 @@ export default function HiveAccountCreationPage() {
     } else {
       // NO ACCOUNT EXISTS - prepare for account creation
       console.log('[USER PAGE] No existing account found. Preparing account creation form...');
+
+      // Check for choice param to skip the choice view (from spoke's WalletNotificationBanner)
+      const choiceParam = params.get('choice');
+      if (choiceParam === 'create') {
+        setUserChoice('create');
+        console.log(`[USER PAGE] Choice param detected: create - skipping choice view`);
+      } else if (choiceParam === 'import') {
+        setUserChoice('import');
+        console.log(`[USER PAGE] Choice param detected: import - skipping choice view`);
+      }      
 
       // Fetch suggested username for lazy users (with sessionStorage cache)
       const fetchSuggestedUsername = async () => {
@@ -1027,7 +1048,12 @@ export default function HiveAccountCreationPage() {
         checkoutBody.orderAmountEuro = orderAmount;
         checkoutBody.orderMemo = orderMemo || '';  // Empty string will trigger error in checkout API if order amount > 0
 
-        // Add restaurant account for hub-and-spokes multi-restaurant architecture
+        // Add restaurant identification for hub-and-spokes multi-restaurant architecture
+        // restaurantId: spoke ID from database (e.g., 'croque-bedaine', 'indiesmenu')
+        // restaurantAccount: Hive account for payment recipient (e.g., 'croque.bedaine', 'indies.cafe')
+        if (restaurant) {
+          checkoutBody.restaurantId = restaurant;
+        }
         if (restaurantAccount) {
           checkoutBody.restaurantAccount = restaurantAccount;
         }
@@ -1038,6 +1064,7 @@ export default function HiveAccountCreationPage() {
           orderAmountEuro: orderAmount,
           orderMemo: checkoutBody.orderMemo,
           memoLength: checkoutBody.orderMemo?.length,
+          restaurantId: checkoutBody.restaurantId,
           restaurantAccount: checkoutBody.restaurantAccount,
           flowType: orderAmount > 0 ? 'create_account_and_pay' : 'create_account_only'
         });

@@ -4,6 +4,35 @@ This document contains coding conventions and guidelines for the Innopay project
 
 ---
 
+## 🎯 Overarching Principles
+
+### Priority Order
+
+When making decisions or investigating issues, follow this priority order:
+
+1. **UX (User Experience)** - The user's experience comes first. Broken banners, stale data, confusing UI are the highest priority to fix.
+2. **Performance** - The app should be fast and responsive. Slow is broken.
+3. **Security** - Protect user data and funds. Never compromise on security for the first two.
+4. **Maintainability** - Clean code, good architecture, proper abstractions. Important but not at the expense of the above.
+
+### Investigation Approach
+
+When debugging issues:
+1. **Understand the symptom** (UX problem) before diving into root cause
+2. **Analyze existing working code** before writing new code
+3. **Do not rush to fix** - understand WHY something works in one place and not another
+4. **Small, targeted changes** - avoid cascading modifications that break other things
+
+### Cross-Spoke Consistency
+
+When the same feature works in one spoke (e.g., indiesmenu) but not another (e.g., croque-bedaine):
+1. First understand HOW it works in the working spoke
+2. Compare the implementation differences
+3. Identify what's missing or different
+4. Apply the minimal change to achieve parity
+
+---
+
 ## 📊 Database Conventions
 
 ### Table and Column Naming

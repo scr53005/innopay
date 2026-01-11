@@ -1,6 +1,6 @@
 # INNOPAY ECOSYSTEM - PROJECT OVERVIEW
 
-**Last Updated**: 2026-01-08
+**Last Updated**: 2026-01-10
 **Architecture**: Hub-and-Spokes Multi-Restaurant Payment System with Centralized Blockchain Polling
 
 ---
@@ -916,7 +916,7 @@ npm run vercel-build
 # - NEXT_PUBLIC_HUB_URL=https://wallet.innopay.lu
 ```
 
-**Production URL**: `menu.indies.lu`
+**Production URL**: `indies.innopay.lu/menu`
 
 #### Spoke 2 Deployment
 
@@ -1049,7 +1049,15 @@ npm run migrate:deploy
 - ✅ Environment-based filtering (DEV: 'croque-test', PROD: 'croque.bedaine')
 - ✅ Modern UI with shadcn/ui
 - ✅ Vite build setup complete
+- ✅ Payment state machine (`usePaymentFlow` + `paymentStateMachine.ts`)
+- ✅ Flow 6 basic implementation (direct EURO transfer)
 - 🚧 Merchant-hub integration pending
+- ⚠️ **TODO**: Flow 6 in croque-bedaine uses simplified single-leg transfer (Customer → Restaurant direct EURO).
+  The full FLOWS.md specification (lines 181-220) describes a two-leg dual-currency system:
+  1. Customer → innopay (HBD attempt + EURO collateral)
+  2. innopay → restaurant (via `/api/wallet-payment`)
+  This requires hub API endpoints. Current implementation works but skips HBD/debt tracking.
+  Revisit after Flow 4/5 are stable.
 
 ---
 
@@ -1079,7 +1087,7 @@ npm run migrate:deploy
 
 ---
 
-**Last Updated**: 2026-01-09
+**Last Updated**: 2026-01-10
 **Maintainer**: Development Team
 **Questions**: Refer to individual project documentation or code comments
 

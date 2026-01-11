@@ -1,7 +1,10 @@
 // app/api/checkout/account/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import { PrismaClient } from '@prisma/client';
 import { detectFlow, getRedirectUrl, FLOW_METADATA, type FlowContext } from '@/lib/flows';
+
+const prisma = new PrismaClient();
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-06-30.basil',
@@ -58,6 +61,7 @@ export async function POST(req: NextRequest) {
       accountBalance,
       mockAccountCreation,
       returnUrl,  // Custom return URL for Flow 7 (pay_with_topup)
+      restaurantId,  // Spoke ID from database (e.g., 'croque-bedaine', 'indiesmenu')
       restaurantAccount,  // Restaurant Hive account (for hub-and-spokes multi-restaurant)
     } = await req.json();
 
@@ -168,14 +172,17 @@ export async function POST(req: NextRequest) {
       metadata.orderAmountEuro = finalOrderAmountEuro.toString();
       metadata.orderMemo = finalOrderMemo;
 
-      // Add restaurant account for hub-and-spokes multi-restaurant architecture
-      // Defaults to 'indies.cafe' if not specified
+      // Add restaurant identification for hub-and-spokes multi-restaurant architecture
+      // restaurantId: spoke ID from database (defaults to 'indiesmenu' for backward compatibility)
+      // restaurantAccount: Hive account for payment recipient (defaults to 'indies.cafe')
+      metadata.restaurantId = restaurantId || 'indiesmenu';
       metadata.restaurantAccount = restaurantAccount || 'indies.cafe';
 
       console.log(`[${new Date().toISOString()}] [CHECKOUT API] Adding order metadata:`, {
         orderAmountEuro: metadata.orderAmountEuro,
         orderMemo: metadata.orderMemo,
         memoLength: metadata.orderMemo.length,
+        restaurantId: metadata.restaurantId,
         restaurantAccount: metadata.restaurantAccount
       });
     }
@@ -214,6 +221,95 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Build redirect URLs based on flow type
+    let successUrl: string;
+    let cancelUrl: string;
+
+    // FLOW 7: If custom returnUrl is provided (pay_with_topup from spoke)
+    if (returnUrl) {
+      console.log(`[${new Date().toISOString()}] [CHECKOUT API] Using custom returnUrl for Flow 7:`, returnUrl);
+
+      // Append order_success=true to match what the menu page expects
+      const separator = returnUrl.includes('?') ? '&' : '?';
+      successUrl = `${returnUrl}${separator}order_success=true&session_id={CHECKOUT_SESSION_ID}`;
+      cancelUrl = `${returnUrl}${separator}topup_cancelled=true`;
+    }
+    // INTERNAL flows (new_account, topup) - stay on innopay hub
+    else if (detectedFlow === 'new_account' || detectedFlow === 'topup') {
+      successUrl = `${baseUrl}/user/success?session_id={CHECKOUT_SESSION_ID}&amount=${amount}`;
+      cancelUrl = `${baseUrl}/user?cancelled=true`;
+    }
+    // EXTERNAL flows (create_account_only, create_account_and_pay) - redirect to spoke
+    else {
+      // Look up spoke from database using restaurantId
+      const spokeId = restaurantId || 'indiesmenu';
+      const spoke = await prisma.spoke.findUnique({
+        where: { id: spokeId },
+        select: {
+          domain_prod: true,
+          port_dev: true,
+          path: true,
+        },
+      });
+
+      if (!spoke) {
+        console.warn(`[${new Date().toISOString()}] [CHECKOUT API] Spoke not found: ${spokeId}, falling back to indiesmenu`);
+      }
+
+      // Build spoke URL based on environment (dev vs prod)
+      let spokeUrl: string;
+      const isDev = baseUrl.includes('localhost') || /192\.168\.\d+\.\d+/.test(baseUrl);
+
+      if (isDev && spoke) {
+        // In dev, use same host as hub but with spoke's port
+        const hostMatch = baseUrl.match(/https?:\/\/([^:\/]+)/);
+        const host = hostMatch ? hostMatch[1] : 'localhost';
+        const protocol = baseUrl.startsWith('https') ? 'https' : 'http';
+        spokeUrl = `${protocol}://${host}:${spoke.port_dev}${spoke.path}`;
+      } else if (spoke) {
+        // In prod, use spoke's domain
+        spokeUrl = `https://${spoke.domain_prod}${spoke.path}`;
+      } else {
+        // Fallback to old hardcoded behavior for backward compatibility
+        spokeUrl = baseUrl
+          .replace('wallet.innopay.lu', 'indies.innopay.lu')
+          .replace('localhost:3000', 'localhost:3001');
+        spokeUrl = spokeUrl.replace(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):3000/, '$1:3001');
+        if (!spokeUrl.endsWith('/menu')) {
+          spokeUrl = `${spokeUrl}/menu`;
+        }
+      }
+
+      // Build query parameters
+      // IMPORTANT: Stripe's {CHECKOUT_SESSION_ID} placeholder must NOT be URL-encoded
+      // URLSearchParams.set() would encode it as %7BCHECKOUT_SESSION_ID%7D which Stripe won't replace
+      const table = redirectParams?.table;
+      const optimisticAmount = detectedFlow === 'create_account_and_pay' && orderAmountEuro
+        ? amount - parseFloat(orderAmountEuro.toString())
+        : amount;
+
+      // Build success URL manually to preserve unencoded {CHECKOUT_SESSION_ID}
+      const successQueryParts: string[] = [];
+      if (table) successQueryParts.push(`table=${encodeURIComponent(table)}`);
+      successQueryParts.push('topup_success=true');
+      successQueryParts.push('session_id={CHECKOUT_SESSION_ID}'); // Must NOT be encoded!
+      successQueryParts.push(`amount=${optimisticAmount}`);
+
+      const cancelQueryParts: string[] = [];
+      if (table) cancelQueryParts.push(`table=${encodeURIComponent(table)}`);
+      cancelQueryParts.push('cancelled=true');
+
+      successUrl = `${spokeUrl}?${successQueryParts.join('&')}`;
+      cancelUrl = `${spokeUrl}?${cancelQueryParts.join('&')}`;
+
+      console.log(`[${new Date().toISOString()}] [CHECKOUT API] Built spoke redirect URLs:`, {
+        spokeId,
+        spoke: spoke ? { domain_prod: spoke.domain_prod, port_dev: spoke.port_dev, path: spoke.path } : 'NOT FOUND',
+        isDev,
+        spokeUrl,
+      });
+    }
+
     // Create Stripe checkout session with custom amount enabled
     const sessionConfig: Stripe.Checkout.SessionCreateParams = {
       payment_method_types: ['card'],
@@ -238,50 +334,8 @@ export async function POST(req: NextRequest) {
       payment_intent_data: {
         setup_future_usage: undefined,
       },
-      // Use flow-based redirect URLs
-      ...(() => {
-        // FLOW 7: If custom returnUrl is provided (pay_with_topup from indiesmenu)
-        if (returnUrl) {
-          console.log(`[${new Date().toISOString()}] [CHECKOUT API] Using custom returnUrl for Flow 7:`, returnUrl);
-
-          // Append order_success=true to match what the menu page expects
-          // Note: The webhook also provides credentials via credential_token
-          const separator = returnUrl.includes('?') ? '&' : '?';
-          const successUrl = `${returnUrl}${separator}order_success=true&session_id={CHECKOUT_SESSION_ID}`;
-          const cancelUrl = `${returnUrl}${separator}topup_cancelled=true`;
-
-          return {
-            success_url: successUrl,
-            cancel_url: cancelUrl,
-          };
-        }
-
-        // For create_account_and_pay, calculate the remaining balance after order
-        const optimisticAmount = detectedFlow === 'create_account_and_pay' && orderAmountEuro
-          ? amount - parseFloat(orderAmountEuro.toString())
-          : amount;
-
-        const redirectUrls = getRedirectUrl(detectedFlow, baseUrl, {
-          table: redirectParams?.table,
-          sessionId: '{CHECKOUT_SESSION_ID}',
-          amount: optimisticAmount, // Pass remaining balance for optimistic display
-        });
-
-        // Special handling for INTERNAL account creation flow only
-        // External flows (create_account_only, create_account_and_pay) should redirect to restaurant
-        if (detectedFlow === 'new_account') {
-          return {
-            success_url: `${baseUrl}/user/success?session_id={CHECKOUT_SESSION_ID}&amount=${amount}`,
-            cancel_url: `${baseUrl}/user?cancelled=true`,
-          };
-        }
-
-        // For external flows, use flow-based redirect URLs
-        return {
-          success_url: redirectUrls.success,
-          cancel_url: redirectUrls.cancel,
-        };
-      })(),
+      success_url: successUrl,
+      cancel_url: cancelUrl,
       metadata,
     };
 
