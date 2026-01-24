@@ -1,8 +1,8 @@
 # Innopay Spoke Integration - Complete Documentation
 
-**Last Updated**: 2026-01-24
+**Last Updated**: 2026-01-25
 **Status**: Production Ready
-**Version**: 2.0
+**Version**: 2.2
 
 ---
 
@@ -125,6 +125,147 @@ This document provides complete integration instructions for connecting new merc
         └─────────────────── RESET ──────────────────────┘
 ```
 
+#### State Machine Implementation Guide
+
+**State Definitions**:
+
+| State | Banner | Purpose | Valid Transitions |
+|-------|--------|---------|-------------------|
+| `idle` | None | Initial state, waiting for user action | → selecting_flow, redirecting, processing |
+| `selecting_flow` | Yellow selector | User choosing payment method | → redirecting, idle |
+| `redirecting` | **Blue** "Initializing payment processor..." | **CRITICAL**: Before redirect to Stripe/hub | → (browser redirect) |
+| `processing` | Yellow with spinner | After return from hub, processing payment | → success, error, account_created, waiter_called |
+| `success` | Green checkmark | Payment/order completed | → idle |
+| `error` | Grey | Error occurred | → idle, selecting_flow (retry) |
+| `account_created` | Green checkmark | Account created (Flow 4) | → idle |
+| `waiter_called` | Blue | Waiter summoned | → idle |
+
+**Critical: The 'redirecting' State**
+
+The `redirecting` state is **essential** for proper UX. It prevents showing the wrong banner before redirect.
+
+**❌ WRONG** (shows yellow "Payment success" before payment):
+```typescript
+dispatch({ type: 'SELECT_FLOW', flow: 3 });
+dispatch({ type: 'PROCESSING_UPDATE', message: 'Preparing...' }); // ❌ Wrong state!
+window.location.href = stripeUrl;
+```
+
+**✅ CORRECT** (shows blue "Initializing..." banner):
+```typescript
+dispatch({ type: 'SELECT_FLOW', flow: 3 }); // → redirecting state
+// State machine now shows blue banner automatically
+dispatch({ type: 'START_REDIRECT', returnUrl: stripeUrl });
+window.location.href = stripeUrl; // User sees blue banner, then redirect
+```
+
+**State-Specific Behavior**:
+
+1. **From 'idle' state**:
+   - Flow 6 (pay with account) → directly to 'processing' (no redirect)
+   - Flows 3, 4, 5, 7 → to 'redirecting' state (shows blue banner)
+
+2. **'redirecting' state**:
+   - Shows blue banner: "Initialisation du processeur de paiements / Veuillez patienter..."
+   - Accepts `START_REDIRECT` to update returnUrl
+   - Browser redirects, page reloads with URL params
+
+3. **'processing' state**:
+   - Shows yellow banner with spinner
+   - Accepts `PROCESSING_UPDATE` to change message
+   - Accepts `PAYMENT_SUCCESS`, `ACCOUNT_CREATED`, `ERROR` transitions
+
+**Common Pitfalls**:
+
+❌ **DON'T**: Add conditional logic like `if (flow !== 3) { dispatch(...) }`
+✅ **DO**: Use proper state transitions
+
+❌ **DON'T**: Dispatch events that aren't valid for current state
+✅ **DO**: Check reducer logic - invalid transitions are ignored with a warning
+
+❌ **DON'T**: Try to show multiple banners at once
+✅ **DO**: Use state machine - only ONE state is active at a time
+
+**Event Dispatching Rules**:
+
+1. **Always check current state** before dispatching events
+2. **Use console logs** to verify state transitions (they're logged automatically)
+3. **Don't dispatch PROCESSING_UPDATE from 'redirecting'** - it will be ignored
+4. **Preserve URL parameters** when building return URLs (e.g., `?table=X`)
+
+**Flow-Specific State Paths**:
+
+```
+Flow 3 (Guest Checkout):
+idle → selecting_flow → redirecting → [Stripe] → processing → success
+
+Flow 4 (Create Account):
+idle → selecting_flow → redirecting → [Hub] → processing → account_created
+
+Flow 5 (Create + Pay):
+idle → selecting_flow → redirecting → [Hub] → processing → success
+
+Flow 6 (Pay with Account):
+idle → processing → success (no redirect!)
+
+Flow 7 (Topup + Pay):
+idle → selecting_flow → redirecting → [Hub] → processing → success
+```
+
+**Return URL Parameter Detection**:
+
+Different flows return with different URL parameters:
+
+| Flow | Return Parameter | Example |
+|------|------------------|---------|
+| Flow 3 | `payment=success` | `/?table=3&payment=success&session_id=cs_test_...` |
+| Flow 4 | `account_created=true&session_id=...` | `/?table=3&account_created=true&session_id=...` |
+| Flow 5 | `topup_success=true` | `/?table=3&topup_success=true` |
+| Flow 7 | `order_success=true&session_id=...` | `/?table=3&order_success=true&session_id=...` |
+
+**CRITICAL**: Always preserve `?table=X` parameter in return URLs:
+
+```typescript
+// ❌ WRONG: Loses table parameter
+const returnUrl = `${window.location.origin}${window.location.pathname}`;
+
+// ✅ CORRECT: Preserves table parameter
+const returnUrl = table
+  ? `${window.location.origin}${window.location.pathname}?table=${table}`
+  : `${window.location.origin}${window.location.pathname}`;
+```
+
+**Credential Fetching Logic**:
+
+Flow 3 (guest checkout) returns with a Stripe `session_id` but has **NO credentials** to fetch.
+
+```typescript
+// ❌ WRONG: Tries to fetch credentials for Flow 3
+if (sessionId) {
+  await fetchCredentials(sessionId); // Will fail for guest checkout!
+}
+
+// ✅ CORRECT: Only fetch if we expect credentials
+const flowPending = localStorage.getItem('innopay_flow_pending');
+const shouldFetch = credentialToken || (sessionId && flowPending !== null);
+if (shouldFetch) {
+  await fetchCredentials(sessionId);
+}
+```
+
+**Testing State Machine**:
+
+1. Open browser DevTools console
+2. Watch for state transition logs: `[PaymentStateMachine] idle -> OPEN_FLOW_SELECTOR`
+3. Verify each transition is valid
+4. Check banner color matches expected state:
+   - Blue = redirecting
+   - Yellow = processing
+   - Green = success/account_created
+   - Grey = error
+
+---
+
 ### Payment Flows Supported
 
 | Flow | Description | Requires Account | Creates Account | Cashback Eligible |
@@ -134,6 +275,502 @@ This document provides complete integration instructions for connecting new merc
 | **5** | Create Account + Pay | No | Yes | Yes |
 | **6** | Pay with Existing Account | Yes | No | Yes |
 | **7** | Top-up + Pay | Yes | No | Yes |
+| **8** | Import Account | No | No | N/A |
+
+### Payment Flow Details
+
+This section provides detailed implementation information for each payment flow, including detection criteria, user journeys, and special handling requirements.
+
+---
+
+#### Flow 3: Guest Checkout
+
+**Description**: Pay for restaurant order as a guest (no account creation)
+
+**Detection Criteria**:
+- Has order (`orderAmount > 0`)
+- No localStorage account (`hasLocalStorageAccount = false`)
+- No accountName provided (user chose guest checkout, not account creation)
+
+**User Journey**:
+1. User places order on `{spoke}.innopay.lu/`
+2. Selects "Pay as Guest"
+3. Redirected to wallet.innopay.lu with order params
+4. Completes Stripe checkout
+5. Returns to `{spoke}.innopay.lu/`
+
+**Redirect URLs**:
+- Success: `{spoke}.innopay.lu/?table={TABLE}&topup_success=true`
+- Cancel: `{spoke}.innopay.lu/?table={TABLE}&cancelled=true`
+
+**Implementation Status**: ✅ Fully implemented in both spokes
+
+**Special Notes**:
+- Uses `gst` distriate tag (guest)
+- No blockchain account created
+- Internal invoice only
+- Not eligible for Distriator cashback
+
+---
+
+#### Flow 4: Create Account Only / Import Credentials
+
+**Description**: Create account from restaurant platform OR import existing credentials to spoke
+
+**Flow 4 has TWO variants:**
+
+##### Variant A: Create Account (from restaurant)
+
+**Detection Criteria**:
+- No order (`orderAmount = 0` or undefined)
+- No localStorage account (`hasLocalStorageAccount = false`)
+- AccountName provided (user is creating an account)
+- Has restaurant context (`table` only - no `orderMemo`)
+
+**User Journey**:
+1. User visits `{spoke}.innopay.lu/`
+2. Clicks "Create Innopay Account"
+3. Redirected to wallet.innopay.lu/user with table param
+4. Completes account creation and top-up
+5. Returns to `{spoke}.innopay.lu/?session_id={sessionId}`
+
+**Redirect URLs**:
+- Success: `{spoke}.innopay.lu/?table={TABLE}&account_created=true&session_id={STRIPE_SESSION_ID}`
+- Cancel: `{spoke}.innopay.lu/?table={TABLE}&cancelled=true`
+
+##### Variant B: Import Credentials (from hub)
+
+**Detection Criteria**:
+- URL param `flow=4` present
+- URL param `credential_token` present
+- User coming from hub spoke card click
+
+**User Journey**:
+1. User visits wallet.innopay.lu with existing account
+2. Clicks spoke card (e.g., Indies restaurant)
+3. Hub creates credential session via `/api/account/create-credential-session`
+4. Redirects to `{spoke}.innopay.lu/?credential_token=XXX&flow=4&account_created=true`
+5. Spoke fetches credentials via `/api/account/credentials`
+6. MiniWallet appears with account balance
+
+**Redirect URLs**:
+- Direct navigation: `{spoke}.innopay.lu/?table={TABLE}&credential_token={TOKEN}&flow=4&account_created=true`
+
+**Implementation Status**: ✅ Fully implemented in both spokes
+
+**Special Handling**:
+- **Variant A** uses `session_id` for credential fetch after account creation
+- **Variant B** uses `credential_token` for credential import from hub (actively used!)
+- Both variants use `/api/account/credentials` endpoint
+- Credentials stored in localStorage enable mini-wallet for future orders
+- No page refresh needed, MiniWallet appears immediately thanks to React Query
+- **Spoke banner**: Shows "Votre portefeuille Innopay est prêt, vous pouvez déjà commander"
+
+**Implementation Files**:
+- Hub credential session: `innopay/lib/credential-session.ts`
+- Hub spoke card handler: `innopay/app/page.tsx` (lines 973-988)
+- Spoke credential fetch: `indiesmenu/app/menu/page.tsx` (lines 215-468)
+- Spoke Flow 4 handler: `indiesmenu/app/menu/page.tsx` (lines 437-458)
+
+---
+
+#### Flow 5: Create Account and Pay
+
+**Description**: Create new account AND pay for restaurant order in one transaction
+
+**Detection Criteria**:
+- Has order (`orderAmount > 0`)
+- No localStorage account (`hasLocalStorageAccount = false`)
+- AccountName provided (user wants to create account, not guest checkout)
+- Has restaurant context (`table`, `orderMemo`)
+
+**User Journey**:
+1. User places order on `{spoke}.innopay.lu/`
+2. Selects "Create Account & Pay"
+3. Redirected to wallet.innopay.lu/user with order params
+4. **If account exists in wallet**: Uses existing wallet to pay (flow 5 becomes flow 6 or 7) and returns `credential_token` for spoke to import account
+5. **If no account exists**: Enters account name or accepts suggested name, payment includes order + top-up
+6. Completes Stripe checkout
+7. Returns to `{spoke}.innopay.lu/`
+
+**Redirect URLs**:
+- Success: `{spoke}.innopay.lu/?table={TABLE}&topup_success=true`
+- Cancel: `{spoke}.innopay.lu/?table={TABLE}&cancelled=true`
+
+**Implementation Status**: ✅ Fully implemented in both spokes
+
+**Payment Structure**:
+- Payment is split: part goes to user's new account, part goes to restaurant
+- Webhook attempts to transfer HBD to restaurant using `orderMemo` for matching
+- If insufficient HBD available, webhook transfers EURO Hive Engine tokens instead and records debt in `outstanding_debt` table
+- Debt tracking ensures innopay can settle HBD obligations with restaurants later
+
+**Special Notes**:
+- Uses `kcs` distriate tag (eligible for Distriator cashback)
+- Creates blockchain account
+- Two-leg transfer: Customer → innopay → Restaurant
+
+---
+
+#### Flow 6: Pay with Account
+
+**Description**: Pay for restaurant order using existing account (sufficient balance)
+
+**Detection Criteria**:
+- Has order (`orderAmount > 0`)
+- Has localStorage account (`hasLocalStorageAccount = true`)
+- Account balance >= order amount
+
+**User Journey**:
+1. User places order on `{spoke}.innopay.lu/`
+2. Payment processed directly from account balance (NO Stripe checkout)
+3. Order confirmed immediately on `{spoke}.innopay.lu/`
+
+**Implementation Status**:
+- ✅ **indiesmenu**: Fully implemented and working (two-leg, dual-currency)
+- ⚠️ **croque-bedaine**: Simplified single-leg transfer (TODO: upgrade to full flow)
+
+**Payment Structure (indiesmenu)**:
+
+This flow does NOT require Stripe checkout. Implementation in `indiesmenu/app/menu/page.tsx` lines 1536-1783:
+
+1. **Balance check** (line 1473): Verifies customer's EURO token balance is sufficient (if not → FLOW 7)
+
+2. **First leg transfer**: **Customer → innopay**
+   - **HBD transfer attempt**: `orderAmount * eurUsdRate` HBD
+   - If insufficient HBD → record `outstanding_debt` (customer owes innopay)
+   - **EURO transfer** (collateral): Always succeeds by definition
+   - Signs and broadcasts via `/api/sign-and-broadcast` endpoint
+   - Updates mini-wallet balance in UI
+
+3. **Second leg transfer**: **innopay → restaurant**
+   - Calls `/api/wallet-payment` endpoint
+   - **HBD transfer attempt** to restaurant
+   - If insufficient HBD → record `outstanding_debt` (innopay owes restaurant)
+   - **EURO transfer** (collateral): Fallback payment method
+   - Uses `orderMemo` for order matching
+
+**Payment Structure Principles**:
+- Both legs attempt HBD first (preferred by restaurants for Hive transactions)
+- EURO tokens serve as collateral/fallback
+- Outstanding debts tracked for later HBD reconciliation
+- Ensures orders are ALWAYS fulfilled even when HBD is temporarily unavailable
+
+**Croque-Bedaine TODO**:
+⚠️ Flow 6 in croque-bedaine uses simplified single-leg transfer (Customer → Restaurant direct EURO). The full flow 6 is a two-leg, dual-currency system:
+1. Customer → innopay (HBD attempt + EURO collateral)
+2. innopay → restaurant (via `/api/wallet-payment`)
+
+This requires hub API endpoints. Current croque-bedaine implementation works but skips HBD/debt tracking.
+
+**Special Notes**:
+- Uses `kcs` distriate tag (eligible for Distriator cashback)
+- No Stripe checkout required
+- Fastest payment method (immediate confirmation)
+- **IMPORTANT**: This is a working flow in indiesmenu - do not break during refactoring!
+
+---
+
+#### Flow 7: Pay with Top-up
+
+**Description**: Top-up account AND pay for restaurant order (insufficient balance)
+
+**Detection Criteria**:
+- Has order (`orderAmount > 0`)
+- Has localStorage account (`hasLocalStorageAccount = true`)
+- Account balance < order amount
+
+**Implementation Status**: ✅ **FULLY IMPLEMENTED - UNIFIED WEBHOOK APPROACH**
+
+**User Journey**:
+1. User places order on `{spoke}.innopay.lu/`
+2. Selects "Pay with Innopay"
+3. Account balance insufficient
+4. Spoke redirects to Stripe checkout with:
+   - `accountName` from localStorage
+   - `amount` (calculated: orderAmount - currentBalance, minimum 15€)
+   - `orderAmountEuro` (the order cost)
+   - `orderMemo` (for restaurant payment matching)
+   - `table` (for redirect)
+   - `returnUrl` (spoke URL)
+5. User completes Stripe checkout
+6. **Webhook processes BOTH operations atomically** (`app/api/webhooks/route.ts` handleFlow7UnifiedApproach, lines 379-589):
+   - **Step 1**: Execute order payment (innopay → restaurant)
+     - Attempts HBD transfer with orderMemo for matching
+     - If HBD insufficient → transfers EURO tokens + records debt
+   - **Step 2**: Calculate change (topup - order)
+   - **Step 3**: Handle change transfer
+     - Positive change: Transfer change to customer (EURO + HBD attempt)
+     - Negative change: Transfer deficit from customer to innopay
+     - Zero change: No transfer needed
+   - **Step 4**: Update database with topup record
+   - **Step 5**: Create credential session with updated balance
+7. Stripe redirects to: `{spoke}.innopay.lu/?order_success=true&session_id={CHECKOUT_SESSION_ID}`
+8. Spoke detects `order_success=true` and `session_id`
+9. Fetches credentials from `/api/account/credentials` using session_id
+10. Clears cart and shows Flow 7 success banner
+11. Updates mini-wallet with new balance (NO page reload)
+
+**Redirect URLs**:
+- Success: `{spoke}.innopay.lu/?table={TABLE}&order_success=true&session_id={CHECKOUT_SESSION_ID}`
+- Cancel: `{spoke}.innopay.lu/?table={TABLE}&topup_cancelled=true`
+
+**Payment Structure**:
+
+The webhook performs a **single atomic transaction** with three possible change scenarios:
+
+**Scenario A: Positive Change (topup > order)**
+- Example: User tops up 50€ for 30€ order
+- Webhook transfers 30€ to restaurant (HBD or EURO+debt)
+- Webhook transfers 20€ change to customer (EURO + HBD attempt)
+- User balance: 20€
+
+**Scenario B: Negative Change (topup < order)**
+- Example: User tops up 10€ for 30€ order, has 15€ existing balance
+- Webhook transfers 30€ to restaurant (HBD or EURO+debt)
+- Webhook transfers 5€ deficit from customer to innopay (EURO)
+- User balance: 0€
+
+**Scenario C: Exact Match (topup = order)**
+- Example: User tops up 30€ for 30€ order
+- Webhook transfers 30€ to restaurant (HBD or EURO+debt)
+- No change transfer needed
+- User balance: 0€
+
+**Key Implementation Details**:
+1. **Atomic webhook processing**: Order payment and balance update happen server-side in one webhook call
+2. **HBD + EURO dual transfer**: Always attempts HBD first, falls back to EURO tokens with debt recording
+3. **Credential session**: Webhook creates session with `euroBalance` = change after order payment
+4. **Session ID lookup**: Spoke uses Stripe `session_id` to fetch credentials
+5. **No page reload**: Cart clears and success banner appears immediately
+6. **Debt tracking**: Records `outstanding_debt` when HBD transfers fail for later reconciliation
+
+**Special Handling**:
+- Minimum topup: 15€ (enforced in webhook)
+- Change transfers use memo: "Monnaie / Change"
+- Deficit transfers use memo: "Paiement manquant / Missing payment"
+- Webhook skips account verification (assumes account exists in localStorage)
+- Mock accounts supported for dev/test (transfers will fail but flow works)
+
+**Security**:
+- Credentials expire after 5 minutes
+- One-time use only (retrieved flag prevents reuse)
+- CORS headers allow cross-origin credential fetching
+- Session ID from Stripe provides secure token
+
+**Error Handling**:
+- If restaurant payment fails → throws error, entire transaction fails
+- If change transfer fails → logs warning, transaction still succeeds (restaurant already paid)
+- If deficit transfer fails → logs warning, manual reconciliation needed
+- Database errors are non-blocking if transfers succeeded
+
+**Implementation Files**:
+- Webhook handler: `innopay/app/api/webhooks/route.ts` lines 379-589 (handleFlow7UnifiedApproach)
+- Checkout creation: `innopay/app/api/checkout/account/route.ts` lines 226-240 (Flow 7 returnUrl handling)
+- Spoke page: `indiesmenu/app/menu/page.tsx` lines 289-309 (Flow 7 success handling)
+- Credentials API: `innopay/app/api/account/credentials/route.ts` lines 72-92 (sessionId lookup)
+
+**Special Notes**:
+- Uses `kcs` distriate tag (eligible for Distriator cashback)
+- Most complex flow (atomic transaction with three outcomes)
+- Handles edge cases (insufficient balance from multiple sources)
+
+---
+
+#### Flow 8: Import Account
+
+**Description**: Import an existing Hive account into Innopay
+
+**Detection Criteria**:
+- User explicitly requests import functionality via "Import Account" button
+- User provides email associated with an existing Innopay account
+
+**Implementation Status**: ✅ **IMPLEMENTED** (but with naive security - needs enhancement)
+
+**User Journey**:
+1. User visits `{spoke}.innopay.lu/` without credentials
+2. Clicks "Import Account"
+3. Enters email address
+4. System retrieves account credentials from database
+5. Credentials stored in localStorage for mini-wallet
+6. User can now pay with account
+
+**Implementation Notes**:
+- Current implementation is functional and tested
+- Security is "naive" and will need to evolve for better protection
+- Limited to 5 import attempts per session to prevent abuse
+- Implementation in `indiesmenu/app/menu/page.tsx` lines 1060-1178
+
+**Future Enhancements Needed**:
+- Add email verification step
+- Implement 2FA or magic link authentication
+- Rate limiting at server level
+- Audit logging for import attempts
+
+**Special Notes**:
+- Not a standard payment flow (credential management)
+- Not eligible for cashback
+- Security enhancement is on roadmap
+
+---
+
+### Flow Technical Implementation
+
+This section describes the technical infrastructure for flow detection and management.
+
+#### Flow Detection Function
+
+The `detectFlow()` function in `innopay/lib/flows.ts` is the **single source of truth** for flow detection:
+
+```typescript
+export function detectFlow(context: FlowContext): Flow {
+  const {
+    hasLocalStorageAccount,
+    accountName,
+    table,
+    orderAmount,
+    orderMemo,
+    accountBalance,
+  } = context;
+
+  const hasOrder = orderAmount && parseFloat(orderAmount) > 0;
+  const hasRestaurantContext = table || orderMemo || hasOrder;
+
+  // EXTERNAL FLOWS (from restaurant)
+  if (hasRestaurantContext) {
+    if (hasOrder && !hasLocalStorageAccount && !accountName) {
+      return 'guest_checkout'; // Flow 3
+    }
+    if (!hasOrder && !hasLocalStorageAccount && accountName) {
+      return 'create_account_only'; // Flow 4
+    }
+    if (hasOrder && !hasLocalStorageAccount && accountName) {
+      return 'create_account_and_pay'; // Flow 5
+    }
+    if (hasOrder && hasLocalStorageAccount) {
+      return accountBalance >= parseFloat(orderAmount)
+        ? 'pay_with_account'      // Flow 6
+        : 'pay_with_topup';       // Flow 7
+    }
+  }
+
+  // INTERNAL FLOWS (wallet.innopay.lu)
+  return hasLocalStorageAccount ? 'topup' : 'new_account';
+}
+```
+
+#### Flow Context Interface
+
+Each request builds a `FlowContext` object containing:
+
+```typescript
+interface FlowContext {
+  hasLocalStorageAccount: boolean;  // Does user have account in browser?
+  accountName?: string;              // Account name if exists
+  table?: string | null;             // Restaurant table number
+  orderAmount?: string | null;       // Order amount in EUR
+  orderMemo?: string | null;         // Memo for Hive transfer
+  topupAmount?: string | null;       // Top-up amount
+  accountBalance?: number;           // Current EURO balance
+}
+```
+
+#### Flow Metadata Interface
+
+Each flow has associated metadata:
+
+```typescript
+interface FlowMetadata {
+  flow: Flow;
+  category: 'internal' | 'external';
+  requiresRedirect: boolean;
+  redirectTarget?: 'restaurant' | 'innopay';
+  description: string;
+}
+```
+
+#### Integration Points
+
+**1. Entry Points (Client-side)**
+
+**`innopay/app/page.tsx`** (Landing/Top-up page)
+- Builds flow context with `hasLocalStorageAccount` and `accountBalance`
+- Passes to checkout API
+
+**`innopay/app/user/page.tsx`** (Account creation page)
+- Checks for existing account in localStorage
+- If existing account found, blocks new account creation
+- Sets `hasLocalStorageAccount = false` when creating new account
+- Includes `redirectParams` if coming from restaurant
+
+**2. Checkout API** (`innopay/app/api/checkout/account/route.ts`)
+
+1. Receives flow context from client
+2. Calls `detectFlow(context)` to determine flow
+3. Stores `flow` and `flowCategory` in Stripe metadata
+4. Uses flow metadata to build success/cancel URLs
+5. Creates Stripe checkout session
+
+**3. Webhook Handler** (`innopay/app/api/webhooks/route.ts`)
+
+1. Reads `flow` from Stripe session metadata
+2. Routes to appropriate handler based on flow type
+3. Logs flow metadata for debugging
+4. Processes payment according to flow requirements
+
+---
+
+### Flow Debugging
+
+#### Enable Flow Logging
+
+Flow detection is automatically logged at each stage:
+
+1. **Checkout API**: Logs detected flow and context
+2. **Webhook**: Logs flow metadata and routing decision
+3. **Spoke**: Logs URL params and credential fetch
+
+**Example logs**:
+```
+[CHECKOUT API] Flow Detection: pay_with_topup
+[CHECKOUT API] Using custom returnUrl for Flow 7
+[WEBHOOK] Detected flow: pay_with_topup
+[FLOW 7] Unified approach: topup=20€, order=30€
+[FLOW 7] ✅ HBD transferred to restaurant: {txId}
+[SPOKE] order_success: true, sessionId: {id}
+```
+
+#### Common Issues
+
+**Issue**: Flow detected as `new_account` but should be `create_account_and_pay`
+
+**Cause**: Missing `redirectParams` in request body
+
+**Fix**: Ensure client passes `redirectParams.orderAmount` when coming from restaurant
+
+---
+
+**Issue**: Redirect goes to wrong domain
+
+**Cause**: Flow category incorrect or hardcoded URLs
+
+**Fix**: Verify flow metadata is correct and redirect URLs are built from spoke data
+
+---
+
+**Issue**: Webhook handler doesn't recognize flow
+
+**Cause**: Stripe metadata not updated after flow system implementation
+
+**Fix**: Check Stripe session metadata includes `flow` and `flowCategory` fields
+
+---
+
+**Issue**: Flow 4 Variant B (credential import) not working
+
+**Cause**: Missing `credential_token` or `flow=4` URL params
+
+**Fix**: Verify hub spoke card handler creates credential session and includes params in redirect URL
 
 ---
 
@@ -1313,14 +1950,196 @@ VITE_HIVE_ACCOUNT={restaurant}-test
 
 **Test Checklist**:
 - [ ] Flow 3: Guest checkout with Stripe test card
-- [ ] Flow 4: Create account only
+- [ ] Flow 4: Create account only (Variant A and B)
 - [ ] Flow 5: Create account + pay
 - [ ] Flow 6: Pay with existing account
 - [ ] Flow 7: Top-up + pay
+- [ ] Flow 8: Import account
 - [ ] Admin page: Orders appear
 - [ ] Admin page: Fulfill works
 - [ ] Mobile: iOS Safari
 - [ ] Mobile: Android Chrome
+
+#### Flow-Specific Testing Procedures
+
+##### Test: Flow 3 - Guest Checkout
+
+**Steps**:
+1. Clear localStorage
+2. Visit `{spoke}.innopay.lu/`
+3. Place order (e.g., 25€)
+4. Select "Pay as Guest"
+5. Complete Stripe checkout
+6. Verify redirect back to `{spoke}.innopay.lu/?table={TABLE}&topup_success=true`
+7. Check Hive transfer to restaurant
+
+**Expected logs**:
+```
+[CHECKOUT API] Flow Detection: guest_checkout
+[WEBHOOK] Detected flow: guest_checkout
+[WEBHOOK] Flow category: external
+[WEBHOOK] Requires redirect: true → restaurant
+```
+
+---
+
+##### Test: Flow 4 - Create Account Only
+
+**Variant A (Create Account from Restaurant)**:
+
+**Steps**:
+1. Clear localStorage
+2. Visit `{spoke}.innopay.lu/`
+3. Click "Create Innopay Account" (no order)
+4. Enter account name and amount
+5. Complete checkout
+6. Verify redirect back to `{spoke}.innopay.lu/?table={TABLE}&account_created=true&session_id={SESSION_ID}`
+7. Verify credentials fetched and stored in localStorage
+8. Verify mini-wallet displayed
+
+**Expected logs**:
+```
+[CHECKOUT API] Flow Detection: create_account_only
+[WEBHOOK] Detected flow: create_account_only
+[WEBHOOK] Flow category: external
+[SPOKE] Fetching credentials from innopay with session_id
+[SPOKE] Credentials stored in localStorage
+```
+
+**Variant B (Import Credentials from Hub)**:
+
+**Steps**:
+1. Visit wallet.innopay.lu with existing account in localStorage
+2. Click on restaurant spoke card
+3. Verify redirect to `{spoke}.innopay.lu/?credential_token={TOKEN}&flow=4&account_created=true`
+4. Verify credentials fetched and stored in localStorage
+5. Verify MiniWallet appears immediately (no refresh)
+6. Verify unified success banner shows "Votre portefeuille Innopay est prêt"
+
+**Expected logs**:
+```
+[HUB] Creating credential session for account
+[HUB] Redirecting to spoke with credential_token
+[SPOKE] Detected flow=4 with credential_token
+[SPOKE] Fetching credentials from innopay
+[SPOKE] MiniWallet rendering with balance
+```
+
+---
+
+##### Test: Flow 5 - Create Account and Pay
+
+**Steps**:
+1. Clear localStorage
+2. Visit `{spoke}.innopay.lu/`
+3. Place order (e.g., 30€)
+4. Select "Create Account & Pay"
+5. Enter account name and amount (e.g., 80€)
+6. Complete checkout
+7. Verify:
+   - Account created
+   - 30€ transferred to restaurant (HBD or EURO with debt recording)
+   - 50€ in user's account
+8. Verify redirect back to `{spoke}.innopay.lu/`
+
+**Expected logs**:
+```
+[CHECKOUT API] Flow Detection: create_account_and_pay
+[WEBHOOK] Detected flow: create_account_and_pay
+[WEBHOOK] Flow category: external
+[WEBHOOK] Processing restaurant order payment: 30€
+[WEBHOOK] Account balance after order: 50€
+```
+
+---
+
+##### Test: Flow 6 - Pay with Account
+
+**Steps**:
+1. Ensure account with balance >= order amount exists
+2. Visit `{spoke}.innopay.lu/`
+3. Place order within balance (e.g., 15€)
+4. Select "Pay with Innopay"
+5. Payment processed immediately (NO Stripe checkout)
+6. Verify:
+   - Customer → innopay EURO transfer
+   - innopay → restaurant HBD/EURO transfer
+   - Mini-wallet balance updated
+7. Order confirmed on `{spoke}.innopay.lu/`
+
+**Expected logs**:
+```
+[WALLET PAYMENT] Checking EURO balance for: {account}
+[WALLET PAYMENT] Current EURO balance: {balance} Required: {amount}
+[WALLET PAYMENT] Executing first leg: Customer → innopay
+[WALLET PAYMENT] HBD transfer successful! TX: {txId}
+[WALLET PAYMENT] EURO transfer successful! TX: {txId}
+[WALLET PAYMENT] Executing second leg: innopay → restaurant
+[WALLET PAYMENT] Payment complete!
+```
+
+---
+
+##### Test: Flow 7 - Pay with Top-up
+
+**Steps**:
+1. Ensure account with balance < order amount exists in localStorage
+2. Visit `{spoke}.innopay.lu/`
+3. Place order larger than balance (e.g., balance: 10€, order: 30€)
+4. Select "Pay with Innopay"
+5. Redirected to Stripe checkout (topup amount = 30€ - 10€ = 20€ minimum)
+6. Complete Stripe checkout
+7. Verify redirect back to `{spoke}.innopay.lu/?order_success=true&session_id={ID}&table={TABLE}`
+8. Verify on `{spoke}.innopay.lu/`:
+   - Cart cleared ✓
+   - Flow 7 success banner displayed ✓
+   - Mini-wallet shows updated balance (0€ if exact match) ✓
+   - No page reload ✓
+9. Check Hive transfers:
+   - Restaurant received 30€ (HBD or EURO with debt)
+   - Customer received 0€ change (exact match scenario)
+10. Verify debug log: `JSON.parse(localStorage.getItem('innopay_debug_last_params'))`
+
+**Expected logs**:
+```
+[CHECKOUT API] Flow Detection: pay_with_topup
+[CHECKOUT API] Using custom returnUrl for Flow 7
+[WEBHOOK] Detected flow: pay_with_topup
+[FLOW 7] Unified approach: topup=20€, order=30€
+[FLOW 7] Step 1: Transferring 30€ to restaurant
+[FLOW 7] ✅ HBD transferred to restaurant: {txId}
+[FLOW 7] Step 2: Calculate change: 20€ - 30€ = -10€
+[FLOW 7] Step 3: Negative change - transferring 10€ from {account} to innopay
+[FLOW 7] ✅ Deficit EURO transferred from customer to innopay: {txId}
+[FLOW 7] ✅ Flow 7 complete - redirect to: {url}
+[SPOKE] order_success: true, sessionId: {id}
+[SPOKE] Order paid successfully - cart cleared, balance updated, banner shown
+```
+
+---
+
+##### Test: Flow 8 - Import Account
+
+**Steps**:
+1. Visit `{spoke}.innopay.lu/` without credentials
+2. Click "Import Account"
+3. Enter email address associated with existing account
+4. System retrieves account credentials from database
+5. Verify credentials stored in localStorage
+6. Verify mini-wallet appears
+7. User can now pay with account
+
+**Expected logs**:
+```
+[IMPORT] Attempting to import account for email: {email}
+[IMPORT] Account found: {accountName}
+[IMPORT] Credentials stored in localStorage
+[IMPORT] MiniWallet rendering with imported account
+```
+
+**Security Note**: Current implementation is naive. Limit to 5 attempts per session.
+
+---
 
 ### Level 4: Production Smoke Tests
 
@@ -1657,6 +2476,8 @@ DELETE FROM transfers WHERE to_account = '{restaurant}.{tld}';
 | 1.2 | 2026-01-03 | Added Q&A addendum (ADDENDUM) |
 | 1.3 | 2026-01-24 | Added conventions documentation |
 | 2.0 | 2026-01-24 | **Consolidated all documentation into single source** |
+| 2.1 | 2026-01-24 | **Added detailed flow information from SPOKE-FLOWS.md**: Flow 8, Flow 4 Variant B, detection criteria, user journeys, technical implementation (detectFlow), flow testing procedures with expected logs |
+| 2.2 | 2026-01-25 | **State Machine Implementation Guide**: Added comprehensive state machine documentation with state definitions, 'redirecting' state details, common pitfalls, proper event dispatching, flow-specific state paths, return URL parameter handling, credential fetching logic, and testing guidelines. Lessons learned from Flow 3 bug fixes. |
 
 ### Appendix G: Reference Links
 
