@@ -27,44 +27,48 @@ The Innopay ecosystem follows a **hub-and-spokes architecture** where:
 - **Spokes**: Individual restaurant applications that integrate with the hub for payments
 
 ```
-                    ┌─────────────────────────────────────┐
-                    │      MERCHANT-HUB (Kitchen Hub)     │
-                    │   Centralized HAF Polling Service   │
-                    │                                     │
-                    │ • Polls Hive blockchain (HAF DB)   │
-                    │ • Batched queries (O(1) scaling)   │
-                    │ • Redis Streams pub/sub            │
-                    │ • Distributed leader election      │
-                    └──────────────┬──────────────────────┘
-                                   │ Redis Streams
-                    ┌──────────────┴──────────────────────┐
-                    │                                     │
-                    ▼                                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│                         HUB: INNOPAY                        │
-│                    (wallet.innopay.lu)                      │
-│                                                             │
-│  • Centralized payment processing (Stripe + Hive)          │
-│  • User account & wallet management                         │
-│  • Credential storage & handover                            │
-│  • Balance tracking (EURO + HBD)                            │
-│  • Debt tracking & reconciliation                           │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            │
-          ┌─────────────────┴─────────────────┐
-          │                                   │
-          ▼                                   ▼
-┌─────────────────────┐           ┌─────────────────────┐
-│  SPOKE 1: Indies    │◄─────────►│  SPOKE 2: Croque    │
-│     Menu System     │  Redis    │  Bedaine Menu       │
-│   (Next.js)         │  Streams  │   (Vite/React)      │
-│                     │           │                     │
-│ • Menu management   │           │ • Menu display      │
-│ • Order processing  │           │ • Cart system       │
-│ • Daily specials    │           │ • Order placement   │
-│ • Admin panel       │           │ • Modern UI         │
-└─────────────────────┘           └─────────────────────┘
+              ┌───────────────────────────────────┐
+              │    HIVE BLOCKCHAIN (L1)           │
+              │    + HAFSQL Public Database       │
+              │                                   │
+              │  • Account creation               │
+              │  • HBD/EURO/OCLT transfers        │
+              │  • Immutable ledger               │
+              └───────┬─────────────────┬─────────┘
+                      │                 │
+           Writes to  │                 │  Reads from
+           (broadcast)│                 │  (polls HAF)
+                      │                 │
+                      ▼                 ▼
+┌─────────────────────────────┐  ┌────────────────────────────────┐
+│   HUB: INNOPAY (Frontend)   │  │  MERCHANT-HUB (Backend)        │
+│   (wallet.innopay.lu)       │  │  Centralized HAF Polling       │
+│                             │  │                                │
+│ • Customer wallet UI        │  │ • Polls Hive blockchain (HAF)  │
+│ • Stripe payments (EURO)    │  │ • Batched queries (O(1))       │
+│ • Hive transfers (HBD)      │  │ • Redis Streams pub/sub        │
+│ • Credential handover       │  │ • Distributed leader election  │
+│ • Balance tracking          │  │ • Single hash state (optimized)│
+│ • Debt reconciliation       │  └──────────────┬─────────────────┘
+└─────────────┬───────────────┘                 │
+              │                                 │ Redis Streams
+              │ Credential Flow                 │ (Transfer delivery)
+              │ (Flow 4)                        │
+              │                                 │
+          ┌───┴─────────────────────────────────┴───┐
+          │                                         │
+          ▼                                         ▼
+┌─────────────────────┐               ┌─────────────────────┐
+│  SPOKE 1: Indies    │               │  SPOKE 2: Croque    │
+│   (indiesmenu)      │               │  (croque-bedaine)   │
+│   Next.js + Prisma  │               │  Vite + Supabase    │
+│                     │               │                     │
+│ • Customer UI       │               │ • Customer UI       │
+│ • Menu management   │               │ • Menu display      │
+│ • Order processing  │               │ • Cart system       │
+│ • Admin dashboard   │               │ • Admin dashboard   │
+│ • HAF polling (6s)  │               │ • HAF polling (6s)  │
+└─────────────────────┘               └─────────────────────┘
 ```
 
 ### Key Design Principles
@@ -236,11 +240,12 @@ The merchant-hub uses a **distributed leader election** pattern where multiple r
 - Publishes transfers to Redis Streams
 - Maintains heartbeat lock
 
-**Sleeping Mode (1-minute polling)**:
+**Sleeping Mode (5-minute polling)**:
 - Vercel Cron fallback when all shops closed
-- Polls every 1 minute via `/api/cron-poll`
+- Polls every 5 minutes via `/api/cron-poll` (optimized from 1-minute)
 - Only runs if no active 6-second poller detected
 - Ensures transfers aren't missed overnight
+- Reduced frequency to stay under Upstash free tier (500k requests/month)
 
 ### Batched Query Architecture (O(1) Scaling)
 
@@ -313,16 +318,29 @@ Each transfer includes the `account` field so restaurant co pages can filter by 
 
 ### Redis Streams Integration
 
-**Stream Architecture**:
+**Stream Architecture (2026-01-24 Update: Single Hash Optimization)**:
 ```
+# Streams (unchanged)
 transfers:indies          → Indies restaurant transfers
 transfers:croque-bedaine  → Croque restaurant transfers
 system:broadcasts         → System coordination messages
-polling:poller            → Current poller identity
-polling:heartbeat         → Poller liveness
-polling:mode              → active-6s | sleeping-1min
-lastId:indies:HBD         → Last processed HBD transfer ID
-lastId:indies:EURO        → Last processed EURO transfer ID
+
+# Legacy keys (still used for poller lock with TTL)
+polling:poller            → Current poller identity (30s TTL)
+
+# NEW: Single hash for all polling state (Option 3 optimization)
+polling:state             → Hash containing:
+  ├─ heartbeat            → Poller liveness timestamp
+  ├─ mode                 → active-6s | sleeping-5min
+  ├─ poller               → Current poller ID
+  ├─ indies.cafe:HBD      → Last processed HBD transfer ID (prod)
+  ├─ indies-test:HBD      → Last processed HBD transfer ID (dev)
+  ├─ indies.cafe:EURO     → Last processed EURO transfer ID (prod)
+  ├─ indies-test:EURO     → Last processed EURO transfer ID (dev)
+  ├─ croque.bedaine:HBD   → Last processed HBD transfer ID (prod)
+  └─ ... (all account:currency combinations)
+
+# Benefits: 1 HGETALL + 1 HMSET per poll (down from 13 GETs + N SETs)
 ```
 
 **Transfer Object Structure**:
@@ -347,9 +365,9 @@ interface Transfer {
 
 **Coordination APIs**:
 - `/api/wake-up` - Co page initialization, attempt leader election
-- `/api/heartbeat` - Poller heartbeat maintenance (every 5s)
-- `/api/poll` - Active polling endpoint (every 6s)
-- `/api/cron-poll` - Vercel Cron fallback (every 1min)
+- `/api/heartbeat` - Poller heartbeat check
+- `/api/poll` - Active polling endpoint (every 6s when co page is poller)
+- `/api/cron-poll` - Vercel Cron fallback (every 5min when all shops closed)
 
 **Monitoring APIs** (future):
 - `/api/status` - System health check
@@ -363,6 +381,8 @@ interface Transfer {
 4. **Environment-Agnostic**: Works in Vercel prod/preview/dev environments
 5. **Memo Filtering**: Per-restaurant memo patterns (e.g., "TABLE" keyword)
 6. **LastId Tracking**: Per-restaurant, per-currency cursor for deduplication
+7. **Redis Optimized** (2026-01-24): Single hash state reduces requests from 16 to 2 per poll (87% reduction)
+8. **Cost Efficient**: 17k Redis requests/month (97% under Upstash free tier limit)
 
 ### Technology Stack
 
@@ -1004,7 +1024,7 @@ npm run migrate:deploy
 4. **React Query**: Smart caching, automatic refetching, optimistic updates
 5. **Tailwind CSS**: Utility-first styling, consistent across projects
 
-### Current Status (2026-01-09)
+### Current Status (2026-01-24)
 
 **Hub (innopay)**:
 - ✅ Production ready
@@ -1024,9 +1044,14 @@ npm run migrate:deploy
 - ✅ Redis Streams integration complete
 - ✅ Multi-environment support (prod + dev accounts)
 - ✅ `to_account` field standardized (replaces `account`)
-- ✅ Vercel Cron fallback configured
-- 🚧 Co page integration pending (Indies & Croque)
-- 🚧 Transfer consumption logic needed
+- ✅ Vercel Cron fallback configured (5-minute intervals)
+- ✅ Co page integration complete (Indies & Croque)
+- ✅ Transfer consumption logic implemented (XREADGROUP + XACK)
+- ✅ **Redis optimization (Option 3)**: Single hash state management
+  - Reduced Redis usage from 691k/month to 17k/month (97% reduction)
+  - All polling state consolidated into one hash (`polling:state`)
+  - 2 Redis requests per poll (down from 16)
+- ✅ Environment filtering in sync endpoints
 - 🔧 Status/metrics endpoints planned
 
 **Spoke 1 (indiesmenu)**:
@@ -1038,12 +1063,16 @@ npm run migrate:deploy
 - ✅ Credential import via Flow 4 (from hub)
 - ✅ Flow 4 detection and handling (proper banner)
 - ✅ Unified success banner (Flows 4, 5, 6, 7)
+- ✅ **Merchant-hub integration complete**:
+  - Co page (`/admin/current_orders`) polls merchant-hub every 6 seconds
+  - Wake-up endpoint for distributed poller election
+  - Redis stream consumption with auto-ACK
+  - Environment filtering (prod: `indies.cafe`, dev: `indies-test`)
+  - Order hydration with menu data
 - 🔧 Optional optimizations remaining (Phases 4-5)
-- 🚧 Merchant-hub integration pending
 
 **Spoke 2 (croque-bedaine)**:
-- 🚧 In development
-- 🚧 Hub integration TBD
+- ✅ Production ready
 - ✅ Environment detection system (`lib/environment.ts`)
 - ✅ `to_account` field added to Transfer interface
 - ✅ Environment-based filtering (DEV: 'croque-test', PROD: 'croque.bedaine')
@@ -1051,7 +1080,14 @@ npm run migrate:deploy
 - ✅ Vite build setup complete
 - ✅ Payment state machine (`usePaymentFlow` + `paymentStateMachine.ts`)
 - ✅ Flow 6 basic implementation (direct EURO transfer)
-- 🚧 Merchant-hub integration pending
+- ✅ **Merchant-hub integration complete**:
+  - Co page (`/admin/CurrentOrders`) polls merchant-hub every 6 seconds
+  - Wake-up endpoint for distributed poller election
+  - Supabase integration for transfer storage
+  - Redis stream consumption with auto-ACK
+  - Environment filtering (prod: `croque.bedaine`, dev: 'croque-test')
+  - Order hydration with menu data
+  - Order alarm system for untransmitted dishes
 - ⚠️ **TODO**: Flow 6 in croque-bedaine uses simplified single-leg transfer (Customer → Restaurant direct EURO).
   The full FLOWS.md specification (lines 181-220) describes a two-leg dual-currency system:
   1. Customer → innopay (HBD attempt + EURO collateral)
@@ -1087,9 +1123,30 @@ npm run migrate:deploy
 
 ---
 
-**Last Updated**: 2026-01-10
+**Last Updated**: 2026-01-24
 **Maintainer**: Development Team
 **Questions**: Refer to individual project documentation or code comments
+
+**New in 2026-01-24**:
+- 🆕 **Redis Optimization (Option 3)**: Single hash state management in merchant-hub
+  - Consolidated all polling state (heartbeat, poller, mode, lastIds) into one Redis hash
+  - Reduced from 16 Redis requests/poll to 2 requests/poll (87% reduction)
+  - Monthly usage: 691k → 17k requests (97% reduction)
+  - Cron interval: 1 minute → 5 minutes (additional 80% savings)
+  - Total savings: Stayed under Upstash 500k free tier limit
+  - Architecture: `getPollingState()` (1 HGETALL) + `updatePollingState()` (1 HMSET)
+- 🆕 **Environment Filtering**: Sync endpoints filter transfers by environment
+  - Indiesmenu prod filters for `indies.cafe`, dev filters for `indies-test`
+  - Croque-bedaine prod filters for `croque.bedaine`, dev filters for `croque-test`
+  - Prevents mixed prod/dev transfers in co pages
+  - Auto-detection based on `DATABASE_URL` (indiesmenu) or explicit config (croque)
+- 🆕 **Co Page Integration Complete**: Both restaurants now have working admin dashboards
+  - Indies: `/admin/current_orders` with Prisma database
+  - Croque: `/admin/CurrentOrders` with Supabase integration
+  - Real-time order updates via merchant-hub polling
+  - Order hydration with menu data
+  - Kitchen transmission workflow
+  - Order alarm system (croque-bedaine)
 
 **New in 2026-01-09**:
 - 🆕 React Query in Innopay Hub: Automatic balance refresh on page load, eliminates stale balance bug
