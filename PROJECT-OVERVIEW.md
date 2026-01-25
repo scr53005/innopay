@@ -1,6 +1,6 @@
 # INNOPAY ECOSYSTEM - PROJECT OVERVIEW
 
-**Last Updated**: 2026-01-10
+**Last Updated**: 2026-01-25
 **Architecture**: Hub-and-Spokes Multi-Restaurant Payment System with Centralized Blockchain Polling
 
 ---
@@ -27,48 +27,43 @@ The Innopay ecosystem follows a **hub-and-spokes architecture** where:
 - **Spokes**: Individual restaurant applications that integrate with the hub for payments
 
 ```
-              ┌───────────────────────────────────┐
-              │    HIVE BLOCKCHAIN (L1)           │
-              │    + HAFSQL Public Database       │
-              │                                   │
-              │  • Account creation               │
-              │  • HBD/EURO/OCLT transfers        │
-              │  • Immutable ledger               │
-              └───────┬─────────────────┬─────────┘
-                      │                 │
-           Writes to  │                 │  Reads from
-           (broadcast)│                 │  (polls HAF)
-                      │                 │
-                      ▼                 ▼
-┌─────────────────────────────┐  ┌────────────────────────────────┐
-│   HUB: INNOPAY (Frontend)   │  │  MERCHANT-HUB (Backend)        │
-│   (wallet.innopay.lu)       │  │  Centralized HAF Polling       │
-│                             │  │                                │
-│ • Customer wallet UI        │  │ • Polls Hive blockchain (HAF)  │
-│ • Stripe payments (EURO)    │  │ • Batched queries (O(1))       │
-│ • Hive transfers (HBD)      │  │ • Redis Streams pub/sub        │
-│ • Credential handover       │  │ • Distributed leader election  │
-│ • Balance tracking          │  │ • Single hash state (optimized)│
-│ • Debt reconciliation       │  └──────────────┬─────────────────┘
-└─────────────┬───────────────┘                 │
-              │                                 │ Redis Streams
-              │ Credential Flow                 │ (Transfer delivery)
-              │ (Flow 4)                        │
-              │                                 │
-          ┌───┴─────────────────────────────────┴───┐
-          │                                         │
-          ▼                                         ▼
-┌─────────────────────┐               ┌─────────────────────┐
-│  SPOKE 1: Indies    │               │  SPOKE 2: Croque    │
-│   (indiesmenu)      │               │  (croque-bedaine)   │
-│   Next.js + Prisma  │               │  Vite + Supabase    │
-│                     │               │                     │
-│ • Customer UI       │               │ • Customer UI       │
-│ • Menu management   │               │ • Menu display      │
-│ • Order processing  │               │ • Cart system       │
-│ • Admin dashboard   │               │ • Admin dashboard   │
-│ • HAF polling (6s)  │               │ • HAF polling (6s)  │
-└─────────────────────┘               └─────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    Innopay Ecosystem                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   ┌──────────┐      ┌──────────┐      ┌──────────────┐         │
+│   │  Spoke 1 │      │  Spoke 2 │      │   Spoke N    │         │
+│   │ (indies) │      │ (croque) │      │  (future)    │         │
+│   └────┬─────┘      └────┬─────┘      └──────┬───────┘         │
+│        │                 │                    │                 │
+│        └─────────────────┼────────────────────┘                 │
+│                          │                                      │
+│                    ┌─────▼──────┐                               │
+│                    │  Innopay   │                               │
+│                    │    Hub     │                               │
+│                    │  (wallet)  │                               │
+│                    └─────┬──────┘                               │
+│                          │                                      │
+│                    ┌─────▼──────┐                               │
+│                    │   Hive     │                               │
+│                    │ Blockchain │                               │
+│                    └─────┬──────┘                               │
+│                          │                                      │
+│                    ┌─────▼──────┐                               │
+│                    │ Merchant   │                               │
+│                    │    Hub     │                               │
+│                    │ (polling)  │                               │
+│                    └─────┬──────┘                               │
+│                          │                                      │
+│        ┌─────────────────┼────────────────────┐                 │
+│        │                 │                    │                 │
+│   ┌────▼─────┐      ┌────▼─────┐      ┌──────▼───────┐         │
+│   │  Spoke 1 │      │  Spoke 2 │      │   Spoke N    │         │
+│   │  Admin   │      │  Admin   │      │    Admin     │         │
+│   │   (CO)   │      │   (CO)   │      │     (CO)     │         │
+│   └──────────┘      └──────────┘      └──────────────┘         │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Design Principles
@@ -631,20 +626,43 @@ croque-bedaine/
 
 ## 💳 PAYMENT FLOWS
 
-The hub-and-spokes architecture supports multiple payment flows:
+The hub-and-spokes architecture supports the following payment flows (as documented in `SPOKE-DOCUMENTATION.md`):
+
+### Flow 3: Guest Checkout
+**Trigger**: User without account places order and chooses guest checkout
+**Process**:
+1. Spoke redirects to hub with order details
+2. Stripe payment processed (includes 5% processing fee, rounded up)
+3. Hub executes blockchain transfer to restaurant
+4. Returns to spoke with success parameters
+5. No account created, one-time payment
+
+**Special Notes**:
+- Uses `gst` distriate tag (guest)
+- Not eligible for Distriator cashback
+- No blockchain account created
+
+**Files**: `innopay/app/api/checkout/guest/route.ts`
 
 ### Flow 4: Create Account Only / Import Credentials
 **Trigger**:
-- User clicks "Create Wallet" without placing an order (original)
-- User with existing account clicks spoke card from hub (2026-01-08)
+- **Variant A**: User clicks "Create Wallet" without placing an order (from restaurant)
+- **Variant B**: User with existing account clicks spoke card from hub (credential import)
 
-**Process**:
-1. Hub checks for existing credentials in localStorage
-2. Hub creates credential session via `/api/account/create-credential-session`
-3. Hub adds `credential_token` + `flow=4` to spoke URL
-4. Spoke detects token and fetches credentials via `/api/account/credentials`
-5. Spoke stores credentials in localStorage
+**Process (Variant A - Create Account)**:
+1. User redirected to hub with table context
+2. Completes account creation and top-up
+3. Returns to spoke with `session_id` parameter
+4. Spoke fetches credentials via `/api/account/credentials`
+5. Credentials stored in localStorage
 6. MiniWallet appears with account name and balance
+
+**Process (Variant B - Import Credentials)**:
+1. Hub creates credential session via `/api/account/create-credential-session`
+2. Hub adds `credential_token` + `flow=4` to spoke URL
+3. Spoke detects token and fetches credentials via `/api/account/credentials`
+4. Spoke stores credentials in localStorage
+5. MiniWallet appears with account name and balance (no page refresh needed)
 
 **Credential Session Utility** (2026-01-08):
 - `lib/credential-session.ts` - Reusable credential import logic
@@ -668,14 +686,26 @@ The hub-and-spokes architecture supports multiple payment flows:
 - Spoke: `indiesmenu/app/menu/page.tsx:215-468` (Flow 4 detection & handling)
 - Spoke: `indiesmenu/app/menu/page.tsx:2460-2503` (unified success banner)
 
-### Flow 5: Create Account + Order
-**Trigger**: User with no account places order
+### Flow 5: Create Account and Pay
+**Trigger**: User with no account places order and chooses "Create Account & Pay"
 **Process**:
 1. Spoke redirects to hub with order details
-2. Hub creates account + processes Stripe payment
-3. Hub executes blockchain transfer to restaurant
-4. Hub returns credentials to spoke
-5. Spoke shows success banner
+2. **If account exists in wallet**: Uses existing wallet to pay (flow 5 becomes flow 6 or 7) and returns `credential_token` for spoke to import account
+3. **If no account exists**: User enters account name or accepts suggested name, payment includes order + top-up
+4. Hub creates account + processes Stripe payment
+5. Webhook attempts to transfer HBD to restaurant using `orderMemo` for matching
+6. If insufficient HBD available, webhook transfers EURO Hive Engine tokens instead and records debt in `outstanding_debt` table
+7. Hub returns credentials to spoke
+8. Spoke shows success banner
+
+**Payment Structure**:
+- Payment is split: part goes to user's new account, part goes to restaurant
+- Two-leg transfer: Customer → innopay → Restaurant
+- Debt tracking ensures innopay can settle HBD obligations with restaurants later
+
+**Special Notes**:
+- Uses `kcs` distriate tag (eligible for Distriator cashback)
+- Creates blockchain account
 
 **Architecture**: Original flow, still supported
 
@@ -683,51 +713,109 @@ The hub-and-spokes architecture supports multiple payment flows:
 **Trigger**: User with existing account places order (sufficient balance)
 **Process**:
 1. Check if sufficient EURO balance available
-2. **Leg 1**: Transfer EURO tokens to restaurant (Hive-Engine)
-3. **Leg 2**: Transfer HBD to innopay (Hive native)
-4. Both legs signed locally, broadcast via hub
-5. Restaurant receives payment immediately
+2. **First leg transfer**: Customer → innopay
+   - HBD transfer attempt: `orderAmount * eurUsdRate` HBD
+   - If insufficient HBD → record `outstanding_debt` (customer owes innopay)
+   - EURO transfer (collateral): Always succeeds
+   - Signs and broadcasts via `/api/sign-and-broadcast` endpoint
+   - Updates mini-wallet balance in UI
+3. **Second leg transfer**: innopay → restaurant
+   - Calls `/api/wallet-payment` endpoint
+   - HBD transfer attempt to restaurant
+   - If insufficient HBD → record `outstanding_debt` (innopay owes restaurant)
+   - EURO transfer (collateral): Fallback payment method
+   - Uses `orderMemo` for order matching
+
+**Payment Structure Principles**:
+- Both legs attempt HBD first (preferred by restaurants for Hive transactions)
+- EURO tokens serve as collateral/fallback
+- Outstanding debts tracked for later HBD reconciliation
+- Ensures orders are ALWAYS fulfilled even when HBD is temporarily unavailable
+
+**Special Notes**:
+- Uses `kcs` distriate tag (eligible for Distriator cashback)
+- No Stripe checkout required
+- Fastest payment method (immediate confirmation)
+
+**Implementation Status**:
+- ✅ **indiesmenu**: Fully implemented and working (two-leg, dual-currency)
+- ⚠️ **croque-bedaine**: Simplified single-leg transfer (TODO: upgrade to full flow)
 
 **Architecture**: November 2025 - Two-leg dual-currency
 **Status**: ✅ STABLE - DO NOT BREAK
-**Files**: `indiesmenu/app/menu/page.tsx:1498-1670`
+**Files**: `indiesmenu/app/menu/page.tsx:1536-1783`
 
 ### Flow 7: Pay with Topup (Unified Webhook)
 **Trigger**: User with account but insufficient EURO balance
 **Process**:
 1. Redirect to hub for Stripe checkout
 2. User completes EUR topup
-3. **Unified webhook** processes both:
-   - Topup account balance
-   - Execute pending order payment
-4. Return to spoke with success parameters
-5. Cart clears, balance updates
+3. **Unified webhook** processes BOTH operations atomically:
+   - **Step 1**: Execute order payment (innopay → restaurant)
+     - Attempts HBD transfer with orderMemo for matching
+     - If HBD insufficient → transfers EURO tokens + records debt
+   - **Step 2**: Calculate change (topup - order)
+   - **Step 3**: Handle change transfer
+     - Positive change: Transfer change to customer (EURO + HBD attempt)
+     - Negative change: Transfer deficit from customer to innopay
+     - Zero change: No transfer needed
+   - **Step 4**: Update database with topup record
+   - **Step 5**: Create credential session with updated balance
+4. Stripe redirects to: `{spoke}.innopay.lu/?order_success=true&session_id={CHECKOUT_SESSION_ID}`
+5. Spoke detects `order_success=true` and `session_id`
+6. Fetches credentials from `/api/account/credentials` using session_id
+7. Clears cart and shows Flow 7 success banner
+8. Updates mini-wallet with new balance (NO page reload)
+
+**Key Implementation Details**:
+- Atomic webhook processing: Order payment and balance update happen server-side in one webhook call
+- HBD + EURO dual transfer: Always attempts HBD first, falls back to EURO tokens with debt recording
+- Credential session: Webhook creates session with `euroBalance` = change after order payment
+- Session ID lookup: Spoke uses Stripe `session_id` to fetch credentials
+- Debt tracking: Records `outstanding_debt` when HBD transfers fail for later reconciliation
+
+**Special Notes**:
+- Uses `kcs` distriate tag (eligible for Distriator cashback)
+- Most complex flow (atomic transaction with three outcomes: positive change, negative change, exact match)
+- Minimum topup: 15€ (enforced in webhook)
 
 **Architecture**: December 2025 - Unified webhook (single webhook handles topup + payment)
 **Status**: ✅ PRODUCTION READY
 **Files**:
-- Hub: `innopay/app/api/webhooks/route.ts` (unified webhook)
-- Spoke: `indiesmenu/app/menu/page.tsx:1452-1496` (Flow 7 checkout)
+- Hub: `innopay/app/api/webhooks/route.ts` (lines 379-589: handleFlow7UnifiedApproach)
+- Spoke: `indiesmenu/app/menu/page.tsx:289-309` (Flow 7 success handling)
+- Credentials API: `innopay/app/api/account/credentials/route.ts` (lines 72-92: sessionId lookup)
 
-### Guest Checkout
-**Trigger**: User without account places order
+### Flow 8: Import Account
+**Trigger**: User explicitly requests import functionality via "Import Account" button
 **Process**:
-1. Redirect to hub for guest checkout
-2. Stripe payment processed
-3. Hub executes blockchain transfer to restaurant
-4. No account created, one-time payment
+1. User visits spoke without credentials
+2. Clicks "Import Account"
+3. Enters email address associated with existing Innopay account
+4. System retrieves account credentials from database
+5. Credentials stored in localStorage for mini-wallet
+6. User can now pay with account
 
-**Files**: `innopay/app/api/checkout/guest/route.ts`
+**Implementation Status**: ✅ IMPLEMENTED (but with naive security - needs enhancement)
+**Security Note**: Current implementation is functional and tested, limited to 5 import attempts per session to prevent abuse
+**Files**: `indiesmenu/app/menu/page.tsx:1060-1178`
+
+**Future Enhancements Needed**:
+- Add email verification step
+- Implement 2FA or magic link authentication
+- Rate limiting at server level
+- Audit logging for import attempts
 
 ### Call Waiter
 **Purpose**: Notify restaurant staff without payment
 **Process**:
 1. User clicks "Call Waiter" button
-2. Uses FLOW 6 architecture (sign-and-broadcast)
-3. Sends tiny HBD transfer (0.001) with memo
-4. Blue notification banner appears (15 seconds)
+2. If user has account: Uses Flow 6 pattern - sign and broadcast locally
+3. If guest: Redirects to hub for waiter call
+4. Sends symbolic EURO transfer (0.020) with memo "Un serveur est appele TABLE X"
+5. Blue notification banner appears
 
-**Files**: `indiesmenu/app/menu/page.tsx:1100-1280`
+**Files**: `indiesmenu/app/menu/page.tsx:1100-1280`, `croque-bedaine/src/hooks/innopay/usePaymentFlow.ts:488-517`
 
 ---
 
@@ -1123,9 +1211,23 @@ npm run migrate:deploy
 
 ---
 
-**Last Updated**: 2026-01-24
+**Last Updated**: 2026-01-25
 **Maintainer**: Development Team
 **Questions**: Refer to individual project documentation or code comments
+
+**New in 2026-01-25**:
+- 🔄 **Architecture Diagram Updated**: Corrected ecosystem topology diagram to match `SPOKE-DOCUMENTATION.md`
+  - Shows proper flow: Spokes → Hub → Blockchain → Merchant Hub → Spoke Admins
+  - Removed incorrect separation of read/write paths
+  - Simplified representation for clarity
+- 🔄 **Payment Flows Reorganized**: Complete flow documentation now matches `SPOKE-DOCUMENTATION.md`
+  - Flow 3: Guest Checkout (now properly documented)
+  - Flow 4: Create Account Only / Import Credentials (two variants clarified)
+  - Flow 5: Create Account and Pay (payment structure details added)
+  - Flow 6: Pay with Existing Account (two-leg dual-currency architecture explained)
+  - Flow 7: Pay with Topup (unified webhook approach detailed)
+  - Flow 8: Import Account (added as separate flow)
+  - Call Waiter: Moved to end, clarified as non-payment flow
 
 **New in 2026-01-24**:
 - 🆕 **Redis Optimization (Option 3)**: Single hash state management in merchant-hub
