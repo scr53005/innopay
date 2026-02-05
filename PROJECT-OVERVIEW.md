@@ -17,7 +17,8 @@
 8. [Spoke 2: Croque-Bedaine](#spoke-2-croque-bedaine)
 9. [Technology Stack](#technology-stack)
 10. [Development Setup](#development-setup)
-11. [Deployment](#deployment)
+11. [Ancillary Scripts](#ancillary-scripts)
+12. [Deployment](#deployment)
 
 ---
 
@@ -56,6 +57,31 @@ Upon onboarding a new restaurant, the **main success indicator** is that their *
 - Maintain real-time visibility of their order queue
 
 The CO page is the operational heart of the system — if it's open and working, the restaurant is successfully integrated into Innopay.
+
+### Customer Front-End
+
+Customers can access the front-end from anywhere. In the future, we plan to implement **delayed ordering** and potentially **delivery orders**. However, at this point, the main customer journey starts **inside the restaurant**.
+
+#### The Table Experience
+
+**Precondition**: The restaurant has placed **QR codes on the tables**.
+
+The QR codes allow customers to:
+- Access the restaurant menu and ordering system
+- Automatically include table information in their orders
+- Browse dishes and drinks
+- Add items to a **shopping cart**
+- Place orders or **call a waiter**
+
+#### Payment-First Model
+
+A specific feature of the Innopay system is that **an order is valid only if accompanied by payment**. Unlike typical restaurant experiences, the food and drinks are **already paid for at ordering time** rather than at the end of the meal.
+
+**Benefits of paying in advance**:
+- **Reduces risk** of customers leaving without paying
+- **Reduces waiter workload** — no need to collect payment from departing customers
+- **Faster service** — kitchen can start preparing immediately after payment
+- **Clear order status** — paid orders are guaranteed fulfilled orders
 
 ---
 
@@ -1333,6 +1359,62 @@ npm run dev
 3. Complete Stripe payment on hub
 4. Verify redirect back with success
 5. Check cart cleared and balance updated
+
+---
+
+## 🔧 ANCILLARY SCRIPTS
+
+### QR Code Generation
+
+Each spoke contains scripts for generating QR codes that customers scan to access the restaurant menu with table information. These scripts are essential for onboarding new merchants.
+
+**Location**: `scripts/qrcodes/` (in each spoke: indiesmenu, croque-bedaine)
+
+**Bundle Contents**:
+- **`generateqrs.py`** - Python script that generates QR codes
+- **`templateQR.png`** - Template image for QR code design
+- **`<spoke_name>tables.csv`** - CSV file listing table numbers/identifiers
+- **`<spoke_name>uri.txt`** - URI configuration file (base URL for the spoke)
+
+### Merchant Onboarding Workflow
+
+As part of onboarding a new merchant, these three files must be updated/customized:
+
+1. **Update `templateQR.png`**: Customize with restaurant branding (optional)
+2. **Create `<spoke_name>tables.csv`**: List all table numbers the restaurant has
+3. **Create `<spoke_name>uri.txt`**: Set the base URL for the spoke (e.g., `https://indies.innopay.lu/menu?table=`)
+
+### Running the Script
+
+```bash
+cd scripts/qrcodes
+python generateqrs.py
+```
+
+**Output**: A `.docx` file containing all QR codes, one per table.
+
+**Next Steps**: The merchant prints and sticks the QR codes on their respective tables.
+
+### Example Files
+
+**`indiestables.csv`**:
+```csv
+1
+2
+3
+4
+5
+```
+
+**`indiesuri.txt`**:
+```
+https://indies.innopay.lu/menu?table=
+```
+
+**Result**: QR codes linking to:
+- Table 1: `https://indies.innopay.lu/menu?table=1`
+- Table 2: `https://indies.innopay.lu/menu?table=2`
+- ... and so on
 
 ---
 
