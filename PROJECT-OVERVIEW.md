@@ -7,16 +7,55 @@
 
 ## 📋 TABLE OF CONTENTS
 
-1. [Architecture Overview](#architecture-overview)
-2. [Payment Flows](#payment-flows)
-3. [Hub: Innopay](#hub-innopay)
-4. [Merchant Hub: HAF Polling Infrastructure](#merchant-hub-haf-polling-infrastructure)
-5. [Merchant Backend: Kitchen Order Management](#merchant-backend-kitchen-order-management)
-6. [Spoke 1: Indiesmenu](#spoke-1-indiesmenu)
-7. [Spoke 2: Croque-Bedaine](#spoke-2-croque-bedaine)
-8. [Technology Stack](#technology-stack)
-9. [Development Setup](#development-setup)
-10. [Deployment](#deployment)
+1. [Functional Overview](#functional-overview)
+2. [Architecture Overview](#architecture-overview)
+3. [Payment Flows](#payment-flows)
+4. [Hub: Innopay](#hub-innopay)
+5. [Merchant Hub: HAF Polling Infrastructure](#merchant-hub-haf-polling-infrastructure)
+6. [Merchant Backend: Kitchen Order Management](#merchant-backend-kitchen-order-management)
+7. [Spoke 1: Indiesmenu](#spoke-1-indiesmenu)
+8. [Spoke 2: Croque-Bedaine](#spoke-2-croque-bedaine)
+9. [Technology Stack](#technology-stack)
+10. [Development Setup](#development-setup)
+11. [Deployment](#deployment)
+
+---
+
+## 🎯 FUNCTIONAL OVERVIEW
+
+### The Merchant Back-End
+
+The Innopay payment system revolves around a **merchant back-end** that each participating shop receives, customized to their business needs. Since the first participants are restaurants, we call these **"kitchen back-ends"**.
+
+### Admin Dashboard
+
+The kitchen back-end requires authentication and provides access to an **admin dashboard**. This dashboard allows the shop owner to:
+
+- Populate their **product catalogue** (menu for restaurants)
+- Add **products** (dishes, drinks for restaurants) with:
+  - Prices
+  - Ingredients
+  - Sizes and variations
+  - Allergen information
+
+### Current Orders Page (CO Page)
+
+The most important functionality of the kitchen back-end is the **"current orders" page** (CO page), where:
+
+- **New orders are displayed in real time** as customers pay
+- Orders appear within seconds via the merchant-hub polling infrastructure
+- Staff can mark orders as transmitted to kitchen, then mark as served
+- Audio alerts notify staff of new incoming orders
+
+### Success Metric
+
+Upon onboarding a new restaurant, the **main success indicator** is that their **CO page stays open during the restaurant's opening hours**. This ensures they:
+
+- Are notified of new orders coming through the Innopay system
+- Can fulfill orders promptly
+- Maintain real-time visibility of their order queue
+
+The CO page is the operational heart of the system — if it's open and working, the restaurant is successfully integrated into Innopay.
 
 ---
 

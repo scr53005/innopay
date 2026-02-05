@@ -13,7 +13,9 @@
       "Bash(then echo \"Build completed successfully\")",
       "Bash(else echo \"Build may still be running or failed\")",
       "Bash(fi)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)"
     ],
     "deny": [],
     "ask": []
