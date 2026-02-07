@@ -15,7 +15,9 @@
       "Bash(fi)",
       "Bash(ls:*)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:www.prisma.io)"
     ],
     "deny": [],
     "ask": []
