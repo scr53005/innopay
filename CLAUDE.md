@@ -199,7 +199,26 @@ services/        # Business logic and external service integrations
 
 ---
 
-**Last Updated**: 2026-01-09
+## 🔍 Vercel Logging
+
+### Log Levels
+
+**Convention**: Use `console.warn` (not `console.log`) for monitoring long-running processes, pipelines, and important operational events in production.
+
+**Rationale**: On the current Vercel subscription, only `warn` level and above are visible in the Vercel logs dashboard. `console.log` output is not retained.
+
+**When to use `console.warn`**:
+- Inngest pipeline step completions
+- Cron job progress markers
+- Broadcast confirmations
+- Any log you'd want to see in production
+
+**When `console.error` is still appropriate**:
+- Actual errors and failures
+
+---
+
+**Last Updated**: 2026-02-07
 **Maintainer**: Development Team
 
 **Note**: This document is a living document. Add new conventions as the project evolves.
