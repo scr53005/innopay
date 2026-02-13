@@ -177,8 +177,10 @@ services/        # Business logic and external service integrations
 
 **Convention**: Never commit secrets to git. All sensitive data must be in `.env` files.
 
+**CRITICAL**: Always use `POSTGRES_URL` for PostgreSQL connections, **never** `DATABASE_URL`. Vercel's automatic password rotation only updates `POSTGRES_URL` environment variables — using `DATABASE_URL` will break after rotation.
+
 **Required env vars checklist**:
-- Database credentials
+- Database credentials (`POSTGRES_URL`)
 - API keys (Stripe, Resend, etc.)
 - Private keys (blockchain)
 - Webhook secrets
