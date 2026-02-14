@@ -1,6 +1,6 @@
 # INNOPAY ECOSYSTEM - PROJECT OVERVIEW
 
-**Last Updated**: 2026-01-25
+**Last Updated**: 2026-02-14
 **Architecture**: Hub-and-Spokes Multi-Restaurant Payment System with Centralized Blockchain Polling
 
 ---
@@ -264,7 +264,7 @@ The hub-and-spokes architecture supports the following payment flows (as documen
 
 **Implementation Status**:
 - ✅ **indiesmenu**: Fully implemented and working (two-leg, dual-currency)
-- ⚠️ **croque-bedaine**: Simplified single-leg transfer (TODO: upgrade to full flow)
+- ✅ **croque-bedaine**: Fully implemented (two-leg, dual-currency)
 
 **Architecture**: November 2025 - Two-leg dual-currency
 **Status**: ✅ STABLE - DO NOT BREAK
@@ -317,21 +317,30 @@ The hub-and-spokes architecture supports the following payment flows (as documen
 1. User visits spoke without credentials
 2. Clicks "Import Account"
 3. Enters email address associated with existing Innopay account
-4. System retrieves account credentials from database
-5. Credentials stored in localStorage for mini-wallet
-6. User can now pay with account
+4. Hub sends 6-digit verification code to the email address
+5. User enters the verification code
+6. If single account found: auto-imports credentials
+7. If multiple accounts found: user selects which account to import
+8. Credentials (account name, active/posting/memo keys) stored in localStorage
+9. Page reloads — MiniWallet appears with account name and balance
+10. User can now pay with account
 
 **Implementation Status**:
-- ✅ **indiesmenu**: Fully implemented (with naive security - needs enhancement)
-- ❌ **croque-bedaine**: Not yet implemented
+- ✅ **indiesmenu**: Fully implemented with email verification
+- ✅ **croque-bedaine**: Fully implemented with email verification (`ImportAccountModal.tsx`)
 
-**Security Note**: Current indiesmenu implementation is functional and tested, limited to 5 import attempts per session to prevent abuse
+**Security**: Both spokes use the same multi-step email verification flow (request code → verify code → get credentials), rate-limited to 5 import attempts per session
 
-**Files**: `indiesmenu/app/menu/page.tsx:1060-1178`
+**Hub API Endpoints Used**:
+- `POST /api/verify/request-code` — sends 6-digit code to email
+- `POST /api/verify/check-code` — verifies code and returns account info
+- `POST /api/verify/get-credentials` — returns full credentials for selected account
+
+**Files**:
+- indiesmenu: `indiesmenu/app/menu/page.tsx:1916-2080`
+- croque-bedaine: `croque-bedaine/src/components/innopay/ImportAccountModal.tsx`
 
 **Future Enhancements Needed**:
-- Add email verification step
-- Implement 2FA or magic link authentication
 - Rate limiting at server level
 - Audit logging for import attempts
 
@@ -407,7 +416,7 @@ Innopay is the **central payment hub** that handles:
 - `topup` - EUR topup transaction history
 - `guestcheckout` - Guest checkout sessions
 - `accountCredentialSession` - Temporary credential sessions (5min expiry)
-- `outstanding_debt` - Tracks debts (EURO/HBD) when transfers fail
+- `outstanding_debt` - Tracks debts (EURO/HBD) when transfers fail. Status lifecycle: `unpaid → recovery_ongoing → withdrawal_pending → paid` (or `→ settled_out_of_band` for write-offs). The `recovery_ongoing` status is set by liman when a recovery action is initiated for a defaulted debt.
 - `bonus` - Promotional bonus tracking
 - `campaign` - Marketing campaign management
 - `email_verification` - Email verification codes
@@ -958,6 +967,9 @@ d:1,q:2;b:3; TABLE 5 kcs-inno-xxxx-yyyy
 **Repository**: `./indiesmenu` (current)
 **Tech Stack**: Next.js 15 + TypeScript + Prisma + PostgreSQL
 **URL**: Production: `menu.indies.lu` | Dev: `localhost:3001`
+**Entry Point**: `/menu` — monolithic client component (`app/menu/page.tsx`, ~3200 lines, 51 `useState` hooks)
+
+> For comprehensive spoke integration details, see [SPOKE-DOCUMENTATION.md](./SPOKE-DOCUMENTATION.md).
 
 ### Purpose
 
@@ -968,6 +980,10 @@ Indiesmenu is a **full-featured restaurant menu and ordering system** for Indies
 - Order history tracking
 - Admin panel for menu management
 - Multi-language support (FR)
+
+### Architecture
+
+Indiesmenu was the **first spoke** built, before the hub existed. Its payment logic lives in a single monolithic page component (`app/menu/page.tsx`) that manages all state via 51 individual `useState` hooks and `useCallback` refs. While functional and battle-tested in production, this architecture makes it harder to reason about state transitions compared to croque-bedaine's state machine approach (see Spoke 2 below). The monolithic pattern is not recommended for new spokes — croque-bedaine's modular hook-based architecture with a formal state machine is the reference implementation.
 
 ### Key Features
 
@@ -986,6 +1002,7 @@ Indiesmenu is a **full-featured restaurant menu and ordering system** for Indies
 - **Flow 5**: Create account + order - Returns credentials + processes payment
 - **Flow 6**: Pay with existing account (two-leg dual-currency)
 - **Flow 7**: Pay with topup (unified webhook architecture)
+- **Flow 8**: Import existing account (email verification)
 
 **Integration Pattern**:
 ```typescript
@@ -1006,6 +1023,7 @@ const response = await fetch(`${hubUrl}/api/account/credentials`, {
 - **CartContext**: Shopping cart with localStorage persistence
 - **React Query**: Balance fetching with automatic caching and refetching
 - **MiniWallet**: Display EURO balance, account name, quick topup
+- **51 `useState` hooks**: All payment, UI, and flow state managed via individual hooks in `page.tsx`
 
 #### 4. Admin Panel
 - **Menu Management**: CRUD operations for dishes
@@ -1024,7 +1042,7 @@ const response = await fetch(`${hubUrl}/api/account/credentials`, {
 
 **Integration APIs**:
 - `/api/balance/euro` - Fetch balance from Hive-Engine
-- `/api/currency` - Exchange rate proxy
+- `/api/currency` - Exchange rate proxy (historical — new spokes use hub's rate)
 - `/api/fulfill` - Order fulfillment
 - `/api/orders/history` - Order history
 
@@ -1038,7 +1056,7 @@ const response = await fetch(`${hubUrl}/api/account/credentials`, {
 
 ### Key Components
 
-- `app/menu/page.tsx` - Main menu page with cart and checkout (1600+ lines)
+- `app/menu/page.tsx` - Main menu page with cart and checkout (~3200 lines, 51 `useState` hooks)
 - `app/context/CartContext.tsx` - Shopping cart state management
 - `hooks/useBalance.ts` - React Query balance hook
 - `app/display/printout/page.tsx` - Printer-optimized daily specials
@@ -1057,7 +1075,10 @@ const response = await fetch(`${hubUrl}/api/account/credentials`, {
 
 **Repository**: `../croque-bedaine`
 **Tech Stack**: Vite + React 18 + TypeScript + Supabase
-**URL**: Dev: `localhost:8080`
+**URL**: Production: `croque-bedaine.innopay.lu` | Dev: `localhost:8080`
+**Entry Point**: `/` — modular SPA with state machine architecture
+
+> For comprehensive spoke integration details, see [SPOKE-DOCUMENTATION.md](./SPOKE-DOCUMENTATION.md).
 
 ### Purpose
 
@@ -1067,6 +1088,17 @@ Croque-Bedaine is a **modern Vite-based restaurant menu application** built with
 - shadcn/ui component library
 - Supabase for backend (database + auth)
 - React Query for data fetching
+
+### Architecture: State Machine + Modular Hooks
+
+Croque-bedaine was built **after** indiesmenu and deliberately avoids the monolithic `useState`-heavy pattern. Instead, it uses a **formal state machine** (`paymentStateMachine.ts`) with `useReducer` for payment flow management:
+
+- **8 mutually-exclusive states**: `idle`, `selecting_flow`, `redirecting`, `processing`, `success`, `error`, `account_created`, `waiter_called`
+- **12 event types**: `OPEN_FLOW_SELECTOR`, `SELECT_FLOW`, `START_REDIRECT`, `RETURN_FROM_HUB`, `PROCESSING_UPDATE`, `PAYMENT_SUCCESS`, `ACCOUNT_CREATED`, `WAITER_CALLED`, `ERROR`, `RETRY`, `RESET`, `DISMISS_BANNER`
+- **Discriminated union types**: Each state carries only its relevant data (e.g., `error` state has `error` string + `canRetry` flag; `success` state has `message` + `orderId`)
+- **Invalid transitions are logged, not crashed**: The reducer returns the current state unchanged if a transition doesn't match
+
+This architecture is the **recommended pattern for new spokes**. Payment logic is split across focused hooks (`usePaymentFlow`, `useInnopayCart`, `useBalance`) rather than concentrated in a single file.
 
 ### Key Differences from Indiesmenu
 
@@ -1079,6 +1111,8 @@ Croque-Bedaine is a **modern Vite-based restaurant menu application** built with
 | **Build Time** | Slower (Next.js) | Faster (Vite) |
 | **UI Library** | Custom + Tailwind | shadcn/ui |
 | **Routing** | Next.js file-based | React Router |
+| **State Management** | 51 `useState` hooks in ~3200-line page | `useReducer` state machine + modular hooks |
+| **EUR/USD Rate** | Fetched locally (historical) | Resolved by hub (no client-side fetch needed) |
 
 ### Tech Stack
 
@@ -1100,11 +1134,20 @@ croque-bedaine/
 ├── src/
 │   ├── components/
 │   │   ├── ui/              # shadcn/ui components (40+ files)
-│   │   ├── CartSheet.tsx    # Shopping cart UI
+│   │   ├── CartSheet.tsx    # Shopping cart UI + flow decision logic
+│   │   ├── ImportAccountModal.tsx  # Flow 8: email verification
 │   │   ├── DrinksSection.tsx
 │   │   ├── Header.tsx
 │   │   ├── MenuSection.tsx
 │   │   └── ...
+│   ├── hooks/innopay/
+│   │   ├── usePaymentFlow.ts   # Payment orchestration (uses state machine)
+│   │   ├── useInnopayCart.ts   # Cart extensions (table, memo)
+│   │   └── useBalance.ts      # Balance fetching + caching
+│   ├── lib/innopay/
+│   │   ├── paymentStateMachine.ts  # Reducer, states, events, helpers
+│   │   ├── utils.ts               # distriate(), createEuroTransferOperation()
+│   │   └── environment.ts         # Hub URL + restaurant config
 │   ├── App.tsx              # Main app component
 │   └── main.tsx             # Entry point
 ├── public/                  # Static assets
@@ -1136,27 +1179,32 @@ CartSheet.tsx
 
 **Key Integration Files**:
 
-1. **`src/components/CartSheet.tsx`** (320 lines)
+1. **`src/components/CartSheet.tsx`** (~320 lines)
    - Main cart and checkout UI component
-   - Integrates all payment flows (3, 4, 5, 6, 7)
+   - Integrates all payment flows (3, 4, 5, 6, 7, 8)
    - Handles flow selection based on user state
-   - Displays status banners for payment feedback
+   - Displays status banners for payment feedback (driven by state machine)
 
-2. **`src/hooks/innopay/usePaymentFlow.ts`** (555 lines)
+2. **`src/hooks/innopay/usePaymentFlow.ts`** (~555 lines)
    - **Flow 3 (Guest Checkout)**: POST to `/api/checkout/guest`, redirect to Stripe
    - **Flow 4 (Create Account)**: Redirect to `/user` with `choice=create`
    - **Flow 5 (Create + Pay)**: Redirect to `/user` with order context
-   - **Flow 6 (Pay with Account)**: Execute locally via blockchain (direct EURO transfer)
+   - **Flow 6 (Pay with Account)**: Two-leg dual-currency via hub (`/api/sign-and-broadcast` + `/api/wallet-payment`)
    - **Flow 7 (Topup + Pay)**: Redirect to `/user` with `topup_for=order`
-   - **Call Waiter**: Flow 6 pattern (local execution) or hub redirect
+   - **Call Waiter**: Direct 0.020 EURO transfer (symbolic notification, not an order)
    - **Return Handling**: Processes hub redirects, fetches credentials, clears cart
 
-3. **`src/hooks/innopay/useInnopayCart.ts`** (186 lines)
+3. **`src/lib/innopay/paymentStateMachine.ts`** (~212 lines)
+   - `paymentReducer`: Pure function handling all state transitions
+   - `getBannerMessage()`: Maps state to user-facing French strings
+   - `buildReturnUrl()`, `buildHubUrl()`: URL construction helpers
+
+4. **`src/hooks/innopay/useInnopayCart.ts`** (~186 lines)
    - Table tracking (URL params → localStorage)
    - Dehydrated memo generation: `d:1,q:2;b:3; TABLE X`
    - Cart item categorization (dishes vs beverages)
 
-4. **`src/hooks/innopay/useBalance.ts`** (185 lines)
+5. **`src/hooks/innopay/useBalance.ts`** (~185 lines)
    - React Query-based balance fetching from Hive-Engine
    - localStorage caching with trust window support
    - Optimistic updates for Flow 6 payments
@@ -1166,7 +1214,7 @@ CartSheet.tsx
 // CartSheet.tsx:69-96
 if (hasAccount) {
   if (balance >= cartTotal) {
-    // Flow 6: Pay with account (local execution)
+    // Flow 6: Pay with account (two-leg via hub)
     actions.payWithAccount(balance);
   } else {
     // Flow 7: Topup + pay (redirect to hub)
@@ -1182,17 +1230,17 @@ if (hasAccount) {
 - **Modular hooks** instead of monolithic page component
 - **State machine** pattern for payment flows (`paymentStateMachine.ts`)
 - **React Router** instead of Next.js routing
-- **Same hub APIs** (`/api/checkout/guest`, `/api/account/credentials`, `/user`)
+- **No local EUR/USD rate fetch** — hub resolves rate internally in `/api/wallet-payment`
+- **Same hub APIs** (`/api/checkout/guest`, `/api/account/credentials`, `/user`, `/api/sign-and-broadcast`, `/api/wallet-payment`)
 
 **Implementation Status**:
 - ✅ Flow 3 (Guest Checkout): Redirect to Stripe via hub
 - ✅ Flow 4 (Create Account): Credential import working
 - ✅ Flow 5 (Create + Pay): Stripe checkout with account creation
-- ⚠️ Flow 6 (Pay with Account): **Simplified single-leg** (Customer → Restaurant direct)
-  - Note: Full spec requires two-leg dual-currency (Customer → innopay → Restaurant)
-  - Current implementation works but skips HBD/debt tracking
+- ✅ Flow 6 (Pay with Account): Two-leg dual-currency (Customer → innopay → Restaurant)
 - ✅ Flow 7 (Topup + Pay): Unified webhook approach
-- ✅ Call Waiter: Flow 6 pattern for local execution
+- ✅ Flow 8 (Import Account): Multi-step email verification (`ImportAccountModal.tsx`)
+- ✅ Call Waiter: Direct 0.020 EURO transfer
 
 ---
 
@@ -1600,7 +1648,7 @@ npm run migrate:deploy
 - ✅ Modern UI with shadcn/ui
 - ✅ Vite build setup complete
 - ✅ Payment state machine (`usePaymentFlow` + `paymentStateMachine.ts`)
-- ✅ Flow 6 basic implementation (direct EURO transfer)
+- ✅ Flow 6 two-leg dual-currency (Customer → innopay → Restaurant)
 - ✅ **Merchant-hub integration complete**:
   - Co page (`/admin/CurrentOrders`) polls merchant-hub every 6 seconds
   - Wake-up endpoint for distributed poller election
@@ -1609,12 +1657,10 @@ npm run migrate:deploy
   - Environment filtering (prod: `croque.bedaine`, dev: 'croque-test')
   - Order hydration with menu data
   - Order alarm system for untransmitted dishes
-- ⚠️ **TODO**: Flow 6 in croque-bedaine uses simplified single-leg transfer (Customer → Restaurant direct EURO).
-  The full FLOWS.md specification (lines 181-220) describes a two-leg dual-currency system:
-  1. Customer → innopay (HBD attempt + EURO collateral)
-  2. innopay → restaurant (via `/api/wallet-payment`)
-  This requires hub API endpoints. Current implementation works but skips HBD/debt tracking.
-  Revisit after Flow 4/5 are stable.
+- ✅ Flow 6 upgraded to two-leg dual-currency (Feb 2026):
+  1. Customer → innopay (EURO collateral, signed via hub's `/api/sign-and-broadcast`)
+  2. innopay → restaurant (HBD preferred, EURO fallback, via `/api/wallet-payment`)
+  Hub handles customer HBD sweep, `outstanding_debt` recording, and EUR/USD rate resolution.
 
 ---
 
@@ -1644,9 +1690,22 @@ npm run migrate:deploy
 
 ---
 
-**Last Updated**: 2026-01-25
+**Last Updated**: 2026-02-14
 **Maintainer**: Development Team
 **Questions**: Refer to individual project documentation or code comments
+
+**New in 2026-02-14**:
+- 🔄 **Outstanding debt status lifecycle extended**: Added `recovery_ongoing` status to `outstanding_debt` table. This status is set by liman (via the airlock) when a recovery action (contact_debtor, wait_for_deposit, etc.) is initiated for a defaulted debtor. Valid transitions from `recovery_ongoing`: back to `unpaid`, `withdrawal_pending`, `paid`, or `settled_out_of_band`.
+- 🔄 **`/api/outstanding-debt/update-status`**: Now accepts `recovery_ongoing` in addition to `withdrawal_pending` and `settled_out_of_band`.
+- 🔄 **`/api/outstanding-debt` (GET)**: Now returns debts with status `unpaid` OR `recovery_ongoing` (previously only `unpaid`), so liman's cron can process debts under recovery the same as unpaid debts.
+
+**New in 2026-02-13**:
+- 🔄 **Croque-bedaine Flow 6 upgraded to two-leg dual-currency**: Refactored from direct single-leg (Customer → Restaurant) to full hub-mediated flow (Customer → innopay → Restaurant) matching indiesmenu
+  - Leg 1: EURO collateral transfer signed via hub's `/api/sign-and-broadcast`
+  - Leg 2: Hub sweeps customer HBD, records `outstanding_debt`, transfers to restaurant (HBD preferred, EURO fallback)
+  - EUR/USD rate resolved server-side by the hub (no client-side rate fetching needed)
+- 🔄 **wallet-payment API**: `eurUsdRate` parameter now optional — hub fetches rate internally via `getEurUsdRateServerSide()` when omitted. Backward-compatible with indiesmenu.
+- 🔄 **Flow 8 (Import Account)**: Documentation updated — both spokes use identical email verification flow (was incorrectly marked as "not implemented" for croque-bedaine)
 
 **New in 2026-01-25**:
 - 🔄 **Architecture Diagram Updated**: Corrected ecosystem topology diagram to match `SPOKE-DOCUMENTATION.md`

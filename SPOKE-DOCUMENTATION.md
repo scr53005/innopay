@@ -428,27 +428,26 @@ This section provides detailed implementation information for each payment flow,
 
 **Implementation Status**:
 - ✅ **indiesmenu**: Fully implemented and working (two-leg, dual-currency)
-- ⚠️ **croque-bedaine**: Simplified single-leg transfer (TODO: upgrade to full flow)
+- ✅ **croque-bedaine**: Fully implemented and working (two-leg, dual-currency via hub)
 
-**Payment Structure (indiesmenu)**:
+**Payment Structure (both spokes)**:
 
-This flow does NOT require Stripe checkout. Implementation in `indiesmenu/app/menu/page.tsx` lines 1536-1783:
+This flow does NOT require Stripe checkout. Both spokes implement the same two-leg dual-currency system, though with different architectural approaches:
+- **indiesmenu**: Inline logic in `app/menu/page.tsx` (~180 lines), uses `useState` hooks and `useCallback` refs
+- **croque-bedaine**: Standalone `executeFlow6Payment()` function called from `usePaymentFlow.ts`, uses state machine dispatch for UI feedback
 
-1. **Balance check** (line 1473): Verifies customer's EURO token balance is sufficient (if not → FLOW 7)
+**Leg 1: Customer → innopay**:
+1. **EURO transfer** (collateral): Customer transfers EURO tokens to `innopay` account
+   - Signed and broadcast via hub's `/api/sign-and-broadcast` endpoint (cascade authority fallback)
+   - Memo contains only the distriate suffix (not the full order memo)
+   - Indiesmenu also attempts HBD transfer at this stage; croque-bedaine delegates HBD handling entirely to the hub
 
-2. **First leg transfer**: **Customer → innopay**
-   - **HBD transfer attempt**: `orderAmount * eurUsdRate` HBD
-   - If insufficient HBD → record `outstanding_debt` (customer owes innopay)
-   - **EURO transfer** (collateral): Always succeeds by definition
-   - Signs and broadcasts via `/api/sign-and-broadcast` endpoint
-   - Updates mini-wallet balance in UI
-
-3. **Second leg transfer**: **innopay → restaurant**
-   - Calls `/api/wallet-payment` endpoint
-   - **HBD transfer attempt** to restaurant
-   - If insufficient HBD → record `outstanding_debt` (innopay owes restaurant)
-   - **EURO transfer** (collateral): Fallback payment method
-   - Uses `orderMemo` for order matching
+**Leg 2: innopay → restaurant** (via `/api/wallet-payment`):
+1. **EUR/USD rate resolution**: Hub resolves the rate internally via `getEurUsdRateServerSide()` if not provided by the client. Indiesmenu passes the rate (historical — it was built before the hub existed); croque-bedaine omits it.
+2. **HBD sweep**: Hub checks customer's liquid HBD, transfers `min(customerHBD, requiredHBD)` to innopay using innopay's active key authority
+3. **Debt recording**: If HBD shortfall > 0.001, creates `outstanding_debt` record (creditor: innopay, debtor: customer)
+4. **Restaurant transfer**: Hub checks innopay's HBD balance. If sufficient → transfers HBD to restaurant. If not → transfers EURO tokens as fallback.
+5. **Order memo**: `orderMemo + " " + distriateSuffix` used for order matching by merchant-hub
 
 **Payment Structure Principles**:
 - Both legs attempt HBD first (preferred by restaurants for Hive transactions)
@@ -456,18 +455,10 @@ This flow does NOT require Stripe checkout. Implementation in `indiesmenu/app/me
 - Outstanding debts tracked for later HBD reconciliation
 - Ensures orders are ALWAYS fulfilled even when HBD is temporarily unavailable
 
-**Croque-Bedaine TODO**:
-⚠️ Flow 6 in croque-bedaine uses simplified single-leg transfer (Customer → Restaurant direct EURO). The full flow 6 is a two-leg, dual-currency system:
-1. Customer → innopay (HBD attempt + EURO collateral)
-2. innopay → restaurant (via `/api/wallet-payment`)
-
-This requires hub API endpoints. Current croque-bedaine implementation works but skips HBD/debt tracking.
-
 **Special Notes**:
 - Uses `kcs` distriate tag (eligible for Distriator cashback)
 - No Stripe checkout required
 - Fastest payment method (immediate confirmation)
-- **IMPORTANT**: This is a working flow in indiesmenu - do not break during refactoring!
 
 ---
 
@@ -585,32 +576,32 @@ The webhook performs a **single atomic transaction** with three possible change 
 - User explicitly requests import functionality via "Import Account" button
 - User provides email associated with an existing Innopay account
 
-**Implementation Status**: ✅ **IMPLEMENTED** (but with naive security - needs enhancement)
+**Implementation Status**: ✅ **FULLY IMPLEMENTED** (both spokes, with email verification)
 
 **User Journey**:
 1. User visits `{spoke}.innopay.lu/` without credentials
 2. Clicks "Import Account"
-3. Enters email address
-4. System retrieves account credentials from database
-5. Credentials stored in localStorage for mini-wallet
-6. User can now pay with account
+3. Enters email address associated with their Innopay account
+4. Hub sends a 6-digit verification code to the email
+5. User enters the verification code
+6. Hub validates code and returns encrypted credentials
+7. Credentials stored in localStorage for mini-wallet
+8. User can now pay with account
 
-**Implementation Notes**:
-- Current implementation is functional and tested
-- Security is "naive" and will need to evolve for better protection
-- Limited to 5 import attempts per session to prevent abuse
-- Implementation in `indiesmenu/app/menu/page.tsx` lines 1060-1178
+**Implementation**:
+Both spokes use the same 3-step hub API flow for secure email verification:
+1. `POST /api/verify/request-code` — sends 6-digit code to user's email (via Resend)
+2. `POST /api/verify/check-code` — validates the code, returns a one-time credential token
+3. `POST /api/verify/get-credentials` — exchanges token for account credentials (accountName, activeKey, masterPassword)
 
-**Future Enhancements Needed**:
-- Add email verification step
-- Implement 2FA or magic link authentication
-- Rate limiting at server level
-- Audit logging for import attempts
+- **indiesmenu**: Inline modal in `app/menu/page.tsx`
+- **croque-bedaine**: Dedicated `ImportAccountModal.tsx` component with clean step-by-step UI
 
 **Special Notes**:
 - Not a standard payment flow (credential management)
 - Not eligible for cashback
-- Security enhancement is on roadmap
+- Verification codes expire after 10 minutes
+- Rate-limited at the hub level
 
 ---
 
@@ -2478,6 +2469,7 @@ DELETE FROM transfers WHERE to_account = '{restaurant}.{tld}';
 | 2.0 | 2026-01-24 | **Consolidated all documentation into single source** |
 | 2.1 | 2026-01-24 | **Added detailed flow information from SPOKE-FLOWS.md**: Flow 8, Flow 4 Variant B, detection criteria, user journeys, technical implementation (detectFlow), flow testing procedures with expected logs |
 | 2.2 | 2026-01-25 | **State Machine Implementation Guide**: Added comprehensive state machine documentation with state definitions, 'redirecting' state details, common pitfalls, proper event dispatching, flow-specific state paths, return URL parameter handling, credential fetching logic, and testing guidelines. Lessons learned from Flow 3 bug fixes. |
+| 2.3 | 2026-02-13 | **Flow 6 & Flow 8 updates**: Flow 6 croque-bedaine upgraded from single-leg direct transfer to two-leg dual-currency (Customer → innopay → Restaurant) via hub APIs. Flow 8 updated from "naive security" to full 3-step email verification (both spokes). EUR/USD rate now resolved server-side by hub when not provided by client. |
 
 ### Appendix G: Reference Links
 

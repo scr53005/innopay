@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Client, PrivateKey } from '@hiveio/dhive';
 import { transferHbd, transferEuroTokens } from '@/services/hive';
+import { getEurUsdRateServerSide } from '@/services/currency';
 import prisma from '@/lib/prisma';
 
 const client = new Client([
@@ -25,7 +26,8 @@ const client = new Client([
  * - customerTxId: Customer's EURO transfer transaction ID
  * - recipient: Restaurant's Hive account (e.g., 'indies.cafe')
  * - amountEuro: Order amount in EUR
- * - eurUsdRate: Current EUR/USD conversion rate
+ * - eurUsdRate: (optional) EUR/USD conversion rate. If omitted, fetched server-side from ECB/DB.
+ *              Indiesmenu passes it (historical); newer spokes like croque-bedaine omit it.
  * - orderMemo: Full order details
  * - distriateSuffix: The distriate suffix for linking
  */
@@ -43,8 +45,8 @@ export async function POST(req: NextRequest) {
       distriateSuffix
     });
 
-    // Validate required fields
-    if (!customerAccount || !customerTxId || !recipient || !amountEuro || !eurUsdRate || !orderMemo || !distriateSuffix) {
+    // Validate required fields (eurUsdRate is optional — resolved server-side if omitted)
+    if (!customerAccount || !customerTxId || !recipient || !amountEuro || !orderMemo || !distriateSuffix) {
       const errorResponse = NextResponse.json(
         { error: 'Missing required fields' },
         { status: 400 }
@@ -72,6 +74,19 @@ export async function POST(req: NextRequest) {
     console.warn('[WALLET PAYMENT] Final memo:', finalMemo);
 
     // ========================================
+    // Resolve EUR/USD rate (use client-provided value or fetch server-side)
+    // ========================================
+    let resolvedEurUsdRate: number;
+    if (eurUsdRate) {
+      resolvedEurUsdRate = parseFloat(eurUsdRate);
+      console.warn(`[WALLET PAYMENT] Using client-provided EUR/USD rate: ${resolvedEurUsdRate}`);
+    } else {
+      const rateData = await getEurUsdRateServerSide();
+      resolvedEurUsdRate = rateData.conversion_rate;
+      console.warn(`[WALLET PAYMENT] Fetched EUR/USD rate server-side: ${resolvedEurUsdRate} (date: ${rateData.date}, fresh: ${rateData.isFresh})`);
+    }
+
+    // ========================================
     // STEP 1: Transfer HBD from customer to innopay
     // ========================================
     let customerHbdTransferred = 0;
@@ -79,7 +94,7 @@ export async function POST(req: NextRequest) {
     let requiredHbd = 0;
 
     try {
-      requiredHbd = parseFloat(amountEuro) * parseFloat(eurUsdRate);
+      requiredHbd = parseFloat(amountEuro) * resolvedEurUsdRate;
       console.warn(`[WALLET PAYMENT] Customer should transfer ${requiredHbd} HBD to innopay`);
     } catch (calcError: any) {
       console.error('[WALLET PAYMENT] ❌ Error calculating required HBD:', calcError.message);
@@ -163,7 +178,7 @@ export async function POST(req: NextRequest) {
               debtor: customerAccount,
               amount_hbd: hbdShortfall,
               euro_tx_id: customerTxId,
-              eur_usd_rate: parseFloat(eurUsdRate),
+              eur_usd_rate: resolvedEurUsdRate,
               reason: 'customer_order_payment',
               notes: `Customer ${customerAccount} could not transfer ${hbdShortfall} HBD for order. Transferred ${customerHbdTransferred} HBD, shortfall ${hbdShortfall} HBD. EURO transfer: ${customerTxId}`
             }

@@ -138,7 +138,7 @@ model outstanding_debt {
   hbd_tx_id     String?   @db.Char(40)
   eur_usd_rate  Decimal   @db.Decimal(10, 4)
   reason        String    @db.VarChar(64)
-  paid          Boolean   @default(false)
+  status        String    @default("unpaid") @db.VarChar(30) // unpaid | recovery_ongoing | withdrawal_pending | paid | settled_out_of_band
   paid_at       DateTime?
   payment_tx_id String?   @db.Char(40)
   notes         String?   @db.Text
