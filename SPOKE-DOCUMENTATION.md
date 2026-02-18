@@ -1,8 +1,8 @@
 # Innopay Spoke Integration - Complete Documentation
 
-**Last Updated**: 2026-01-25
+**Last Updated**: 2026-02-18
 **Status**: Production Ready
-**Version**: 2.2
+**Version**: 2.4
 
 ---
 
@@ -16,7 +16,8 @@
 6. [Framework-Specific Integration](#framework-specific-integration)
 7. [Testing Strategy](#testing-strategy)
 8. [Production Deployment](#production-deployment)
-9. [Appendices](#appendices)
+9. [Admin Backend (Kitchen & Menu Management)](#admin-backend-kitchen--menu-management)
+10. [Appendices](#appendices)
 
 ---
 
@@ -2272,6 +2273,233 @@ If critical issues occur:
 
 ---
 
+## ADMIN BACKEND (KITCHEN & MENU MANAGEMENT)
+
+Each spoke provides an admin backend for restaurant staff and managers. While the customer-facing payment integration is well-covered above, the admin backend encompasses **kitchen order management**, **menu CRUD**, **accounting/reporting**, and **access control**. The two spokes implement this differently due to their framework choices.
+
+### Overview
+
+| Feature | Indiesmenu (Next.js) | Croque-Bedaine (Vite SPA) |
+|---------|---------------------|---------------------------|
+| **Auth** | Password-based cookie session | Supabase Auth (email/password) with roles |
+| **Roles** | Single admin password | Admin + Staff roles via `user_roles` table |
+| **Menu CRUD** | Dishes, daily specials, allergens | Categories, dishes, drinks, ingredients, allergens |
+| **Order Management** | Current orders + history | Current orders + history |
+| **Accounting** | Reporting page (CSV/PDF) | Reporting page (CSV/PDF) |
+| **Display Pages** | TV display, printout | — |
+| **Image Management** | Git-based fuzzy matching | Direct URL upload |
+| **Dark Mode** | Forced light mode | Full dark mode support (class-based) |
+
+---
+
+### Indiesmenu Admin Backend (Next.js)
+
+**Location**: `indiesmenu/app/admin/`
+**Auth**: Password-based session via `admin_session` cookie (24h expiry)
+
+#### Authentication
+
+- Single shared admin password (`ADMIN_PASSWORD` env var)
+- Login page at `/admin/login` — sets `admin_session` cookie on success
+- `middleware.ts` protects all `/admin/*` and `/api/admin/*` routes
+- No role-based access — anyone with the password has full access
+- Layout forces `color-scheme: light` (no dark mode)
+
+#### Admin Pages
+
+| Page | Route | Description |
+|------|-------|-------------|
+| **Dashboard** | `/admin` | Central hub with 6 cards: Daily Specials, Current Orders, History, Carte & Images, Allergènes, Comptabilité. Includes cache-clear button and quick links. |
+| **Current Orders** | `/admin/current_orders` | Real-time kitchen order queue (~973 lines). Distributed poller election, kitchen transmission workflow, dual-currency grouping, late order highlighting, audio alerts. |
+| **Order History** | `/admin/history` | Fulfilled orders grouped by date. Expandable day sections, lazy loading in 3-day chunks, auto-refresh every 10 seconds. |
+| **Daily Specials** | `/admin/daily-specials` | Manage rotating daily dishes. Mark items as sold out, reorder, toggle visibility. |
+| **Carte & Images** | `/admin/carte` | Full menu management. Edit dishes/drinks, manage images with fuzzy matching from git commit history (auto-detects new images in `public/food/`). |
+| **Allergènes** | `/admin/alergenes` | Manage ingredient-allergen associations. Matrix view showing which ingredients contain which allergens. |
+| **Comptabilité** | `/admin/reporting` | Accounting reports with date-range filtering, EUR/USD conversion (via Prisma `currency_conversion` table + ECB rates), transaction table, CSV and PDF export. |
+
+#### API Routes
+
+**Admin APIs** (all protected by middleware):
+- `/api/admin/auth` — Login/logout endpoints
+- `/api/admin/cache` — Manual menu cache invalidation
+- `/api/admin/dishes` — Dish CRUD operations
+- `/api/admin/drinks` — Drink CRUD operations
+- `/api/admin/alergenes` — Allergen CRUD operations
+- `/api/admin/ingredients` — Ingredient management
+- `/api/admin/detect-new-images` — Scan git for new food images
+- `/api/admin/match-images` — Fuzzy-match images to menu items
+- `/api/admin/update-images` — Apply matched images to dishes
+- `/api/admin/rates` — EUR/USD rate lookup (Prisma + ECB XML fallback)
+
+**Order APIs**:
+- `/api/transfers/sync-from-merchant-hub` — Consume from Redis Stream
+- `/api/transfers/unfulfilled` — Fetch pending orders
+- `/api/fulfill` — Mark order as fulfilled
+- `/api/orders/history` — Paginated fulfilled orders
+
+#### Display Pages (Public)
+
+- `/display/plat-du-jour` — Daily specials optimized for TV monitors (auto-refresh)
+- `/display/printout` — Printer-friendly A3 landscape menu layout
+
+#### Files
+
+```
+indiesmenu/app/admin/
+├── page.tsx                    # Dashboard (197 lines)
+├── login/page.tsx              # Login page
+├── layout.tsx                  # Admin layout (forces light mode)
+├── current_orders/page.tsx     # CO page (973 lines)
+├── history/page.tsx            # Order history (432 lines)
+├── daily-specials/page.tsx     # Daily specials management
+├── carte/page.tsx              # Menu + image management
+├── alergenes/page.tsx          # Allergen management
+└── reporting/page.tsx          # Accounting reports (375 lines)
+```
+
+---
+
+### Croque-Bedaine Admin Backend (Vite SPA)
+
+**Location**: `croque-bedaine/src/pages/admin/`
+**Auth**: Supabase Auth with role-based access control
+
+#### Authentication & Authorization
+
+- **Supabase Auth**: Email/password authentication via `useAuth()` hook
+- **Role-Based Access**: Two roles stored in `user_roles` table:
+  - `admin` — Full access (can manage roles, see all admin pages)
+  - `staff` — Kitchen access (orders, menu management, but no role management)
+- **Row-Level Security**: Supabase RLS policies enforce access control at database level
+- **Auth State**: `useAuth()` hook provides `user`, `isAdmin`, `isStaff`, `loading`, `signOut`
+- **Route Protection**: `Admin.tsx` wrapper redirects unauthenticated users to `/auth`
+- Users without a role see an "Accès limité" badge
+
+#### Admin Pages
+
+| Page | Route | Component | Description |
+|------|-------|-----------|-------------|
+| **Dashboard** | `/admin` | `Dashboard.tsx` | Stat cards with live counts: orders, categories, dishes, drinks, ingredients, allergens, users/roles, and accounting link. Each card navigates to its management page. |
+| **Current Orders** | `/admin/current-orders` | `CurrentOrders.tsx` | Real-time kitchen queue. Merchant-hub polling, order alarm system, kitchen transmission, dual-currency grouping, call waiter detection, late order highlighting. Dark mode compatible. |
+| **Order History** | `/admin/order-history` | `OrderHistory.tsx` | Last 50 fulfilled orders with hydrated memos, table/client info, timestamps. |
+| **Comptabilité** | `/admin/reporting` | `Reporting.tsx` | Accounting reports fetched from merchant-hub. Date-range filtering, EUR/USD conversion (via `open.er-api.com`), transaction table, summary bar (EURO/HBD/EUR totals), CSV and PDF export. |
+| **Categories** | `/admin/categories` | `Categories.tsx` | CRUD for dish/drink categories (name, type, display order). |
+| **Dishes** | `/admin/dishes` | `Dishes.tsx` | CRUD for dishes: name, price, discount percentage, image URL, active/sold-out status, category assignment. |
+| **Drinks** | `/admin/drinks` | `Drinks.tsx` | CRUD for drinks with size variants (e.g., small/large with different prices). |
+| **Ingredients** | `/admin/ingredients` | `Ingredients.tsx` | Ingredient management with dish-ingredient and ingredient-allergen linking. |
+| **Allergens** | `/admin/alergenes` | `Alergenes.tsx` | Allergen management with bilingual labels (FR/EN). Links to ingredients. |
+| **Roles** | `/admin/roles` | `Roles.tsx` | User role management (admin-only). Assign admin/staff roles to Supabase users. |
+
+#### Navigation Structure
+
+The admin layout (`Admin.tsx`) provides:
+- **Desktop**: Two-row navigation bar (Row 1: Dashboard, Orders, History, Comptabilité, Roles; Row 2: Categories, Dishes, Drinks, Ingredients, Allergens)
+- **Mobile**: Single horizontal scrollable nav bar
+- **Environment Badge**: Shows PROD/DEV with tooltip showing account and hub URL
+- **User Info**: Email display + sign out button
+
+```
+Admin Layout (/admin)
+├─ Row 1: Operations
+│   ├─ Tableau de bord (Dashboard)
+│   ├─ Commandes en cours (Current Orders)
+│   ├─ Historique des commandes (Order History)
+│   ├─ Comptabilité (Reporting)
+│   └─ Rôles (Roles) [admin-only]
+│
+├─ Row 2: Menu Management
+│   ├─ Catégories (Categories)
+│   ├─ Plats (Dishes)
+│   ├─ Boissons (Drinks)
+│   ├─ Ingrédients (Ingredients)
+│   └─ Allergènes (Allergens)
+│
+└─ Content: <Outlet /> (renders current page)
+```
+
+#### Dark Mode Support
+
+Croque-bedaine uses class-based dark mode (`next-themes` + Tailwind's `.dark` class):
+- **CSS Variables**: HSL-based theme colors defined in `src/index.css` (`:root` for light, `.dark` for dark)
+- **shadcn/ui Components**: Automatically respect CSS variables (`bg-card`, `text-foreground`, etc.)
+- **Custom Colors**: All hardcoded Tailwind colors use `dark:` variants (e.g., `text-red-800 dark:text-red-400`)
+- **Reporting Page**: Full dark mode support with semantic color classes
+
+#### Supabase Schema (Admin-Relevant Tables)
+
+```sql
+-- Menu management
+categories (category_id, name, type, display_order)
+dishes (dish_id, name, price, discount, image_url, active, sold_out, category_id)
+drinks (drink_id, name, category_id, ...)
+drink_sizes (id, drink_id, size_label, price)
+ingredients (ingredient_id, name)
+dish_ingredients (dish_id, ingredient_id)
+alergenes (alergene_id, name_fr, name_en)
+ingredient_alergenes (ingredient_id, alergene_id)
+
+-- Auth & roles
+profiles (id, email, ...)
+user_roles (id, user_id, role)  -- role: 'admin' | 'staff'
+
+-- Orders (synced from merchant-hub)
+transfers (id, from_account, to_account, amount, symbol, memo, parsed_memo,
+           received_at, fulfilled, fulfilled_at)
+```
+
+#### No API Routes
+
+As a Vite SPA, croque-bedaine has **no server-side API routes**. All data operations use:
+- **Supabase Client**: Direct database queries via `@supabase/supabase-js`
+- **Merchant-Hub**: HTTP calls to `getMerchantHubUrl()` for transfer sync and reporting
+- **External APIs**: `open.er-api.com` for EUR/USD exchange rates (reporting page)
+- **Row-Level Security**: Supabase RLS replaces API-level auth checks
+
+#### Files
+
+```
+croque-bedaine/src/pages/admin/
+├── Dashboard.tsx         # Dashboard with stat cards
+├── CurrentOrders.tsx     # Real-time order management
+├── OrderHistory.tsx      # Fulfilled order history
+├── Reporting.tsx         # Accounting reports (CSV/PDF)
+├── Categories.tsx        # Category CRUD
+├── Dishes.tsx            # Dish CRUD
+├── Drinks.tsx            # Drink CRUD
+├── Ingredients.tsx       # Ingredient management
+├── Alergenes.tsx         # Allergen management
+└── Roles.tsx             # Role management (admin-only)
+
+croque-bedaine/src/pages/
+├── Admin.tsx             # Admin layout + navigation
+├── Auth.tsx              # Login page (Supabase Auth)
+└── Index.tsx             # Customer-facing menu
+
+croque-bedaine/src/hooks/
+├── useAuth.tsx           # Auth context (user, roles, signOut)
+├── useMenuData.ts        # Menu data fetching (for hydration)
+└── useOrderAlarm.ts      # Order alarm sound logic
+```
+
+---
+
+### Reporting / Comptabilité — Implementation Comparison
+
+Both spokes provide accounting reports for the restaurant. The approaches differ due to their framework choices:
+
+| Aspect | Indiesmenu | Croque-Bedaine |
+|--------|-----------|----------------|
+| **Data Source** | Merchant-hub `/api/reporting` | Merchant-hub `/api/reporting` |
+| **EUR/USD Rates** | Server-side: Prisma `currency_conversion` table + ECB XML fallback | Client-side: `open.er-api.com` free API |
+| **Rate Caching** | Database-cached, fetched once per day | Fetched once per report load |
+| **Currency Display** | HBD → EUR conversion | EURO (1:1) + HBD → EUR conversion |
+| **CSV Export** | UTF-8 BOM, semicolon separator, French headers | UTF-8 BOM, semicolon separator, French headers |
+| **PDF Export** | jsPDF + autoTable, landscape | jsPDF + autoTable, landscape |
+| **Dependencies** | `jspdf`, `jspdf-autotable` | `jspdf`, `jspdf-autotable` |
+| **Styling** | Hardcoded light theme | CSS variables + dark mode |
+
+---
+
 ## APPENDICES
 
 ### Appendix A: Environment Variables Reference
@@ -2470,6 +2698,7 @@ DELETE FROM transfers WHERE to_account = '{restaurant}.{tld}';
 | 2.1 | 2026-01-24 | **Added detailed flow information from SPOKE-FLOWS.md**: Flow 8, Flow 4 Variant B, detection criteria, user journeys, technical implementation (detectFlow), flow testing procedures with expected logs |
 | 2.2 | 2026-01-25 | **State Machine Implementation Guide**: Added comprehensive state machine documentation with state definitions, 'redirecting' state details, common pitfalls, proper event dispatching, flow-specific state paths, return URL parameter handling, credential fetching logic, and testing guidelines. Lessons learned from Flow 3 bug fixes. |
 | 2.3 | 2026-02-13 | **Flow 6 & Flow 8 updates**: Flow 6 croque-bedaine upgraded from single-leg direct transfer to two-leg dual-currency (Customer → innopay → Restaurant) via hub APIs. Flow 8 updated from "naive security" to full 3-step email verification (both spokes). EUR/USD rate now resolved server-side by hub when not provided by client. |
+| 2.4 | 2026-02-18 | **Admin Backend documentation**: Added comprehensive Section 9 covering kitchen & menu management for both spokes — authentication, admin page inventories, menu CRUD, reporting/comptabilité, roles, dark mode support, Supabase schema, and implementation comparison. |
 
 ### Appendix G: Reference Links
 

@@ -6,27 +6,31 @@
  *   npx tsx scripts/send-credential-emails.ts              # dry run (list accounts)
  *   npx tsx scripts/send-credential-emails.ts --send        # actually send emails
  *   npx tsx scripts/send-credential-emails.ts --account xyz  # single account only
+ *   npx tsx scripts/send-credential-emails.ts --force        # retry even if cred_email_ session exists
  */
 
+import { config } from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { Resend } from 'resend';
 
-// We can't use @/ path aliases in standalone scripts, so import relatively
-// For generateHiveKeys and email template, we duplicate minimally here
+// Load .env.local (Next.js does this automatically, but standalone scripts need it)
+config({ path: '.env.local' });
 
 const prisma = new PrismaClient();
 
-// Re-import these from the project (relative paths from scripts/)
-// Using dynamic imports to handle the path resolution
 async function main() {
   const args = process.argv.slice(2);
   const shouldSend = args.includes('--send');
+  const forceRetry = args.includes('--force');
   const accountIndex = args.indexOf('--account');
   const singleAccount = accountIndex !== -1 ? args[accountIndex + 1] : null;
 
   console.log(`\n=== Credential Email Catch-Up Script ===`);
   console.log(`Mode: ${shouldSend ? 'SEND' : 'DRY RUN (add --send to actually send)'}`);
+  if (forceRetry) console.log(`Force: will retry even if cred_email_ session exists`);
   if (singleAccount) console.log(`Single account: ${singleAccount}`);
+  console.log(`RESEND_API_KEY: ${process.env.RESEND_API_KEY ? process.env.RESEND_API_KEY.slice(0, 8) + '...' : 'NOT SET'}`);
+  console.log(`RESEND_FROM_EMAIL: ${process.env.RESEND_FROM_EMAIL || '(default)'}`);
   console.log('');
 
   try {
@@ -51,6 +55,7 @@ async function main() {
         stripeSessionId: { startsWith: 'cred_email_' },
       },
       select: {
+        id: true,
         stripeSessionId: true,
       },
     });
@@ -65,11 +70,13 @@ async function main() {
         .filter((id): id is number => id !== null)
     );
 
-    // Filter to only unsent
-    const pending = walletusers.filter(wu => !sentWalletUserIds.has(wu.id));
+    // Filter to only unsent (unless --force)
+    const pending = forceRetry
+      ? walletusers
+      : walletusers.filter(wu => !sentWalletUserIds.has(wu.id));
 
     console.log(`Already sent: ${walletusers.length - pending.length}`);
-    console.log(`Pending: ${pending.length}\n`);
+    console.log(`Pending: ${pending.length}${forceRetry ? ' (force mode — retrying all)' : ''}\n`);
 
     if (pending.length === 0) {
       console.log('Nothing to do.');
@@ -91,15 +98,29 @@ async function main() {
       console.log(`  ${shouldSend ? 'SENDING' : 'WOULD SEND'} → ${wu.accountName} (${email})`);
 
       if (shouldSend) {
+        let credentialSession: { id: string } | null = null;
+
         try {
-          // Dynamic import of the service (uses @/ aliases, needs Next.js context)
-          // Instead, we inline the logic here for the standalone script
           const { generateHiveKeys } = await import('../services/hive');
           const { buildCredentialDeliveryEmail } = await import('../lib/email-templates');
 
           const keychain = generateHiveKeys(wu.accountName, wu.seed!);
 
-          const credentialSession = await prisma.accountCredentialSession.create({
+          // If --force, delete any existing stale cred_email_ session for this walletuser
+          if (forceRetry) {
+            const stale = existingSessions.filter(s =>
+              s.stripeSessionId.startsWith(`cred_email_${wu.id}_`)
+            );
+            if (stale.length > 0) {
+              console.log(`    Cleaning ${stale.length} stale session(s)...`);
+              await prisma.accountCredentialSession.deleteMany({
+                where: { id: { in: stale.map(s => s.id) } },
+              });
+            }
+          }
+
+          // Create credential session
+          credentialSession = await prisma.accountCredentialSession.create({
             data: {
               accountName: wu.accountName,
               stripeSessionId: `cred_email_${wu.id}_${Date.now()}`,
@@ -122,8 +143,9 @@ async function main() {
           const credentialUrl = `${baseUrl}/credentials/${credentialSession.id}`;
           const { subject, html, text } = buildCredentialDeliveryEmail(wu.accountName, credentialUrl);
 
+          // Send email via Resend
           const resend = new Resend(process.env.RESEND_API_KEY);
-          await resend.emails.send({
+          const result = await resend.emails.send({
             from: process.env.RESEND_FROM_EMAIL || 'noreply@verify.innopay.lu',
             to: email,
             subject,
@@ -131,6 +153,12 @@ async function main() {
             text,
           });
 
+          // Check for Resend-level errors
+          if (result.error) {
+            throw new Error(`Resend error: ${result.error.name} — ${result.error.message}`);
+          }
+
+          console.log(`    Resend ID: ${result.data?.id}`);
           console.log(`    OK — session ${credentialSession.id}`);
           sent++;
 
@@ -138,6 +166,15 @@ async function main() {
           await new Promise(resolve => setTimeout(resolve, 500));
         } catch (err: any) {
           console.error(`    ERROR — ${err.message || err}`);
+
+          // Rollback: delete the credential session if email send failed
+          if (credentialSession) {
+            console.log(`    Rolling back credential session ${credentialSession.id}...`);
+            await prisma.accountCredentialSession.delete({
+              where: { id: credentialSession.id },
+            }).catch(() => {}); // best-effort cleanup
+          }
+
           errors++;
         }
       } else {

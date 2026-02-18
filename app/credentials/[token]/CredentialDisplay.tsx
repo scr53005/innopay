@@ -190,19 +190,55 @@ export default function CredentialDisplay({ credentials }: { credentials: Creden
               <div style={{
                 padding: '12px 16px',
                 display: 'flex',
-                alignItems: 'center',
+                alignItems: field.key === 'seed' ? 'flex-start' : 'center',
                 gap: '12px',
               }}>
-                <div style={{
-                  flex: 1,
-                  fontFamily: "'Courier New', monospace",
-                  fontSize: field.key === 'seed' ? '13px' : '15px',
-                  color: '#1e293b',
-                  wordBreak: 'break-all',
-                  lineHeight: 1.5,
-                }}>
-                  {field.value}
-                </div>
+                {field.key === 'seed' ? (
+                  <div style={{ flex: 1 }}>
+                    <table style={{
+                      width: '100%',
+                      borderCollapse: 'collapse',
+                      fontFamily: "'Courier New', monospace",
+                      fontSize: '14px',
+                    }}>
+                      <tbody>
+                        {[0, 1, 2].map(row => (
+                          <tr key={row}>
+                            {[0, 1, 2, 3].map(col => {
+                              const idx = row * 4 + col;
+                              const words = field.value.split(/\s+/);
+                              const word = words[idx] || '';
+                              return (
+                                <td key={col} style={{
+                                  border: '1px solid #e2e8f0',
+                                  padding: '8px 10px',
+                                  textAlign: 'center',
+                                  background: idx % 2 === 0 ? '#f8fafc' : '#ffffff',
+                                  color: '#1e293b',
+                                  fontWeight: 500,
+                                }}>
+                                  <span style={{ color: '#94a3b8', fontSize: '10px', marginRight: '4px' }}>{idx + 1}.</span>
+                                  {word}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div style={{
+                    flex: 1,
+                    fontFamily: "'Courier New', monospace",
+                    fontSize: '15px',
+                    color: '#1e293b',
+                    wordBreak: 'break-all',
+                    lineHeight: 1.5,
+                  }}>
+                    {field.value}
+                  </div>
+                )}
                 <button
                   onClick={() => copyToClipboard(field.key, field.value)}
                   style={{
@@ -250,8 +286,8 @@ export default function CredentialDisplay({ credentials }: { credentials: Creden
               Sauvegarder dans le portefeuille / Save to wallet
             </button>
             <p style={{ color: '#9ca3af', fontSize: '13px', marginTop: '12px' }}>
-              Sauvegarde automatique a la fin du compte a rebours /
-              Auto-saves when the countdown ends
+              Sauvegarde automatique éphémère à la fin du compte à rebours /
+              Ephemeral auto-save when the countdown ends
             </p>
           </div>
         </div>

@@ -1,6 +1,6 @@
 # INNOPAY ECOSYSTEM - PROJECT OVERVIEW
 
-**Last Updated**: 2026-02-14
+**Last Updated**: 2026-02-18
 **Architecture**: Hub-and-Spokes Multi-Restaurant Payment System with Centralized Blockchain Polling
 
 ---
@@ -761,7 +761,7 @@ Merchant Backend (Spoke Admin Pages)
 
 ### Key Features
 
-**Common to All Spokes**:
+**Common to All Spokes — Order Management**:
 1. **Real-Time Order Display**: 6-second polling from merchant-hub
 2. **Order Hydration**: Dehydrated memos expanded with menu data
 3. **Dual-Currency Display**: Shows both EURO and HBD transfers for same order
@@ -770,14 +770,25 @@ Merchant Backend (Spoke Admin Pages)
 6. **Table Identification**: Extracts table number from memo
 7. **Call Waiter Detection**: Special handling for waiter call transfers
 
+**Common to All Spokes — Menu & Administration**:
+8. **Menu CRUD**: Manage dishes, drinks, categories, ingredients, allergens
+9. **Accounting Reports**: Date-range transaction reports with CSV and PDF export
+10. **EUR/USD Conversion**: Convert HBD/EURO amounts to EUR equivalents
+
 ### Indiesmenu Merchant Backend
 
 **Location**: `indiesmenu/app/admin/`
+**Auth**: Password-based cookie session (`admin_session`, 24h, `ADMIN_PASSWORD` env var)
+**Layout**: Forces `color-scheme: light` (no dark mode)
 
 **Pages**:
+- **Dashboard** (`/admin`): Central hub with 6 cards (Daily Specials, Current Orders, History, Carte & Images, Allergènes, Comptabilité) + cache-clear button
 - **Current Orders** (`/admin/current_orders`): Real-time order queue with kitchen workflow
 - **Order History** (`/admin/history`): Historical fulfilled orders with date grouping
-- **Admin Dashboard** (`/admin`): Central hub with cards for all admin functions
+- **Daily Specials** (`/admin/daily-specials`): Manage rotating daily dishes, mark sold out, reorder
+- **Carte & Images** (`/admin/carte`): Full menu management with fuzzy image matching from git commits
+- **Allergènes** (`/admin/alergenes`): Ingredient-allergen association matrix
+- **Comptabilité** (`/admin/reporting`): Accounting reports with date-range filtering, EUR/USD conversion (Prisma DB + ECB rates), CSV/PDF export
 
 **Current Orders Page Features**:
 - **Distributed Poller Election**: Coordinates with merchant-hub using Redis SETNX
@@ -808,11 +819,23 @@ model Transfer {
 }
 ```
 
-**API Routes**:
+**Order API Routes**:
 - `/api/transfers/sync-from-merchant-hub` - Consume from Redis, insert to DB, ACK
 - `/api/transfers/unfulfilled` - Fetch pending orders
 - `/api/fulfill` - Mark order as fulfilled
 - `/api/orders/history` - Fetch fulfilled orders with pagination
+
+**Admin API Routes** (protected by middleware):
+- `/api/admin/auth` - Login/logout
+- `/api/admin/cache` - Menu cache invalidation
+- `/api/admin/dishes` - Dish CRUD
+- `/api/admin/drinks` - Drink CRUD
+- `/api/admin/alergenes` - Allergen CRUD
+- `/api/admin/ingredients` - Ingredient management
+- `/api/admin/detect-new-images` - Scan git for new food images
+- `/api/admin/match-images` - Fuzzy-match images to menu items
+- `/api/admin/update-images` - Apply matched images
+- `/api/admin/rates` - EUR/USD rate lookup (Prisma + ECB XML)
 
 **Navigation**:
 ```
@@ -826,9 +849,15 @@ Admin Dashboard (/admin)
 ```
 
 **Files**:
-- `indiesmenu/app/admin/current_orders/page.tsx` - CO page (912 lines)
-- `indiesmenu/app/admin/history/page.tsx` - History page (432 lines)
 - `indiesmenu/app/admin/page.tsx` - Dashboard (197 lines)
+- `indiesmenu/app/admin/login/page.tsx` - Login page
+- `indiesmenu/app/admin/layout.tsx` - Admin layout (forces light mode)
+- `indiesmenu/app/admin/current_orders/page.tsx` - CO page (973 lines)
+- `indiesmenu/app/admin/history/page.tsx` - History page (432 lines)
+- `indiesmenu/app/admin/daily-specials/page.tsx` - Daily specials management
+- `indiesmenu/app/admin/carte/page.tsx` - Menu + image management
+- `indiesmenu/app/admin/alergenes/page.tsx` - Allergen management
+- `indiesmenu/app/admin/reporting/page.tsx` - Accounting reports (375 lines)
 - `indiesmenu/app/api/transfers/sync-from-merchant-hub/route.ts` - Sync endpoint
 - `indiesmenu/app/api/transfers/unfulfilled/route.ts` - Unfulfilled orders
 - `indiesmenu/app/api/fulfill/route.ts` - Fulfillment endpoint
@@ -837,37 +866,63 @@ Admin Dashboard (/admin)
 ### Croque-Bedaine Merchant Backend
 
 **Location**: `croque-bedaine/src/pages/admin/`
+**Auth**: Supabase Auth (email/password) with role-based access (`admin` / `staff`)
+**Dark Mode**: Full support via class-based dark mode (Tailwind `.dark` + CSS variables)
 
 **Pages**:
-- **Current Orders** (`/admin/current-orders`): Real-time order management
-- **Order History** (`/admin/order-history`): Historical order tracking
-- **Admin Dashboard** (`/admin`): Central admin hub
+- **Dashboard** (`/admin`): Stat cards with live counts for all entities + navigation
+- **Current Orders** (`/admin/current-orders`): Real-time kitchen queue with alarm system
+- **Order History** (`/admin/order-history`): Last 50 fulfilled orders with hydrated memos
+- **Comptabilité** (`/admin/reporting`): Accounting reports from merchant-hub with CSV/PDF export
+- **Categories** (`/admin/categories`): CRUD for dish/drink categories
+- **Dishes** (`/admin/dishes`): CRUD with price, discount, images, active/sold-out status
+- **Drinks** (`/admin/drinks`): CRUD with size variants (small/large pricing)
+- **Ingredients** (`/admin/ingredients`): Ingredient management with dish/allergen linking
+- **Allergens** (`/admin/alergenes`): Bilingual allergen management (FR/EN)
+- **Roles** (`/admin/roles`): User role management (admin-only)
 
 **Key Differences from Indiesmenu**:
-- **SPA Architecture**: Vite + React Router (no SSR)
-- **Supabase Backend**: Uses Supabase for database instead of Prisma
-- **Component-Based**: CurrentOrders.tsx component (vs. full page)
-- **Order Alarm System**: Separate alarm management for untransmitted orders
+- **SPA Architecture**: Vite + React Router (no SSR, no API routes)
+- **Supabase Backend**: Direct client queries with RLS (replaces Prisma + API routes)
+- **Role-Based Auth**: Admin + Staff roles (vs. single password)
+- **Dark Mode**: Full support (vs. forced light mode in indiesmenu)
+- **Order Alarm System**: Separate alarm management for untransmitted dishes
+- **Richer Menu CRUD**: Separate pages for categories, dishes, drinks, ingredients, allergens
 
-**Supabase Schema**:
+**Supabase Schema** (admin-relevant):
 ```sql
-CREATE TABLE transfers (
-  id TEXT PRIMARY KEY,
-  from_account TEXT,
-  to_account TEXT,
-  amount TEXT,
-  symbol TEXT,
-  memo TEXT,
-  parsed_memo TEXT,
-  received_at TIMESTAMPTZ DEFAULT NOW(),
-  fulfilled_at TIMESTAMPTZ
-);
+-- Orders (synced from merchant-hub)
+transfers (id, from_account, to_account, amount, symbol, memo, parsed_memo,
+           received_at, fulfilled, fulfilled_at)
+
+-- Menu management
+categories (category_id, name, type, display_order)
+dishes (dish_id, name, price, discount, image_url, active, sold_out, category_id)
+drinks (drink_id, name, category_id)
+drink_sizes (id, drink_id, size_label, price)
+ingredients (ingredient_id, name)
+dish_ingredients (dish_id, ingredient_id)
+alergenes (alergene_id, name_fr, name_en)
+ingredient_alergenes (ingredient_id, alergene_id)
+
+-- Auth & roles
+profiles (id, email)
+user_roles (id, user_id, role)  -- 'admin' | 'staff'
 ```
 
 **Files**:
+- `croque-bedaine/src/pages/Admin.tsx` - Admin layout + 2-row navigation
+- `croque-bedaine/src/pages/admin/Dashboard.tsx` - Dashboard with stat cards
 - `croque-bedaine/src/pages/admin/CurrentOrders.tsx` - CO page
 - `croque-bedaine/src/pages/admin/OrderHistory.tsx` - History page
-- `croque-bedaine/src/pages/admin/Dashboard.tsx` - Admin dashboard
+- `croque-bedaine/src/pages/admin/Reporting.tsx` - Accounting reports
+- `croque-bedaine/src/pages/admin/Categories.tsx` - Category CRUD
+- `croque-bedaine/src/pages/admin/Dishes.tsx` - Dish CRUD
+- `croque-bedaine/src/pages/admin/Drinks.tsx` - Drink CRUD
+- `croque-bedaine/src/pages/admin/Ingredients.tsx` - Ingredient management
+- `croque-bedaine/src/pages/admin/Alergenes.tsx` - Allergen management
+- `croque-bedaine/src/pages/admin/Roles.tsx` - Role management
+- `croque-bedaine/src/hooks/useAuth.tsx` - Auth context (roles, signOut)
 - `croque-bedaine/src/hooks/useOrderAlarm.ts` - Order alarm logic
 
 ### Integration with Merchant Hub
@@ -947,13 +1002,11 @@ d:1,q:2;b:3; TABLE 5 kcs-inno-xxxx-yyyy
 ### Security Considerations
 
 **Access Control**:
-- Admin pages should be behind authentication (not currently enforced)
-- Fulfillment API should validate restaurant ownership
+- **Indiesmenu**: Password-based cookie session (`admin_session`, 24h). `middleware.ts` protects all `/admin/*` and `/api/admin/*` routes.
+- **Croque-Bedaine**: Supabase Auth with RLS. `useAuth()` hook provides role checks. `Admin.tsx` redirects unauthenticated users.
 - Redis Stream consumer groups prevent message duplication
 
 **Future Enhancements**:
-- [ ] Admin authentication/authorization
-- [ ] Role-based access control (cook vs. manager)
 - [ ] Fulfillment confirmation (prevent accidental dismissal)
 - [ ] Print integration for kitchen printers
 - [ ] WebSocket streaming (replace polling)
@@ -1025,12 +1078,16 @@ const response = await fetch(`${hubUrl}/api/account/credentials`, {
 - **MiniWallet**: Display EURO balance, account name, quick topup
 - **51 `useState` hooks**: All payment, UI, and flow state managed via individual hooks in `page.tsx`
 
-#### 4. Admin Panel
-- **Menu Management**: CRUD operations for dishes
-- **Daily Specials**: Manage rotating daily menu
-- **Image Management**: Upload, match, and optimize images
-- **Order Fulfillment**: Mark orders as prepared/delivered
+#### 4. Admin Panel (`/admin` — password-protected)
+- **Dashboard**: 6 admin cards with quick navigation + cache-clear button
+- **Menu Management (Carte)**: CRUD for dishes/drinks with fuzzy image matching from git
+- **Daily Specials**: Manage rotating daily dishes, mark sold out, reorder
+- **Image Management**: Auto-detect new images, fuzzy match to menu items
+- **Order Fulfillment**: Kitchen transmission workflow + fulfillment marking
+- **Allergen Management**: Ingredient-allergen association matrix
+- **Accounting (Comptabilité)**: Date-range reports with CSV/PDF export, EUR/USD conversion
 - **Cache Control**: Manual menu cache invalidation
+- **Display Pages**: TV-optimized daily specials (`/display/plat-du-jour`) + A3 printout
 
 ### API Routes
 
@@ -1140,15 +1197,35 @@ croque-bedaine/
 │   │   ├── Header.tsx
 │   │   ├── MenuSection.tsx
 │   │   └── ...
-│   ├── hooks/innopay/
-│   │   ├── usePaymentFlow.ts   # Payment orchestration (uses state machine)
-│   │   ├── useInnopayCart.ts   # Cart extensions (table, memo)
-│   │   └── useBalance.ts      # Balance fetching + caching
+│   ├── pages/
+│   │   ├── Index.tsx        # Customer-facing menu
+│   │   ├── Auth.tsx         # Login (Supabase Auth)
+│   │   ├── Admin.tsx        # Admin layout + navigation
+│   │   └── admin/
+│   │       ├── Dashboard.tsx      # Stat cards dashboard
+│   │       ├── CurrentOrders.tsx  # Kitchen order queue
+│   │       ├── OrderHistory.tsx   # Fulfilled orders
+│   │       ├── Reporting.tsx      # Accounting (CSV/PDF)
+│   │       ├── Categories.tsx     # Category CRUD
+│   │       ├── Dishes.tsx         # Dish CRUD
+│   │       ├── Drinks.tsx         # Drink CRUD
+│   │       ├── Ingredients.tsx    # Ingredient management
+│   │       ├── Alergenes.tsx      # Allergen management
+│   │       └── Roles.tsx          # Role management
+│   ├── hooks/
+│   │   ├── useAuth.tsx          # Auth context (roles, signOut)
+│   │   ├── useCart.tsx          # Shopping cart
+│   │   ├── useMenuData.ts      # Menu data for hydration
+│   │   ├── useOrderAlarm.ts    # Order alarm logic
+│   │   └── innopay/
+│   │       ├── usePaymentFlow.ts   # Payment orchestration (state machine)
+│   │       ├── useInnopayCart.ts   # Cart extensions (table, memo)
+│   │       └── useBalance.ts      # Balance fetching + caching
 │   ├── lib/innopay/
 │   │   ├── paymentStateMachine.ts  # Reducer, states, events, helpers
 │   │   ├── utils.ts               # distriate(), createEuroTransferOperation()
 │   │   └── environment.ts         # Hub URL + restaurant config
-│   ├── App.tsx              # Main app component
+│   ├── App.tsx              # Main app + routes
 │   └── main.tsx             # Entry point
 ├── public/                  # Static assets
 ├── supabase/               # Supabase config
@@ -1593,7 +1670,7 @@ npm run migrate:deploy
 4. **React Query**: Smart caching, automatic refetching, optimistic updates
 5. **Tailwind CSS**: Utility-first styling, consistent across projects
 
-### Current Status (2026-01-24)
+### Current Status (2026-02-18)
 
 **Hub (innopay)**:
 - ✅ Production ready
@@ -1638,6 +1715,14 @@ npm run migrate:deploy
   - Redis stream consumption with auto-ACK
   - Environment filtering (prod: `indies.cafe`, dev: `indies-test`)
   - Order hydration with menu data
+- ✅ **Full admin backend** (Feb 2026):
+  - Dashboard with 6 admin cards
+  - Daily specials management (create, reorder, mark sold out)
+  - Carte & image management (fuzzy matching from git)
+  - Allergen management (ingredient-allergen matrix)
+  - Accounting/Comptabilité page (CSV/PDF export, EUR/USD via ECB)
+  - Password-based auth with cookie session
+- ✅ Credential delivery via email (Feb 2026)
 - 🔧 Optional optimizations remaining (Phases 4-5)
 
 **Spoke 2 (croque-bedaine)**:
@@ -1661,6 +1746,12 @@ npm run migrate:deploy
   1. Customer → innopay (EURO collateral, signed via hub's `/api/sign-and-broadcast`)
   2. innopay → restaurant (HBD preferred, EURO fallback, via `/api/wallet-payment`)
   Hub handles customer HBD sweep, `outstanding_debt` recording, and EUR/USD rate resolution.
+- ✅ **Full admin backend** (Feb 2026):
+  - Dashboard with stat cards and live entity counts
+  - Menu management: Categories, Dishes, Drinks, Ingredients, Allergens (full CRUD)
+  - Accounting/Comptabilité page (CSV/PDF export, EUR/USD via open.er-api.com)
+  - Role-based auth (admin/staff) via Supabase Auth + RLS
+  - Full dark mode support (class-based, CSS variables + `dark:` variants)
 
 ---
 
@@ -1690,7 +1781,7 @@ npm run migrate:deploy
 
 ---
 
-**Last Updated**: 2026-02-14
+**Last Updated**: 2026-02-18
 **Maintainer**: Development Team
 **Questions**: Refer to individual project documentation or code comments
 

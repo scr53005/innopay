@@ -38,13 +38,13 @@ export default function ExpiredOrUsedMessage({ reason }: { reason: 'already_used
           {/* French */}
           <h2 style={{ color: '#dc2626', fontSize: '20px', marginBottom: '8px' }}>
             {reason === 'already_used'
-              ? 'Ce lien a d\u00E9j\u00E0 \u00E9t\u00E9 utilis\u00E9'
-              : 'Ce lien a expir\u00E9'}
+              ? 'Ce lien a déjà été utilisé'
+              : 'Ce lien a expiré'}
           </h2>
           <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: '24px' }}>
             {reason === 'already_used'
-              ? 'Les identifiants ne peuvent \u00EAtre affich\u00E9s qu\u0027une seule fois.'
-              : 'Ce lien n\u0027est plus valide.'}
+              ? 'Les identifiants ne peuvent être affichés qu\'une seule fois.'
+              : 'Ce lien n\'est plus valide.'}
           </p>
 
           {/* English */}
@@ -68,17 +68,17 @@ export default function ExpiredOrUsedMessage({ reason }: { reason: 'already_used
             marginBottom: '24px',
           }}>
             <p style={{ color: '#1e40af', fontSize: '13px', margin: '0 0 6px', fontWeight: 600 }}>
-              Besoin d&apos;acc\u00E9der \u00E0 vos identifiants ?
+              Besoin d'accéder à vos identifiants ?
             </p>
             <p style={{ color: '#1e40af', fontSize: '13px', margin: 0 }}>
-              Utilisez la fonction &laquo;&nbsp;Importer un compte&nbsp;&raquo; sur wallet.innopay.lu pour r\u00E9cup\u00E9rer vos identifiants par e-mail (Flow 8).
+              Utilisez la fonction «&nbsp;<a href="https://wallet.innopay.lu/user" style={{ color: '#1e40af', fontWeight: 600 }}>Importer un compte</a>&nbsp;» pour récupérer vos identifiants par e-mail.
             </p>
             <hr style={{ border: 'none', borderTop: '1px solid #bfdbfe', margin: '12px 0' }} />
             <p style={{ color: '#1e40af', fontSize: '13px', margin: '0 0 6px', fontWeight: 600 }}>
               Need to access your credentials?
             </p>
             <p style={{ color: '#1e40af', fontSize: '13px', margin: 0 }}>
-              Use the &ldquo;Import Account&rdquo; feature on wallet.innopay.lu to recover your credentials by email (Flow 8).
+              Use the «&nbsp;<a href="https://wallet.innopay.lu/user" style={{ color: '#1e40af', fontWeight: 600 }}>Import Account</a>&nbsp;» feature to recover your credentials by email.
             </p>
           </div>
 
