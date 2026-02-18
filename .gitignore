@@ -43,3 +43,6 @@ next-env.d.ts
 
 .vercel
 .pdf
+
+# claude code plans
+/plans
