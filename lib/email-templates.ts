@@ -142,6 +142,122 @@ ${t.footer}
 }
 
 /**
+ * Build complete bilingual email (FR + EN) for one-time credential delivery.
+ * Contains a warning that the link can only be used once and credentials
+ * will display for 15 minutes.
+ *
+ * @param accountName - The Innopay/Hive account name
+ * @param credentialUrl - The one-time URL to view credentials
+ * @returns Object with subject, html, and text versions
+ */
+export function buildCredentialDeliveryEmail(
+  accountName: string,
+  credentialUrl: string,
+): { subject: string; html: string; text: string } {
+  const subject = 'Vos identifiants Innopay / Your Innopay credentials';
+
+  const text = `
+Bonjour,
+
+Votre compte Innopay "${accountName}" a ete cree avec succes.
+
+IMPORTANT : Une fois que vous cliquez sur le lien ci-dessous, vos informations d'identification pour le compte Innopay ${accountName} vont s'afficher dans le navigateur pour 15 minutes. Copiez-les et sauvegardez-les dans un endroit sur, car vous ne pourrez plus les revoir.
+
+Voir mes identifiants : ${credentialUrl}
+
+---
+
+Hello,
+
+Your Innopay account "${accountName}" has been successfully created.
+
+IMPORTANT: Once you click the link below, your credentials for Innopay account ${accountName} will be displayed in the browser for 15 minutes. Copy and save them in a safe place — you will not be able to view them again.
+
+View my credentials: ${credentialUrl}
+
+---
+Innopay | Digital Wallet
+wallet.innopay.lu
+  `.trim();
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${subject}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+
+  <!-- Header with Innopay branding -->
+  <div style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+    <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 600;">Innopay</h1>
+    <p style="color: rgba(255, 255, 255, 0.9); margin: 8px 0 0 0; font-size: 14px;">Digital Wallet</p>
+  </div>
+
+  <!-- Main content -->
+  <div style="background: #ffffff; padding: 40px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);">
+
+    <!-- French section -->
+    <p style="font-size: 16px; margin-bottom: 10px; color: #374151;">Bonjour,</p>
+    <p style="font-size: 16px; margin-bottom: 20px; color: #374151;">
+      Votre compte Innopay <strong>${accountName}</strong> a &eacute;t&eacute; cr&eacute;&eacute; avec succ&egrave;s.
+    </p>
+
+    <!-- Warning box FR -->
+    <div style="background: #fffbeb; border: 2px solid #f59e0b; border-radius: 12px; padding: 20px; margin: 20px 0;">
+      <p style="font-size: 14px; color: #92400e; margin: 0; font-weight: 600;">
+        &#9888;&#65039; IMPORTANT : Une fois que vous cliquez sur le lien ci-dessous, vos informations d'identification pour le compte Innopay <strong>${accountName}</strong> vont s'afficher dans le navigateur pour 15 minutes. Copiez-les et sauvegardez-les dans un endroit s&ucirc;r, car vous ne pourrez plus les revoir.
+      </p>
+    </div>
+
+    <!-- CTA Button FR -->
+    <div style="text-align: center; margin: 30px 0;">
+      <a href="${credentialUrl}" style="display: inline-block; background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-size: 16px; font-weight: 600;">
+        Voir mes identifiants
+      </a>
+    </div>
+
+    <!-- Divider -->
+    <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 30px 0;" />
+
+    <!-- English section -->
+    <p style="font-size: 16px; margin-bottom: 10px; color: #374151;">Hello,</p>
+    <p style="font-size: 16px; margin-bottom: 20px; color: #374151;">
+      Your Innopay account <strong>${accountName}</strong> has been successfully created.
+    </p>
+
+    <!-- Warning box EN -->
+    <div style="background: #fffbeb; border: 2px solid #f59e0b; border-radius: 12px; padding: 20px; margin: 20px 0;">
+      <p style="font-size: 14px; color: #92400e; margin: 0; font-weight: 600;">
+        &#9888;&#65039; IMPORTANT: Once you click the link below, your credentials for Innopay account <strong>${accountName}</strong> will be displayed in the browser for 15 minutes. Copy and save them in a safe place &mdash; you will not be able to view them again.
+      </p>
+    </div>
+
+    <!-- CTA Button EN -->
+    <div style="text-align: center; margin: 30px 0;">
+      <a href="${credentialUrl}" style="display: inline-block; background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-size: 16px; font-weight: 600;">
+        View my credentials
+      </a>
+    </div>
+
+  </div>
+
+  <!-- Footer -->
+  <div style="text-align: center; padding: 20px; color: #9ca3af; font-size: 12px;">
+    <p style="margin: 5px 0;">Innopay | Digital Wallet</p>
+    <p style="margin: 5px 0;"><a href="https://wallet.innopay.lu" style="color: #3b82f6; text-decoration: none;">wallet.innopay.lu</a></p>
+  </div>
+
+</body>
+</html>
+  `.trim();
+
+  return { subject, html, text };
+}
+
+/**
  * Detect language from request headers (future use)
  * @param acceptLanguage - Accept-Language header value
  * @returns Detected language code

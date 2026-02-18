@@ -5,6 +5,9 @@ import Stripe from 'stripe';
 // Import flow management system
 import { FLOW_METADATA, type Flow } from '@/lib/flows';
 
+// Import credential email service
+import { sendCredentialEmail } from '@/services/credential-email';
+
 // Import database functions
 import {
   findLastHiveAccount,
@@ -1030,6 +1033,12 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
   const walletUserId = walletUser?.id || null;
   console.log(`[ACCOUNT] Walletuser record created with ID: ${walletUserId}, linked to user ID: ${userId || 'none'}`);
 
+  // Send one-time credential delivery email (non-blocking)
+  if (customerEmail && walletUserId) {
+    sendCredentialEmail(walletUserId)
+      .then(id => id && console.log(`[ACCOUNT] Credential email sent, session: ${id}`))
+      .catch(err => console.error(`[ACCOUNT] Credential email error:`, err));
+  }
 
   // Check for campaign eligibility and calculate bonus
   let bonusAmount = 0;
