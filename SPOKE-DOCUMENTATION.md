@@ -2490,13 +2490,65 @@ Both spokes provide accounting reports for the restaurant. The approaches differ
 | Aspect | Indiesmenu | Croque-Bedaine |
 |--------|-----------|----------------|
 | **Data Source** | Merchant-hub `/api/reporting` | Merchant-hub `/api/reporting` |
-| **EUR/USD Rates** | Server-side: Prisma `currency_conversion` table + ECB XML fallback | Client-side: `open.er-api.com` free API |
-| **Rate Caching** | Database-cached, fetched once per day | Fetched once per report load |
+| **EUR/USD Rates** | Server-side: Prisma `currency_conversion` table + ECB XML fallback | Hub API: `POST /api/currency/batch` (per-transaction-date rates) |
+| **Rate Granularity** | Per-date historical rates via local DB | Per-date historical rates via hub batch endpoint |
 | **Currency Display** | HBD → EUR conversion | EURO (1:1) + HBD → EUR conversion |
 | **CSV Export** | UTF-8 BOM, semicolon separator, French headers | UTF-8 BOM, semicolon separator, French headers |
 | **PDF Export** | jsPDF + autoTable, landscape | jsPDF + autoTable, landscape |
 | **Dependencies** | `jspdf`, `jspdf-autotable` | `jspdf`, `jspdf-autotable` |
 | **Styling** | Hardcoded light theme | CSS variables + dark mode |
+
+### EUR/USD Rate Batch API (Hub)
+
+The innopay hub exposes `POST /api/currency/batch` to allow spokes without direct database access (e.g., Vite SPAs) to retrieve historical EUR/USD conversion rates for their accounting reports. This is the canonical source of truth for conversion rates across the ecosystem.
+
+**Endpoint**: `POST {innopayUrl}/api/currency/batch`
+
+**Request**:
+```json
+{ "dates": ["2026-01-15", "2026-01-22", "2026-02-01"] }
+```
+
+**Response**:
+```json
+{ "rates": { "2026-01-15": 1.0834, "2026-01-22": 1.0821, "2026-02-01": 1.0456 } }
+```
+
+**Behaviour**:
+- Batch-queries the `currencyConversion` Prisma model (populated from ECB daily XML feed)
+- For dates without a stored rate (weekends, holidays), returns the nearest preceding rate
+- Falls back to `1.0` if no rates exist in the database at all
+- Caps at 366 unique dates per request
+- Validates YYYY-MM-DD format
+- CORS-enabled (`Access-Control-Allow-Origin: *`) for cross-origin spoke requests
+
+**Usage pattern** (Vite SPA spokes):
+```typescript
+// 1. Fetch transactions from merchant-hub
+const transactions = await fetchTransactions(from, to);
+
+// 2. Extract unique dates for HBD transactions
+const hbdDates = [...new Set(
+  transactions
+    .filter(tx => tx.symbol !== 'EURO')
+    .map(tx => tx.timestamp.split('T')[0])
+)];
+
+// 3. Batch-fetch historical rates from innopay hub
+const { rates } = await fetch(`${innopayUrl}/api/currency/batch`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ dates: hbdDates }),
+}).then(r => r.json());
+
+// 4. Apply per-date rate to each transaction
+const rate = rates[txDate] || 1.0;
+const amountEur = hbdAmount / rate;
+```
+
+**Implementation**: `innopay/app/api/currency/batch/route.ts`
+
+Next.js spokes (indiesmenu) can query the `currencyConversion` table directly via their own Prisma client and don't need this endpoint, but they could use it as an alternative.
 
 ---
 
@@ -2698,7 +2750,7 @@ DELETE FROM transfers WHERE to_account = '{restaurant}.{tld}';
 | 2.1 | 2026-01-24 | **Added detailed flow information from SPOKE-FLOWS.md**: Flow 8, Flow 4 Variant B, detection criteria, user journeys, technical implementation (detectFlow), flow testing procedures with expected logs |
 | 2.2 | 2026-01-25 | **State Machine Implementation Guide**: Added comprehensive state machine documentation with state definitions, 'redirecting' state details, common pitfalls, proper event dispatching, flow-specific state paths, return URL parameter handling, credential fetching logic, and testing guidelines. Lessons learned from Flow 3 bug fixes. |
 | 2.3 | 2026-02-13 | **Flow 6 & Flow 8 updates**: Flow 6 croque-bedaine upgraded from single-leg direct transfer to two-leg dual-currency (Customer → innopay → Restaurant) via hub APIs. Flow 8 updated from "naive security" to full 3-step email verification (both spokes). EUR/USD rate now resolved server-side by hub when not provided by client. |
-| 2.4 | 2026-02-18 | **Admin Backend documentation**: Added comprehensive Section 9 covering kitchen & menu management for both spokes — authentication, admin page inventories, menu CRUD, reporting/comptabilité, roles, dark mode support, Supabase schema, and implementation comparison. |
+| 2.4 | 2026-02-19 | **Admin Backend documentation**: Added comprehensive Section 9 covering kitchen & menu management for both spokes — authentication, admin page inventories, menu CRUD, reporting/comptabilité, roles, dark mode support, Supabase schema, and implementation comparison. Added EUR/USD Rate Batch API documentation (`POST /api/currency/batch`) for historical per-transaction-date conversion rates. |
 
 ### Appendix G: Reference Links
 

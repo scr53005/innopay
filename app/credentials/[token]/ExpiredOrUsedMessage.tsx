@@ -71,14 +71,14 @@ export default function ExpiredOrUsedMessage({ reason }: { reason: 'already_used
               Besoin d'accéder à vos identifiants ?
             </p>
             <p style={{ color: '#1e40af', fontSize: '13px', margin: 0 }}>
-              Utilisez la fonction «&nbsp;<a href="https://wallet.innopay.lu/user" style={{ color: '#1e40af', fontWeight: 600 }}>Importer un compte</a>&nbsp;» pour récupérer vos identifiants par e-mail.
+              Utilisez la fonction «&nbsp;<a href="https://wallet.innopay.lu/user" style={{ color: '#2563eb', fontWeight: 600, textDecoration: 'underline' }}>Importer un compte</a>&nbsp;» pour récupérer vos identifiants par e-mail.
             </p>
             <hr style={{ border: 'none', borderTop: '1px solid #bfdbfe', margin: '12px 0' }} />
             <p style={{ color: '#1e40af', fontSize: '13px', margin: '0 0 6px', fontWeight: 600 }}>
               Need to access your credentials?
             </p>
             <p style={{ color: '#1e40af', fontSize: '13px', margin: 0 }}>
-              Use the «&nbsp;<a href="https://wallet.innopay.lu/user" style={{ color: '#1e40af', fontWeight: 600 }}>Import Account</a>&nbsp;» feature to recover your credentials by email.
+              Use the «&nbsp;<a href="https://wallet.innopay.lu/user" style={{ color: '#2563eb', fontWeight: 600, textDecoration: 'underline' }}>Import Account</a>&nbsp;» feature to recover your credentials by email.
             </p>
           </div>
 
