@@ -8,6 +8,12 @@ import { FLOW_METADATA, type Flow } from '@/lib/flows';
 // Import credential email service
 import { sendCredentialEmail } from '@/services/credential-email';
 
+// Import email templates and Resend for refund notifications
+import { Resend } from 'resend';
+import { buildRefundEmail } from '@/lib/email-templates';
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+
 // Import database functions
 import {
   findLastHiveAccount,
@@ -156,6 +162,97 @@ export async function POST(req: NextRequest) {
     case 'payment_method.attached':
       console.log('Payment Method Attached:', event.data.object.id);
       break;
+    case 'charge.refunded':
+    case 'charge.refund.updated': {
+      const charge = event.data.object as Stripe.Charge;
+      const refundAmountEuro = (charge.amount_refunded || 0) / 100;
+      const customerEmail = charge.billing_details?.email || charge.receipt_email;
+      const accountName = charge.metadata?.accountName;
+
+      console.warn(`[REFUND] ${event.type}: ${refundAmountEuro} EUR for ${customerEmail || 'unknown'} (account: ${accountName || 'unknown'})`);
+
+      if (customerEmail && refundAmountEuro > 0) {
+        try {
+          const { subject, html, text } = buildRefundEmail(refundAmountEuro, accountName);
+          await resend.emails.send({
+            from: process.env.RESEND_FROM_EMAIL || 'noreply@verify.innopay.lu',
+            to: customerEmail,
+            subject,
+            html,
+            text,
+          });
+          console.warn(`[REFUND] Refund notification sent to ${customerEmail}`);
+        } catch (emailError) {
+          console.error(`[REFUND] Failed to send refund email to ${customerEmail}:`, emailError);
+        }
+      } else {
+        console.warn(`[REFUND] No customer email found, skipping notification`);
+      }
+      break;
+    }
+    case 'charge.dispute.created': {
+      const dispute = event.data.object as Stripe.Dispute;
+      const disputeCharge = typeof dispute.charge === 'string' ? dispute.charge : dispute.charge?.id;
+      const disputeAmount = (dispute.amount || 0) / 100;
+      const disputeReason = dispute.reason || 'unknown';
+      const disputeStatus = dispute.status || 'unknown';
+
+      console.error(`[DISPUTE] ⚠️ CHARGEBACK: ${disputeAmount} EUR, reason: ${disputeReason}, charge: ${disputeCharge}`);
+
+      // Fetch the full charge to get metadata (checkout session metadata is copied to payment_intent)
+      let chargeDetails: Stripe.Charge | null = null;
+      try {
+        if (disputeCharge) {
+          chargeDetails = await stripe.charges.retrieve(disputeCharge);
+        }
+      } catch (fetchError) {
+        console.error('[DISPUTE] Failed to fetch charge details:', fetchError);
+      }
+
+      const meta = chargeDetails?.metadata || {};
+      const customerEmail = chargeDetails?.billing_details?.email || chargeDetails?.receipt_email || 'unknown';
+
+      const disputeDetails = [
+        `Amount: ${disputeAmount} EUR`,
+        `Reason: ${disputeReason}`,
+        `Status: ${disputeStatus}`,
+        `Customer email: ${customerEmail}`,
+        `Account: ${meta.accountName || 'unknown'}`,
+        `Flow: ${meta.flow || 'unknown'} (${meta.flowCategory || 'unknown'})`,
+        `Spoke: ${meta.restaurantId || 'unknown'}`,
+        `Restaurant account: ${meta.restaurantAccount || 'unknown'}`,
+        `Order amount: ${meta.orderAmountEuro ? meta.orderAmountEuro + ' EUR' : 'N/A'}`,
+        `Order memo: ${meta.orderMemo || 'N/A'}`,
+        `Table: ${meta.table || 'N/A'}`,
+        `Charge ID: ${disputeCharge || 'unknown'}`,
+        `Dispute ID: ${dispute.id}`,
+        `Created: ${new Date(dispute.created * 1000).toISOString()}`,
+      ].join('\n');
+
+      try {
+        await resend.emails.send({
+          from: process.env.RESEND_FROM_EMAIL || 'noreply@verify.innopay.lu',
+          to: 'contact@innopay.lu',
+          subject: `⚠️ CHARGEBACK: ${disputeAmount} EUR - ${meta.accountName || 'unknown'} (${meta.restaurantId || 'unknown'})`,
+          text: `A chargeback/dispute has been filed.\n\n${disputeDetails}\n\nPlease review in the Stripe dashboard immediately:\nhttps://dashboard.stripe.com/disputes/${dispute.id}`,
+          html: `
+<h2 style="color: #dc2626;">Chargeback / Dispute Filed</h2>
+<pre style="background: #f3f4f6; padding: 16px; border-radius: 8px; font-size: 14px; line-height: 1.8;">${disputeDetails}</pre>
+<p><a href="https://dashboard.stripe.com/disputes/${dispute.id}" style="color: #2563eb; font-weight: bold;">View in Stripe Dashboard</a></p>
+          `.trim(),
+        });
+        console.warn(`[DISPUTE] Alert email sent to contact@innopay.lu`);
+      } catch (emailError) {
+        console.error(`[DISPUTE] Failed to send alert email:`, emailError);
+      }
+      break;
+    }
+    case 'checkout.session.expired': {
+      const expiredSession = event.data.object as Stripe.Checkout.Session;
+      const expiredMeta = expiredSession.metadata || {};
+      console.warn(`[EXPIRED] Checkout session expired: ${expiredSession.id}, flow: ${expiredMeta.flow || 'unknown'}, account: ${expiredMeta.accountName || 'unknown'}`);
+      break;
+    }
     case 'charge.updated':
     case 'charge.succeeded':
     case 'payment_intent.created':

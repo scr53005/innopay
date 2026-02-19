@@ -193,10 +193,14 @@ export async function POST(req: NextRequest) {
           })
         });
 
-        const data = await response.json();
+        if (!response.ok) {
+          console.warn(`[VERIFY CHECK] Hive-Engine API returned ${response.status} for ${walletuser.accountName}`);
+        } else {
+          const data = await response.json();
 
-        if (data.result && data.result.length > 0) {
-          euroBalance = parseFloat(data.result[0].balance);
+          if (data.result && data.result.length > 0) {
+            euroBalance = parseFloat(data.result[0].balance);
+          }
         }
 
         console.log(`[VERIFY CHECK] Account ${walletuser.accountName}: ${euroBalance} EURO`);

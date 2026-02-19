@@ -135,13 +135,14 @@ export async function POST(req: NextRequest) {
 
     const amountCents = Math.round(amount * 100); // Convert to cents for Stripe
 
-    console.log(`Account creation checkout: ${accountName}, amount: ${amount} EUR`);
+    console.log(`[${new Date().toISOString()}] [CHECKOUT API] ${flowMetadata.description}: ${accountName}, amount: ${amount} EUR`);
 
     // Prepare metadata with detected flow
     const metadata: any = {
       flow: detectedFlow,  // Use detected flow instead of passed parameter
       flowCategory: flowMetadata.category,
       accountName,
+      ...(redirectParams?.table && { table: redirectParams.table }),
     };
 
     // Add mock flag if enabled (for dev/test environments)
@@ -350,7 +351,7 @@ export async function POST(req: NextRequest) {
 
     const session = await stripe.checkout.sessions.create(sessionConfig);
 
-    console.log(`Created account creation session: ${session.id} for ${accountName}`);
+    console.log(`[${new Date().toISOString()}] [CHECKOUT API] Created ${detectedFlow} session: ${session.id} for ${accountName}`);
 
     return NextResponse.json({
       sessionId: session.id,

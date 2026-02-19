@@ -24,7 +24,17 @@ export async function OPTIONS() {
  */
 export async function POST(req: NextRequest) {
   try {
-    const { accountName, email } = await req.json();
+    let body;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(
+        { error: 'Invalid or empty request body' },
+        { status: 400, headers: corsHeaders }
+      );
+    }
+
+    const { accountName, email } = body;
 
     // Validate inputs
     if (!accountName || !email) {

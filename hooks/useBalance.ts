@@ -68,6 +68,12 @@ async function fetchEuroBalance(accountName: string): Promise<BalanceResponse> {
       })
     });
 
+    if (!response.ok) {
+      console.warn('[useBalance] Hive-Engine API returned', response.status);
+      const lastBalance = parseFloat(localStorage.getItem('innopay_lastBalance') || '0');
+      return { balance: lastBalance, source: 'cache', timestamp: Date.now() };
+    }
+
     const data = await response.json();
 
     if (data.result && data.result.length > 0) {
@@ -97,8 +103,10 @@ async function fetchEuroBalance(accountName: string): Promise<BalanceResponse> {
       };
     }
   } catch (error) {
-    console.error('[useBalance] Error fetching balance:', error);
-    throw error;
+    console.warn('[useBalance] Error fetching balance:', error);
+    // Fall back to last known balance so the UI doesn't break
+    const lastBalance = parseFloat(localStorage.getItem('innopay_lastBalance') || '0');
+    return { balance: lastBalance, source: 'cache', timestamp: Date.now() };
   }
 }
 

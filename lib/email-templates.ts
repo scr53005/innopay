@@ -258,6 +258,107 @@ wallet.innopay.lu
 }
 
 /**
+ * Build bilingual refund notification email (FR + EN).
+ *
+ * @param amountEuro - Refunded amount in EUR
+ * @param accountName - Optional Innopay account name
+ * @returns Object with subject, html, and text versions
+ */
+export function buildRefundEmail(
+  amountEuro: number,
+  accountName?: string,
+): { subject: string; html: string; text: string } {
+  const subject = 'Remboursement Innopay / Innopay Refund';
+  const formattedAmount = amountEuro.toFixed(2);
+  const accountLine = accountName ? ` (compte ${accountName})` : '';
+  const accountLineEn = accountName ? ` (account ${accountName})` : '';
+
+  const text = `
+Bonjour,
+
+Votre paiement de ${formattedAmount} EUR${accountLine} a ete rembourse.
+
+Le montant sera credite sur votre moyen de paiement d'origine sous quelques jours ouvrables.
+
+Nous nous excusons pour tout desagrement.
+
+---
+
+Hello,
+
+Your payment of ${formattedAmount} EUR${accountLineEn} has been refunded.
+
+The amount will be credited to your original payment method within a few business days.
+
+We apologise for any inconvenience.
+
+---
+Innopay | Digital Wallet
+wallet.innopay.lu
+  `.trim();
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${subject}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9fafb;">
+
+  <!-- Header with Innopay branding -->
+  <div style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+    <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 600;">Innopay</h1>
+    <p style="color: rgba(255, 255, 255, 0.9); margin: 8px 0 0 0; font-size: 14px;">Digital Wallet</p>
+  </div>
+
+  <!-- Main content -->
+  <div style="background: #ffffff; padding: 40px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);">
+
+    <!-- French section -->
+    <p style="font-size: 16px; margin-bottom: 10px; color: #374151;">Bonjour,</p>
+    <p style="font-size: 16px; margin-bottom: 20px; color: #374151;">
+      Votre paiement de <strong>${formattedAmount}&nbsp;EUR</strong>${accountLine} a &eacute;t&eacute; rembours&eacute;.
+    </p>
+    <p style="font-size: 14px; color: #6b7280; margin-bottom: 10px;">
+      Le montant sera cr&eacute;dit&eacute; sur votre moyen de paiement d'origine sous quelques jours ouvrables.
+    </p>
+    <p style="font-size: 14px; color: #6b7280; margin-bottom: 20px;">
+      Nous nous excusons pour tout d&eacute;sagr&eacute;ment.
+    </p>
+
+    <!-- Divider -->
+    <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 30px 0;" />
+
+    <!-- English section -->
+    <p style="font-size: 16px; margin-bottom: 10px; color: #374151;">Hello,</p>
+    <p style="font-size: 16px; margin-bottom: 20px; color: #374151;">
+      Your payment of <strong>${formattedAmount}&nbsp;EUR</strong>${accountLineEn} has been refunded.
+    </p>
+    <p style="font-size: 14px; color: #6b7280; margin-bottom: 10px;">
+      The amount will be credited to your original payment method within a few business days.
+    </p>
+    <p style="font-size: 14px; color: #6b7280;">
+      We apologise for any inconvenience.
+    </p>
+
+  </div>
+
+  <!-- Footer -->
+  <div style="text-align: center; padding: 20px; color: #9ca3af; font-size: 12px;">
+    <p style="margin: 5px 0;">Innopay | Digital Wallet</p>
+    <p style="margin: 5px 0;"><a href="https://wallet.innopay.lu" style="color: #3b82f6; text-decoration: none;">wallet.innopay.lu</a></p>
+  </div>
+
+</body>
+</html>
+  `.trim();
+
+  return { subject, html, text };
+}
+
+/**
  * Detect language from request headers (future use)
  * @param acceptLanguage - Accept-Language header value
  * @returns Detected language code
