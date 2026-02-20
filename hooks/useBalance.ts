@@ -71,7 +71,7 @@ async function fetchEuroBalance(accountName: string): Promise<BalanceResponse> {
     if (!response.ok) {
       console.warn('[useBalance] Hive-Engine API returned', response.status);
       const lastBalance = parseFloat(localStorage.getItem('innopay_lastBalance') || '0');
-      return { balance: lastBalance, source: 'cache', timestamp: Date.now() };
+      return { balance: lastBalance, source: 'localStorage-cache', timestamp: Date.now() };
     }
 
     const data = await response.json();
