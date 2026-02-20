@@ -106,7 +106,7 @@ async function fetchEuroBalance(accountName: string): Promise<BalanceResponse> {
     console.warn('[useBalance] Error fetching balance:', error);
     // Fall back to last known balance so the UI doesn't break
     const lastBalance = parseFloat(localStorage.getItem('innopay_lastBalance') || '0');
-    return { balance: lastBalance, source: 'cache', timestamp: Date.now() };
+    return { balance: lastBalance, source: 'localStorage-cache', timestamp: Date.now() };
   }
 }
 
