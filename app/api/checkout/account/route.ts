@@ -295,6 +295,8 @@ export async function POST(req: NextRequest) {
       successQueryParts.push('topup_success=true');
       successQueryParts.push('session_id={CHECKOUT_SESSION_ID}'); // Must NOT be encoded!
       successQueryParts.push(`amount=${optimisticAmount}`);
+      // Include detected flow so the spoke can reliably distinguish Flow 4 from Flow 5
+      successQueryParts.push(`flow=${detectedFlow}`);
 
       const cancelQueryParts: string[] = [];
       if (table) cancelQueryParts.push(`table=${encodeURIComponent(table)}`);
