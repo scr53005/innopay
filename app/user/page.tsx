@@ -84,9 +84,29 @@ const isFormFilled = (metadata: Metadata) => {
 // Language type
 type Language = 'fr' | 'en' | 'de' | 'lb';
 
-// Translations for success messages
+// Translations
 const translations = {
   fr: {
+    // Account creation form
+    createTitle: "Créez votre compte Innopay",
+    createSubtitle: "C'est gratuit\u00a0! L'argent chargé sera intégralement disponible pour vos achats\u00a0!",
+    preparingAccount: "Préparation de votre compte...",
+    enterUsername: "Entrez le nom d'utilisateur souhaité pour créer votre compte Innopay.",
+    chooseUsername: "Choisissez un nom d'utilisateur",
+    createWithSuggested: "Créer un compte Innopay avec le nom suggéré",
+    createAccount: "Créer un compte Innopay",
+    youSave: "Vous économisez",
+    discountMessage: "En créant un compte Innopay, vous bénéficiez déjà d'une réduction sur votre commande",
+    topupLabel: "Montant de rechargement (EUR)",
+    orderInfo: "Commande",
+    minimumInfo: "Minimum",
+    amountHint: (min: number) => `Vous pouvez entrer n'importe quel montant ≥ ${min}€. Choisissez un palier de campagne ci-dessus pour une sélection rapide.`,
+    invalidAmount: "Veuillez entrer un montant valide.",
+    minimumAmountError: (min: number) => `Le montant minimum est de ${min}€.`,
+    redirecting: "Redirection vers le paiement...",
+    chargeWallet: "Chargez votre portefeuille",
+    backButton: "Retour / Back",
+    // Success / post-creation
     accountIs: "Votre compte Innopay est:",
     registeredWith: "et vous vous êtes enregistré avec l'email:",
     callToAction: "Améliorez votre profil pour gagner des réductions ou explorez les boutiques et restaurants Innopay à proximité.",
@@ -104,6 +124,26 @@ const translations = {
     continueButton: "Continuer"
   },
   en: {
+    // Account creation form
+    createTitle: "Create your Innopay account",
+    createSubtitle: "It's free! The money you load will be fully available for your purchases!",
+    preparingAccount: "Preparing your account...",
+    enterUsername: "Enter your desired username to create your Innopay account.",
+    chooseUsername: "Choose a username",
+    createWithSuggested: "Create an Innopay account with the suggested name",
+    createAccount: "Create an Innopay account",
+    youSave: "You save",
+    discountMessage: "By creating an Innopay account, you already get a discount on your order",
+    topupLabel: "Top-up amount (EUR)",
+    orderInfo: "Order",
+    minimumInfo: "Minimum",
+    amountHint: (min: number) => `You can enter any amount ≥ ${min}€. Choose a campaign tier above for quick selection.`,
+    invalidAmount: "Please enter a valid amount.",
+    minimumAmountError: (min: number) => `The minimum amount is ${min}€.`,
+    redirecting: "Redirecting to payment...",
+    chargeWallet: "Load your wallet",
+    backButton: "Back",
+    // Success / post-creation
     accountIs: "Your Innopay account is:",
     registeredWith: "and you registered with email:",
     callToAction: "Beautify your profile to earn discounts or explore the nearby Innopay shops and restaurants.",
@@ -121,6 +161,26 @@ const translations = {
     continueButton: "Continue"
   },
   de: {
+    // Account creation form
+    createTitle: "Erstellen Sie Ihr Innopay Konto",
+    createSubtitle: "Es ist kostenlos! Das geladene Geld steht Ihnen vollständig für Ihre Einkäufe zur Verfügung!",
+    preparingAccount: "Ihr Konto wird vorbereitet...",
+    enterUsername: "Geben Sie den gewünschten Benutzernamen ein, um Ihr Innopay-Konto zu erstellen.",
+    chooseUsername: "Benutzernamen wählen",
+    createWithSuggested: "Innopay-Konto mit dem vorgeschlagenen Namen erstellen",
+    createAccount: "Innopay-Konto erstellen",
+    youSave: "Sie sparen",
+    discountMessage: "Mit der Erstellung eines Innopay-Kontos erhalten Sie bereits einen Rabatt auf Ihre Bestellung",
+    topupLabel: "Aufladebetrag (EUR)",
+    orderInfo: "Bestellung",
+    minimumInfo: "Minimum",
+    amountHint: (min: number) => `Sie können jeden Betrag ≥ ${min}€ eingeben. Wählen Sie oben eine Kampagnenstufe für eine Schnellauswahl.`,
+    invalidAmount: "Bitte geben Sie einen gültigen Betrag ein.",
+    minimumAmountError: (min: number) => `Der Mindestbetrag beträgt ${min}€.`,
+    redirecting: "Weiterleitung zur Zahlung...",
+    chargeWallet: "Geldbörse aufladen",
+    backButton: "Zurück",
+    // Success / post-creation
     accountIs: "Ihr Innopay-Konto ist:",
     registeredWith: "und Sie haben sich mit der E-Mail registriert:",
     callToAction: "Verschönern Sie Ihr Profil, um Rabatte zu verdienen oder erkunden Sie die nahegelegenen Innopay-Geschäfte und Restaurants.",
@@ -138,6 +198,26 @@ const translations = {
     continueButton: "Fortsetzen"
   },
   lb: {
+    // Account creation form
+    createTitle: "Äre Innopay Kont erstellen",
+    createSubtitle: "Et ass gratis! D'Geld dat Dir luet steet Iech vollstänneg fir Är Akaf zur Verfügung!",
+    preparingAccount: "Äre Kont gëtt virbereet...",
+    enterUsername: "Gitt den gewënschtene Benotzernumm an, fir Äert Innopay Konto ze erstellen.",
+    chooseUsername: "Benotzernumm wielen",
+    createWithSuggested: "Innopay Konto mam proposéierten Numm erstellen",
+    createAccount: "Innopay Konto erstellen",
+    youSave: "Dir spaart",
+    discountMessage: "Mat der Erstellung vun engem Innopay Konto kritt Dir scho Rabatt op Är Bestellung",
+    topupLabel: "Opluedebetrag (EUR)",
+    orderInfo: "Bestellung",
+    minimumInfo: "Minimum",
+    amountHint: (min: number) => `Dir kënnt all Betrag ≥ ${min}€ aginn. Wielt uewen eng Kampagnestufe fir eng séier Auswiel.`,
+    invalidAmount: "Gitt w.e.g. e gëltege Betrag an.",
+    minimumAmountError: (min: number) => `De Mindestbetrag ass ${min}€.`,
+    redirecting: "Viruleedung op d'Bezuelung...",
+    chargeWallet: "Geldbäitel oplueden",
+    backButton: "Zréck",
+    // Success / post-creation
     accountIs: "Äert Innopay Konto ass:",
     registeredWith: "an Dir hutt Iech mat der E-Mail registréiert:",
     callToAction: "Verschéinert Äert Profil fir Rabatter ze verdéngen oder entdeckt déi no Innopay Geschäfter a Restauranten.",
@@ -167,8 +247,12 @@ export default function HiveAccountCreationPage() {
     masterPassword: '',
   });
 
-  // Language state
-  const [language, setLanguage] = useState<Language>('fr');
+  // Language state (persisted in localStorage)
+  const [language, setLanguageState] = useState<Language>('fr');
+  const setLanguage = (lang: Language) => {
+    setLanguageState(lang);
+    try { localStorage.setItem('innopay_language', lang); } catch {}
+  };
 
   // State for metadata form
   const [metadata, setMetadata] = useState({
@@ -249,7 +333,9 @@ export default function HiveAccountCreationPage() {
 
   // State for amount selection
   const [topupAmount, setTopupAmount] = useState(5); // Default 5€ (TEMP: reduced for testing)
+  const [topupInputValue, setTopupInputValue] = useState('5'); // String representation for free input
   const [minimumAmount, setMinimumAmount] = useState(3); // TEMP: reduced from 30€ to 3€ for testing
+  const isAmountValid = !isNaN(topupAmount) && topupAmount >= minimumAmount;
   const [orderAmount, setOrderAmount] = useState<number | null>(null); // Amount from indiesmenu order
   const [discount, setDiscount] = useState<number | null>(null); // Discount from indiesmenu order
   const [orderMemo, setOrderMemo] = useState<string | null>(null); // Memo from indiesmenu order (table, order details)
@@ -476,6 +562,12 @@ export default function HiveAccountCreationPage() {
 
   // Load existing account from localStorage on mount + check for order amount from URL
   useEffect(() => {
+    // Restore language preference from localStorage
+    const savedLang = localStorage.getItem('innopay_language') as Language | null;
+    if (savedLang && ['fr', 'en', 'de', 'lb'].includes(savedLang)) {
+      setLanguageState(savedLang);
+    }
+
     // Load import attempts from localStorage
     const storedAttempts = localStorage.getItem('innopay_import_attempts');
     if (storedAttempts) {
@@ -542,6 +634,7 @@ export default function HiveAccountCreationPage() {
           );
           setMinimumAmount(calculatedMin);
           setTopupAmount(calculatedMin);
+          setTopupInputValue(String(calculatedMin));
           console.log(`[ORDER] create_account_and_pay flow: order=${parsedOrder}€, rounded to: ${calculatedMin}€`);
         } else {
           // create_account_only: minimum is just the account creation minimum (3€)
@@ -1704,25 +1797,45 @@ export default function HiveAccountCreationPage() {
             onClick={() => setUserChoice(null)}
             className="mb-4 text-blue-600 hover:text-blue-800 text-sm flex items-center gap-1"
           >
-            <span>←</span> Retour / Back
+            <span>←</span> {translations[language].backButton}
           </button>
 
-          <h1 className="text-3xl sm:text-4xl font-bold text-blue-900 text-center mb-8">
-            Créez votre compte Innopay
+          {/* Language Selector */}
+          <div className="w-full flex justify-center gap-2 mb-4">
+            {(['fr', 'en', 'de', 'lb'] as Language[]).map((lang) => (
+              <button
+                key={lang}
+                onClick={() => setLanguage(lang)}
+                className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
+                  language === lang
+                    ? 'bg-blue-600 text-white shadow-md'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {lang.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
+          <h1 className="text-3xl sm:text-4xl font-bold text-blue-900 text-center mb-2">
+            {translations[language].createTitle}
           </h1>
+          <p className="text-lg text-gray-600 text-center mb-8">
+            {translations[language].createSubtitle}
+          </p>
 
       {/* Loading state while fetching suggested username */}
       {loadingSuggestedUsername ? (
         <div className="mt-8 flex flex-col items-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mb-4"></div>
-          <p className="text-gray-600">Préparation de votre compte...</p>
+          <p className="text-gray-600">{translations[language].preparingAccount}</p>
         </div>
       ) : (
         <>
           {/* Show explanation only if user has interacted with input */}
           {hasUserInteracted && (
             <p className="mt-2 text-lg sm:text-xl mb-4 text-center px-4 sm:px-0">
-              Entrez le nom d'utilisateur souhaité pour créer votre compte Innopay.
+              {translations[language].enterUsername}
             </p>
           )}
 
@@ -1760,7 +1873,7 @@ export default function HiveAccountCreationPage() {
               validateAndHandleInput(accountName);
             }
           }}
-          placeholder="Choisissez un nom d'utilisateur"
+          placeholder={translations[language].chooseUsername}
           className={`w-full p-4 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 transition-colors duration-300 text-gray-900
             ${accountName.length > 0 ? (isUsernameValid ? 'bg-green-200/50' : 'bg-red-200/50') : 'bg-white'}`}
         />
@@ -1774,8 +1887,8 @@ export default function HiveAccountCreationPage() {
       />
       <span className="text-base text-gray-800 select-none">
         {usingSuggestedUsername && !hasUserInteracted
-          ? 'Créer un compte Innopay avec le nom suggéré'
-          : 'Créer un compte Innopay'}
+          ? translations[language].createWithSuggested
+          : translations[language].createAccount}
       </span>
     </label>
 
@@ -1784,11 +1897,11 @@ export default function HiveAccountCreationPage() {
       <div className="mb-4 p-4 bg-gradient-to-r from-green-50 to-green-100 border-2 border-green-500 rounded-lg text-center">
         <p className="text-2xl font-bold text-green-700 flex items-center justify-center gap-2">
           <span>🎉</span>
-          <span>Vous économisez {discount.toFixed(2)}€!</span>
+          <span>{translations[language].youSave} {discount.toFixed(2)}€!</span>
           <span>🎉</span>
         </p>
         <p className="text-sm text-green-600 mt-1">
-          En créant un compte Innopay, vous bénéficiez déjà d'une réduction sur votre commande
+          {translations[language].discountMessage}
         </p>
       </div>
     )}
@@ -1814,7 +1927,7 @@ export default function HiveAccountCreationPage() {
               </div>
               <button
                 type="button"
-                onClick={() => setTopupAmount(activeCampaign.minAmount50 + (activeCampaign.minAmount100 -  activeCampaign.minAmount50)/2)}
+                onClick={() => { const v = activeCampaign.minAmount50 + (activeCampaign.minAmount100 - activeCampaign.minAmount50)/2; setTopupAmount(v); setTopupInputValue(String(v)); }}
                 className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white font-semibold rounded-lg transition-colors text-sm whitespace-nowrap"
               >
                 Choisir {activeCampaign.minAmount50 + (activeCampaign.minAmount100 -  activeCampaign.minAmount50)/2}€
@@ -1834,7 +1947,7 @@ export default function HiveAccountCreationPage() {
               </div>
               <button
                 type="button"
-                onClick={() => setTopupAmount(activeCampaign.minAmount100 * 2)}
+                onClick={() => { const v = activeCampaign.minAmount100 * 2; setTopupAmount(v); setTopupInputValue(String(v)); }}
                 className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition-colors text-sm whitespace-nowrap"
               >
                 Choisir {activeCampaign.minAmount100 * 2}€
@@ -1848,37 +1961,37 @@ export default function HiveAccountCreationPage() {
     {/* Amount Input Field */}
     <div className="mb-4">
       <label htmlFor="topupAmount" className="block text-sm font-semibold text-gray-700 mb-2">
-        Montant de rechargement (EUR)
+        {translations[language].topupLabel}
         {orderAmount && (
           <span className="ml-2 text-xs font-normal text-gray-500">
-            (Commande: {orderAmount}€, Minimum: {minimumAmount}€)
+            ({translations[language].orderInfo}: {orderAmount}€, {translations[language].minimumInfo}: {minimumAmount}€)
           </span>
         )}
       </label>
       <input
         id="topupAmount"
         type="number"
-        min={minimumAmount}
         step="0.01"
-        value={topupAmount}
+        value={topupInputValue}
         onChange={(e) => {
-          // Allow free entry - just update the value
-          const value = e.target.value === '' ? minimumAmount : parseFloat(e.target.value);
-          if (!isNaN(value)) {
-            setTopupAmount(value);
+          const raw = e.target.value;
+          setTopupInputValue(raw);
+          const parsed = parseFloat(raw);
+          if (!isNaN(parsed)) {
+            setTopupAmount(parsed);
+          } else {
+            setTopupAmount(NaN);
           }
         }}
-        onBlur={(e) => {
-          // Validate when user leaves the field
-          const value = parseFloat(e.target.value);
-          if (isNaN(value) || value < minimumAmount) {
-            setTopupAmount(minimumAmount);
-          }
-        }}
-        className="w-full p-4 border-2 border-blue-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg font-semibold text-gray-900 bg-white"
+        className={`w-full p-4 border-2 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg font-semibold text-gray-900 transition-colors duration-300
+          ${topupInputValue === '' ? 'bg-white border-blue-300' : isAmountValid ? 'bg-green-200/50 border-green-400' : 'bg-red-200/50 border-red-400'}`}
       />
-      <p className="mt-2 text-sm text-black font-medium">
-        Vous pouvez entrer n'importe quel montant ≥ {minimumAmount}€. Choisissez un palier de campagne ci-dessus pour une sélection rapide.
+      <p className={`mt-2 text-sm font-medium ${topupInputValue === '' ? 'text-black' : isAmountValid ? 'text-green-700' : 'text-red-700'}`}>
+        {topupInputValue === '' || isAmountValid
+          ? translations[language].amountHint(minimumAmount)
+          : isNaN(parseFloat(topupInputValue))
+            ? translations[language].invalidAmount
+            : translations[language].minimumAmountError(minimumAmount)}
       </p>
     </div>
 
@@ -1932,12 +2045,12 @@ export default function HiveAccountCreationPage() {
 
     <button
       onClick={handleCreateAccount}
-      disabled={loading || !isUsernameValid}
+      disabled={loading || !isUsernameValid || !isAmountValid}
       className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
     >
       {loading
-        ? 'Redirection vers le paiement...'
-        : `Procéder au paiement (${topupAmount}€)`}
+        ? translations[language].redirecting
+        : `${translations[language].chargeWallet} (${isAmountValid ? topupAmount : '—'}€)`}
     </button>
   </div>
 

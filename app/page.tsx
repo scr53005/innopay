@@ -148,7 +148,18 @@ function TopUpContent() {
   const router = useRouter();
 
   const [amount, setAmount] = useState(100);
-  const [language, setLanguage] = useState<Language>('fr');
+  const [language, setLanguageState] = useState<Language>('fr');
+  const setLanguage = (lang: Language) => {
+    setLanguageState(lang);
+    try { localStorage.setItem('innopay_language', lang); } catch {}
+  };
+  // Restore language preference from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('innopay_language') as Language | null;
+    if (saved && ['fr', 'en', 'de', 'lb'].includes(saved)) {
+      setLanguageState(saved);
+    }
+  }, []);
   const [hasAccount, setHasAccount] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
