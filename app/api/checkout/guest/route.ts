@@ -61,13 +61,21 @@ export async function POST(req: NextRequest) {
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || `${protocol}://${host}`;
 
     // Determine success URL (from request or default to Innopay)
-    const successUrl = returnUrl
-      ? `${returnUrl}&payment=success&session_id={CHECKOUT_SESSION_ID}`
-      : `${baseUrl}/guest/success?session_id={CHECKOUT_SESSION_ID}`;
+    let successUrl: string;
+    let cancelUrl: string;
+    if (returnUrl) {
+      const successParsed = new URL(returnUrl);
+      successParsed.searchParams.set('payment', 'success');
+      successParsed.searchParams.set('session_id', '{CHECKOUT_SESSION_ID}');
+      successUrl = successParsed.toString();
 
-    const cancelUrl = returnUrl
-      ? `${returnUrl}&payment=cancelled`
-      : `${baseUrl}/cancel`;
+      const cancelParsed = new URL(returnUrl);
+      cancelParsed.searchParams.set('payment', 'cancelled');
+      cancelUrl = cancelParsed.toString();
+    } else {
+      successUrl = `${baseUrl}/guest/success?session_id={CHECKOUT_SESSION_ID}`;
+      cancelUrl = `${baseUrl}/cancel`;
+    }
 
     console.log('[GUEST CHECKOUT API] Success URL:', successUrl);
 
