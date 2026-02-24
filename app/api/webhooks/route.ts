@@ -384,7 +384,7 @@ async function handleTopup(session: Stripe.Checkout.Session) {
   console.log(`[${timestamp}] [WEBHOOK TOPUP] Processing top-up: ${session.id}`);
   console.log(`[${timestamp}] [WEBHOOK TOPUP] Full metadata:`, JSON.stringify(session.metadata, null, 2));
 
-  const { accountName, orderAmountEuro, orderMemo, table } = session.metadata!;
+  const { accountName, orderAmountEuro, orderMemo, table, restaurantAccount, restaurantId } = session.metadata!;
   const amountEuro = (session.amount_total || 0) / 100;
   const customerEmail = session.customer_details?.email;
   const orderCost = orderAmountEuro ? parseFloat(orderAmountEuro) : 0;
@@ -458,7 +458,9 @@ async function handleTopup(session: Stripe.Checkout.Session) {
       orderMemo!,
       customerEmail,
       table,
-      walletUser
+      walletUser,
+      restaurantAccount || 'indies-test',
+      restaurantId || 'indiesmenu'
     );
   } else {
     // ===== FLOW 2: PURE TOPUP (EXISTING LOGIC) =====
@@ -484,10 +486,13 @@ async function handleFlow7UnifiedApproach(
   orderMemo: string,
   customerEmail: string | null | undefined,
   table: string | undefined,
-  walletUser: any
+  walletUser: any,
+  restaurantAccount: string,
+  restaurantId: string
 ) {
   console.log(`[FLOW 7] ========================================`);
-  console.log(`[FLOW 7] Unified approach: topup=${topupAmount}€, order=${orderCost}€`);
+  console.warn(`[FLOW 7] Unified approach: topup=${topupAmount}€, order=${orderCost}€`);
+  console.warn(`[FLOW 7] Payment routing: ${accountName} → ${restaurantAccount} (spoke: ${restaurantId}), order=${orderCost}€, memo=${orderMemo}`);
 
   // STEP 1: Execute order payment from innopay → restaurant using innopay authority
   console.log(`[FLOW 7] Step 1: Execute order payment from innopay → restaurant`);
@@ -505,8 +510,8 @@ async function handleFlow7UnifiedApproach(
 
     // Try HBD transfer first (preferred) - from innopay to restaurant
     try {
-      console.log(`[FLOW 7] Attempting HBD transfer to indies.cafe with memo:`, orderMemo);
-      restaurantHbdTxId = await transferHbd('indies.cafe', hbdAmountForOrder, orderMemo);
+      console.warn(`[FLOW 7] Attempting HBD transfer to ${restaurantAccount} with memo:`, orderMemo);
+      restaurantHbdTxId = await transferHbd(restaurantAccount, hbdAmountForOrder, orderMemo);
       console.log(`[FLOW 7] ✅ HBD transferred to restaurant: ${restaurantHbdTxId}`);
     } catch (hbdError: any) {
       // Fallback to EURO tokens if HBD insufficient
@@ -516,7 +521,7 @@ async function handleFlow7UnifiedApproach(
       try {
         await prisma.outstanding_debt.create({
           data: {
-            creditor: getRecipientForEnvironment('indies.cafe'),
+            creditor: getRecipientForEnvironment(restaurantAccount),
             amount_hbd: hbdAmountForOrder,
             euro_tx_id: 'FLOW7_ORDER',
             eur_usd_rate: eurUsdRate,
@@ -524,19 +529,21 @@ async function handleFlow7UnifiedApproach(
             notes: `Flow 7 order payment - HBD shortage at ${new Date().toISOString()}`
           }
         });
-        console.log(`📝 [DEBT] Recorded ${hbdAmountForOrder} HBD debt to restaurant`);
+        console.warn(`📝 [DEBT] Recorded ${hbdAmountForOrder} HBD debt to restaurant`);
       } catch (debtError) {
         console.error('[FLOW 7] WARNING: Failed to record debt:', debtError);
       }
 
       console.log(`[FLOW 7] Attempting EURO token transfer with memo:`, orderMemo);
-      restaurantEuroTxId = await transferEuroTokens('indies.cafe', orderCost, orderMemo);
+      restaurantEuroTxId = await transferEuroTokens(restaurantAccount, orderCost, orderMemo);
       console.log(`[FLOW 7] ✅ EURO tokens transferred to restaurant: ${restaurantEuroTxId}`);
     }
   } catch (orderError: any) {
-    console.error(`[FLOW 7] ❌ Restaurant payment failed:`, orderError);
+    console.error(`[FLOW 7] ❌ Restaurant payment to ${restaurantAccount} failed:`, orderError);
     throw new Error(`Flow 7 order payment failed: ${orderError.message}`);
   }
+
+  console.warn(`[FLOW 7] Payment complete: HBD=${restaurantHbdTxId || 'none'}, EURO=${restaurantEuroTxId || 'none'} → ${restaurantAccount}`);
 
   // STEP 2: Calculate change (topup - order)
   const change = topupAmount - orderCost;
@@ -668,7 +675,10 @@ async function handleFlow7UnifiedApproach(
 
   // STEP 6: Return success with redirect info
   const { getRestaurantUrl } = await import('@/services/utils');
-  const restaurantUrl = getRestaurantUrl('indies', '/menu');
+  // Look up the spoke's path from the database (e.g., '/menu' for indies, '/' for croque-bedaine)
+  const spokeRecord = await prisma.spoke.findUnique({ where: { id: restaurantId } });
+  const spokePath = spokeRecord?.path || '/menu';
+  const restaurantUrl = getRestaurantUrl(restaurantId, spokePath);
 
   const redirectUrl = new URL(restaurantUrl);
   redirectUrl.searchParams.set('order_success', 'true');
