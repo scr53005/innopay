@@ -64,10 +64,14 @@ export async function POST(req: NextRequest) {
     let successUrl: string;
     let cancelUrl: string;
     if (returnUrl) {
+      // Build success URL with Stripe template variable
+      // IMPORTANT: Do NOT use searchParams.set for {CHECKOUT_SESSION_ID} — it URL-encodes
+      // the curly braces (%7B/%7D) which prevents Stripe from recognizing the template variable
       const successParsed = new URL(returnUrl);
       successParsed.searchParams.set('payment', 'success');
-      successParsed.searchParams.set('session_id', '{CHECKOUT_SESSION_ID}');
-      successUrl = successParsed.toString();
+      const successBase = successParsed.toString();
+      const separator = successBase.includes('?') ? '&' : '?';
+      successUrl = `${successBase}${separator}session_id={CHECKOUT_SESSION_ID}`;
 
       const cancelParsed = new URL(returnUrl);
       cancelParsed.searchParams.set('payment', 'cancelled');

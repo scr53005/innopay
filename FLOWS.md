@@ -65,6 +65,8 @@ User comes from or returns to a restaurant platform (e.g., indies.innopay.lu/men
 #### 3. `guest_checkout`
 **Description:** Pay for restaurant order as a guest (no account creation)
 
+**CRITICAL UX NOTE (Feb 2026):** Despite being numbered "Flow 3", guest checkout is the **most important flow in production**. First-time customers discover Innopay through a spoke (e.g. Indies). They don't trust the system yet, so they won't "create an account and pay" (Flow 5) even with a 10% discount nudge. They'd rather pay 5% extra via guest checkout than risk being "trapped" in something they don't understand. **The Wallet Notification Banner must always re-appear** when users click "Commandez" or "Serveur!" — even if they previously dismissed it or started (then abandoned) a guest checkout. Never gate the banner behind one-shot state flags like `guestCheckoutStarted`.
+
 **Detection criteria:**
 - Has order (`orderAmount > 0`)
 - No localStorage account (`hasLocalStorageAccount = false`)
@@ -72,7 +74,7 @@ User comes from or returns to a restaurant platform (e.g., indies.innopay.lu/men
 
 **User journey:**
 1. User places order on indies.innopay.lu/menu
-2. Selects "Pay as Guest"
+2. Selects "Pay as Guest" (via "Commandez sans compte" in Wallet Notification Banner)
 3. Redirected to wallet.innopay.lu with order params
 4. Completes Stripe checkout
 5. Returns to indies.innopay.lu/menu

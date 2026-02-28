@@ -105,6 +105,10 @@ const translations = {
     minimumAmountError: (min: number) => `Le montant minimum est de ${min}€.`,
     redirecting: "Redirection vers le paiement...",
     chargeWallet: "Chargez votre portefeuille",
+    breakdownYouLoad: "Vous chargez",
+    breakdownYourOrder: "Votre commande",
+    breakdownRemaining: "Reste sur votre compte",
+    breakdownAvailable: "Disponible pour vos achats",
     backButton: "Retour / Back",
     // Success / post-creation
     accountIs: "Votre compte Innopay est:",
@@ -142,6 +146,10 @@ const translations = {
     minimumAmountError: (min: number) => `The minimum amount is ${min}€.`,
     redirecting: "Redirecting to payment...",
     chargeWallet: "Load your wallet",
+    breakdownYouLoad: "You load",
+    breakdownYourOrder: "Your order",
+    breakdownRemaining: "Remaining on your account",
+    breakdownAvailable: "Available for your purchases",
     backButton: "Back",
     // Success / post-creation
     accountIs: "Your Innopay account is:",
@@ -179,6 +187,10 @@ const translations = {
     minimumAmountError: (min: number) => `Der Mindestbetrag beträgt ${min}€.`,
     redirecting: "Weiterleitung zur Zahlung...",
     chargeWallet: "Geldbörse aufladen",
+    breakdownYouLoad: "Sie laden",
+    breakdownYourOrder: "Ihre Bestellung",
+    breakdownRemaining: "Verbleibt auf Ihrem Konto",
+    breakdownAvailable: "Verfügbar für Ihre Einkäufe",
     backButton: "Zurück",
     // Success / post-creation
     accountIs: "Ihr Innopay-Konto ist:",
@@ -216,6 +228,10 @@ const translations = {
     minimumAmountError: (min: number) => `De Mindestbetrag ass ${min}€.`,
     redirecting: "Viruleedung op d'Bezuelung...",
     chargeWallet: "Geldbäitel oplueden",
+    breakdownYouLoad: "Dir luet",
+    breakdownYourOrder: "Är Bestellung",
+    breakdownRemaining: "Bleift op Ärem Konto",
+    breakdownAvailable: "Disponibel fir Är Akaf",
     backButton: "Zréck",
     // Success / post-creation
     accountIs: "Äert Innopay Konto ass:",
@@ -2040,6 +2056,48 @@ export default function HiveAccountCreationPage() {
           />
           <span className="text-sm text-gray-700">Force creation with HIVE</span>
         </label>
+      </div>
+    )}
+
+    {/* Money flow breakdown — shows where the loaded amount goes */}
+    {isAmountValid && (
+      <div className="mb-4 rounded-lg border-2 border-blue-200 bg-blue-50 p-4">
+        {orderAmount && orderAmount > 0 ? (
+          <>
+            {/* Flow 5: has order — show breakdown */}
+            <div className="flex justify-between text-sm text-gray-700 mb-1">
+              <span>{translations[language].breakdownYouLoad}:</span>
+              <span className="font-bold text-blue-700">{topupAmount.toFixed(2)}€</span>
+            </div>
+            <div className="flex justify-between text-sm text-gray-700 mb-1">
+              <span>{translations[language].breakdownYourOrder}:</span>
+              <span className="font-semibold text-gray-600">-{orderAmount.toFixed(2)}€</span>
+            </div>
+            {discount && discount > 0 && (
+              <div className="flex justify-between text-sm text-green-700 mb-1">
+                <span>{translations[language].youSave}:</span>
+                <span className="font-semibold">+{discount.toFixed(2)}€</span>
+              </div>
+            )}
+            <div className="border-t border-blue-200 my-2" />
+            <div className="flex justify-between text-sm font-bold">
+              <span className="text-gray-800">{translations[language].breakdownRemaining}:</span>
+              <span className={topupAmount - orderAmount + (discount || 0) >= 0 ? 'text-green-600' : 'text-red-600'}>
+                {(topupAmount - orderAmount + (discount || 0)).toFixed(2)}€ ✓
+              </span>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Flow 4: no order — simple "available" message */}
+            <div className="flex items-center gap-2 text-sm text-blue-800">
+              <span className="text-lg">💰</span>
+              <span>
+                <span className="font-bold">{topupAmount.toFixed(2)}€</span> {translations[language].breakdownAvailable}
+              </span>
+            </div>
+          </>
+        )}
       </div>
     )}
 
