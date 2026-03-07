@@ -920,27 +920,27 @@ async function processRestaurantPayment(
       // Fallback to EURO tokens if HBD insufficient - from innopay to restaurant
       console.warn(`[${timestamp}] [RESTAURANT PAYMENT] ⚠️ HBD transfer failed, using EURO token fallback:`, hbdError.message);
 
-      // Try to record debt - innopay owes HBD to restaurant (non-blocking)
+      // Transfer EURO tokens as fallback
+      console.log(`[${timestamp}] [RESTAURANT PAYMENT] 🔄 Attempting EURO token transfer with memo:`, orderMemo);
+      restaurantEuroTxId = await transferEuroTokens(restaurantAccount, orderCost, orderMemo);
+      console.log(`[${timestamp}] [RESTAURANT PAYMENT] ✅ EURO tokens transferred to restaurant: ${restaurantEuroTxId}`);
+
+      // Record debt with the actual EURO tx ID from the fallback transfer
       try {
         await prisma.outstanding_debt.create({
           data: {
             creditor: getRecipientForEnvironment(restaurantAccount),
             amount_hbd: hbdAmountForOrder,
-            euro_tx_id: sessionId, // Use session ID as reference since no euroTxId yet
+            euro_tx_id: restaurantEuroTxId,
             eur_usd_rate: eurUsdRate,
             reason: 'restaurant_order_payment',
-            notes: `HBD shortage at ${timestamp} - Paid with EURO instead`
+            notes: `HBD shortage at ${timestamp} - Paid with EURO instead. Stripe session: ${sessionId}`
           }
         });
         console.log(`📝 [DEBT] Recorded ${hbdAmountForOrder} HBD debt to restaurant ${restaurantAccount}`);
       } catch (debtError) {
         console.error(`[${timestamp}] [RESTAURANT PAYMENT] WARNING: Failed to record debt:`, debtError);
       }
-
-      // Transfer EURO tokens as fallback
-      console.log(`[${timestamp}] [RESTAURANT PAYMENT] 🔄 Attempting EURO token transfer with memo:`, orderMemo);
-      restaurantEuroTxId = await transferEuroTokens(restaurantAccount, orderCost, orderMemo);
-      console.log(`[${timestamp}] [RESTAURANT PAYMENT] ✅ EURO tokens transferred to restaurant: ${restaurantEuroTxId}`);
     }
   } catch (transferError) {
     console.error(`[${timestamp}] [RESTAURANT PAYMENT] ❌ Restaurant payment failed:`, transferError);

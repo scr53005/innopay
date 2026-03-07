@@ -85,7 +85,13 @@ export default function MiniWallet({
             <span className="text-2xl">💰</span>
             <div>
               <p className={balanceClassName}>{balance.euroBalance.toFixed(2)} €</p>
-              <p className="text-xs opacity-75 font-mono">{balance.accountName}</p>
+              <a
+                href="/user"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs opacity-75 font-mono underline hover:opacity-100 transition-opacity"
+                onClick={(e) => e.stopPropagation()}
+              >{balance.accountName}</a>
             </div>
           </div>
         </div>

@@ -125,7 +125,8 @@ const translations = {
     insufficientBalanceMessage: "Le solde de votre compte n'est pas suffisant pour la commande en cours, un rechargement est nécessaire.",
     orderAmount: "Montant de la commande:",
     topupRequired: "Rechargement requis:",
-    continueButton: "Continuer"
+    continueButton: "Continuer",
+    historyButton: "Votre historique Innopay (bientôt)"
   },
   en: {
     // Account creation form
@@ -166,7 +167,8 @@ const translations = {
     insufficientBalanceMessage: "Your account balance is not sufficient for the current order, a top-up is required.",
     orderAmount: "Order amount:",
     topupRequired: "Top-up required:",
-    continueButton: "Continue"
+    continueButton: "Continue",
+    historyButton: "Your Innopay history (coming soon)"
   },
   de: {
     // Account creation form
@@ -207,7 +209,8 @@ const translations = {
     insufficientBalanceMessage: "Ihr Kontoguthaben reicht für die aktuelle Bestellung nicht aus, eine Aufladung ist erforderlich.",
     orderAmount: "Bestellbetrag:",
     topupRequired: "Aufladung erforderlich:",
-    continueButton: "Fortsetzen"
+    continueButton: "Fortsetzen",
+    historyButton: "Ihre Innopay-Historie (bald verfügbar)"
   },
   lb: {
     // Account creation form
@@ -248,7 +251,8 @@ const translations = {
     insufficientBalanceMessage: "Äert Kontoguthaben ass net genuch fir déi aktuell Bestellung, en Oplueden ass néideg.",
     orderAmount: "Bestellmontant:",
     topupRequired: "Oplueden néideg:",
-    continueButton: "Weidermachen"
+    continueButton: "Weidermachen",
+    historyButton: "Är Innopay Geschicht (geschwënn)"
   }
 };
 
@@ -2295,6 +2299,18 @@ export default function HiveAccountCreationPage() {
                           className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300"
                         >
                           {translations[language].beautifyProfile}
+                        </button>
+
+                        {/* History Button - Coming Soon */}
+                        <button
+                          onClick={(e) => {
+                            const btn = e.currentTarget;
+                            btn.classList.add('scale-95', 'brightness-125');
+                            setTimeout(() => btn.classList.remove('scale-95', 'brightness-125'), 200);
+                          }}
+                          className="flex-1 bg-gray-400 hover:bg-gray-500 text-white font-bold py-4 px-6 rounded-lg transition-all duration-200 cursor-default"
+                        >
+                          {translations[language].historyButton}
                         </button>
                       </>
                     );
