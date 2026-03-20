@@ -10,8 +10,8 @@ function checkAuth(req: NextRequest): boolean {
 
 /**
  * POST /api/outstanding-debt/mark-paid
- * Marks debts as fully settled after HBD transfer to creditor.
- * Called by liman's airlock execute endpoint after Phase 2 (debt_transfer) broadcast.
+ * Marks debts as fully settled after HBD arrives at creditor.
+ * Called by liman's Inngest debt-repayment function after 3-day savings settlement.
  */
 export async function POST(req: NextRequest) {
   if (!checkAuth(req)) {
