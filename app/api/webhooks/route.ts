@@ -328,6 +328,7 @@ async function handleGuestCheckout(session: Stripe.Checkout.Session) {
             data: {
               creditor: getRecipientForEnvironment(recipient),
               amount_hbd: hbdAmountNum,
+              amount_euro: amountEuro,
               euro_tx_id: euroTxId, // Use the EURO fallback TX as reference
               eur_usd_rate: eurUsdRate,
               reason: 'guest_checkout',
@@ -523,6 +524,7 @@ async function handleFlow7UnifiedApproach(
           data: {
             creditor: getRecipientForEnvironment(restaurantAccount),
             amount_hbd: hbdAmountForOrder,
+            amount_euro: orderCost,
             euro_tx_id: 'FLOW7_ORDER',
             eur_usd_rate: eurUsdRate,
             reason: 'flow7_order',
@@ -578,6 +580,7 @@ async function handleFlow7UnifiedApproach(
           data: {
             creditor: accountName,
             amount_hbd: hbdChange,
+            amount_euro: change,
             euro_tx_id: changeTxId,
             eur_usd_rate: eurUsdRate,
             reason: 'flow7_change',
@@ -766,6 +769,7 @@ async function handleFlow2PureTopup(
             data: {
               creditor: accountName,
               amount_hbd: requiredHbd,
+              amount_euro: amountEuro,
               euro_tx_id: userTxId || 'TOPUP',
               eur_usd_rate: eurUsdRate,
               reason: 'topup',
@@ -787,6 +791,7 @@ async function handleFlow2PureTopup(
           data: {
             creditor: accountName,
             amount_hbd: requiredHbd,
+            amount_euro: amountEuro,
             euro_tx_id: userTxId || 'TOPUP',
             eur_usd_rate: eurUsdRate,
             reason: 'topup',
@@ -931,6 +936,7 @@ async function processRestaurantPayment(
           data: {
             creditor: getRecipientForEnvironment(restaurantAccount),
             amount_hbd: hbdAmountForOrder,
+            amount_euro: orderCost,
             euro_tx_id: restaurantEuroTxId,
             eur_usd_rate: eurUsdRate,
             reason: 'restaurant_order_payment',
@@ -1223,6 +1229,7 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
           data: {
             creditor: accountName,
             amount_hbd: hbdAmount,
+            amount_euro: totalEuro,
             euro_tx_id: euroTxId,
             eur_usd_rate: eurUsdRate,
             reason: 'account_creation_bonus',
