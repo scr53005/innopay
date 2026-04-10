@@ -177,6 +177,7 @@ export async function POST(req: NextRequest) {
               creditor: innopayAccount,
               debtor: customerAccount,
               amount_hbd: hbdShortfall,
+              original_amount: hbdShortfall,
               amount_euro: Math.round((hbdShortfall / resolvedEurUsdRate) * 100) / 100,
               euro_tx_id: customerTxId,
               eur_usd_rate: resolvedEurUsdRate,

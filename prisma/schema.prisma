@@ -128,20 +128,35 @@ model accountCredentialSession {
 }
 
 model outstanding_debt {
-  id            String    @id @default(cuid())
-  created_at    DateTime  @default(now())
-  creditor      String    @db.VarChar(16)
-  debtor        String    @default("innopay") @db.VarChar(16)
-  amount_hbd    Decimal   @default(0) @db.Decimal(10, 3)
-  amount_euro   Decimal?  @db.Decimal(10, 2)
-  euro_tx_id    String?   @db.Char(40)
-  hbd_tx_id     String?   @db.Char(40)
-  eur_usd_rate  Decimal   @db.Decimal(10, 4)
-  reason        String    @db.VarChar(64)
-  status        String    @default("unpaid") @db.VarChar(30) // unpaid | recovery_ongoing | withdrawal_pending | paid | settled_out_of_band
-  paid_at       DateTime?
-  payment_tx_id String?   @db.Char(40)
-  notes         String?   @db.Text
+  id              String    @id @default(cuid())
+  created_at      DateTime  @default(now())
+  creditor        String    @db.VarChar(16)
+  debtor          String    @default("innopay") @db.VarChar(16)
+  amount_hbd      Decimal   @default(0) @db.Decimal(10, 3)
+  original_amount Decimal?  @db.Decimal(10, 3) // immutable — set at creation, null for legacy rows until backfilled
+  amount_euro     Decimal?  @db.Decimal(10, 2)
+  euro_tx_id      String?   @db.Char(40)
+  hbd_tx_id       String?   @db.Char(40)
+  eur_usd_rate    Decimal   @db.Decimal(10, 4)
+  reason          String    @db.VarChar(64)
+  status          String    @default("unpaid") @db.VarChar(30) // unpaid | recovery_ongoing | withdrawal_pending | paid | settled_out_of_band
+  paid_at         DateTime?
+  payment_tx_id   String?   @db.Char(40)
+  notes           String?   @db.Text
+  payments        debt_payment[]
+}
+
+model debt_payment {
+  id          String   @id @default(cuid())
+  debt_id     String
+  amount_hbd  Decimal  @db.Decimal(10, 3)
+  tx_id       String?  @db.VarChar(64)
+  paid_at     DateTime @default(now())
+  notes       String?  @db.Text
+
+  debt        outstanding_debt @relation(fields: [debt_id], references: [id])
+
+  @@index([debt_id])
 }
 
 model email_verification {

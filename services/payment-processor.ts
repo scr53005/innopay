@@ -70,6 +70,7 @@ export async function processOrderPayment(params: {
             debtor: customerAccount,
             amount_euro: orderAmount,
             amount_hbd: 0,
+            original_amount: 0,
             eur_usd_rate: 1.0, // Will update with actual rate below
             reason,
             notes: `EURO transfer failed at ${new Date().toISOString()}: ${customerEuroError.message}`
@@ -107,6 +108,7 @@ export async function processOrderPayment(params: {
           creditor: getRecipientForEnvironment(restaurantAccount),
           debtor: 'innopay',
           amount_hbd: hbdAmountForOrder,
+          original_amount: hbdAmountForOrder,
           eur_usd_rate: result.eurUsdRate,
           reason,
           notes: `HBD shortage at ${new Date().toISOString()} - ${reason}`
@@ -144,6 +146,7 @@ export async function processOrderPayment(params: {
             creditor: 'innopay',
             debtor: customerAccount,
             amount_hbd: hbdAmountForOrder,
+            original_amount: hbdAmountForOrder,
             euro_tx_id: result.customerEuroTxId || null,
             eur_usd_rate: result.eurUsdRate,
             reason,
@@ -202,6 +205,7 @@ export async function transferTopupToCustomer(params: {
         data: {
           creditor: customerAccount,
           amount_hbd: hbdAmount,
+          original_amount: hbdAmount,
           euro_tx_id: euroTxId,
           eur_usd_rate: eurUsdRate,
           reason,

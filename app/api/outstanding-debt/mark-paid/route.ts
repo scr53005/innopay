@@ -30,15 +30,36 @@ export async function POST(req: NextRequest) {
   const now = new Date();
 
   for (const debt of debts) {
-    const result = await prisma.outstanding_debt.update({
+    // Fetch current amount to record final payment in the ledger
+    const existing = await prisma.outstanding_debt.findUnique({
       where: { id: debt.id },
-      data: {
-        status: 'paid',
-        paid_at: now,
-        payment_tx_id: debt.payment_tx_id,
-      },
     });
-    if (result) updated++;
+
+    if (!existing) continue;
+
+    await prisma.$transaction([
+      // Record the final payment in the debt_payment ledger
+      prisma.debt_payment.create({
+        data: {
+          debt_id: debt.id,
+          amount_hbd: Number(existing.amount_hbd),
+          tx_id: debt.payment_tx_id,
+          notes: 'Full settlement',
+        },
+      }),
+      // Mark the debt as paid
+      prisma.outstanding_debt.update({
+        where: { id: debt.id },
+        data: {
+          status: 'paid',
+          amount_hbd: 0,
+          paid_at: now,
+          payment_tx_id: debt.payment_tx_id,
+        },
+      }),
+    ]);
+
+    updated++;
   }
 
   console.warn(`[OUTSTANDING-DEBT] Marked paid: ${updated}/${debts.length} debts`);
