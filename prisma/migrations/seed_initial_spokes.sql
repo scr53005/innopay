@@ -106,7 +106,7 @@ INSERT INTO spoke (
   NOW()
 );
 
--- STUB 2: Brasserie Millewee (Not Ready - Coming Soon)
+-- READY SPOKE 3: Brasserie Millewee
 INSERT INTO spoke (
   id,
   name,
@@ -127,16 +127,16 @@ INSERT INTO spoke (
   'millewee',
   'Brasserie Millewee',
   'restaurant',
-  'indies.innopay.lu',
-  3001,
-  '/menu',
+  'millewee.innopay.lu',
+  3002,
+  '/',
   'table',
   '0',
-  'cartTable',
+  'millewee_table',
   '/images/businesses/millewee.PNG',
   false,
   true,
-  false,
+  true,
   NOW(),
   NOW()
 );
