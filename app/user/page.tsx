@@ -518,6 +518,7 @@ export default function HiveAccountCreationPage() {
             amount: topupAmount, // Already rounded to nearest 5€
             accountName,
             email: localStorage.getItem('innopay_email') || undefined,
+            returnUrl: returnUrl || undefined,
             redirectParams: {
               table,
               orderAmount: orderAmount.toString(),

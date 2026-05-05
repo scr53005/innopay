@@ -230,9 +230,16 @@ export async function POST(req: NextRequest) {
     if (returnUrl) {
       console.log(`[${new Date().toISOString()}] [CHECKOUT API] Using custom returnUrl for Flow 7:`, returnUrl);
 
-      // Append order_success=true to match what the menu page expects
+      const flow7ReturnUrl = new URL('/api/checkout/flow7-return', baseUrl);
+      flow7ReturnUrl.searchParams.set('session_id', '{CHECKOUT_SESSION_ID}');
+      flow7ReturnUrl.searchParams.set('return_url', returnUrl);
+
+      // Route the browser through the hub first so the webhook-created
+      // credential session can be converted into a credential_token before the
+      // customer returns to the spoke. If the webhook is late, the return route
+      // falls back to session_id and the spoke can still fetch credentials.
+      successUrl = flow7ReturnUrl.toString().replace('%7BCHECKOUT_SESSION_ID%7D', '{CHECKOUT_SESSION_ID}');
       const separator = returnUrl.includes('?') ? '&' : '?';
-      successUrl = `${returnUrl}${separator}order_success=true&session_id={CHECKOUT_SESSION_ID}`;
       cancelUrl = `${returnUrl}${separator}topup_cancelled=true`;
     }
     // INTERNAL flows (new_account, topup) - stay on innopay hub
