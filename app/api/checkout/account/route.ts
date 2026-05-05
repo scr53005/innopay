@@ -17,6 +17,34 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
+function isLocalOrLanHost(host: string | null): boolean {
+  if (!host) return false;
+  const hostname = host.split(':')[0];
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname.startsWith('192.168.') ||
+    hostname.startsWith('10.') ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
+  );
+}
+
+function getRequestBaseUrl(req: NextRequest): string {
+  const forwardedHost = req.headers.get('x-forwarded-host');
+  const host = forwardedHost || req.headers.get('host');
+  const protocol = req.headers.get('x-forwarded-proto') || 'http';
+  const requestBaseUrl = host ? `${protocol}://${host}` : null;
+  const configuredBaseUrl = process.env.NEXT_PUBLIC_BASE_URL;
+
+  // In local/LAN testing, the browser's reachable host matters. An env value
+  // like http://localhost:3000 is correct on the laptop but wrong on a phone.
+  if (isLocalOrLanHost(host) && requestBaseUrl) {
+    return requestBaseUrl;
+  }
+
+  return configuredBaseUrl || requestBaseUrl || 'https://wallet.innopay.lu';
+}
+
 /**
  * OPTIONS handler for CORS preflight requests
  */
@@ -103,10 +131,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Determine base URL from request or environment
-    const host = req.headers.get('host');
-    const protocol = req.headers.get('x-forwarded-proto') || 'http';
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || `${protocol}://${host}`;
+    // Determine base URL from request or environment.
+    // For LAN phone testing, prefer the request host over NEXT_PUBLIC_BASE_URL
+    // so Stripe returns to http://192.168.x.x:3000 instead of localhost.
+    const baseUrl = getRequestBaseUrl(req);
     console.log(`[${new Date().toISOString()}] [CHECKOUT API] Using base URL: ${baseUrl}`);
 
     // Validate account name format (basic Hive rules)
