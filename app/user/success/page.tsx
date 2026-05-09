@@ -20,10 +20,41 @@ interface AccountCredentials {
 function AccountSuccessContent() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get('session_id');
+  const flow = searchParams.get('flow');
+  const isTopup = flow === 'topup';
+
+  // Copy varies by flow. Top-up presupposes an existing account; account creation
+  // doesn't. Wrong copy on the timeout path was the original bug — every top-up
+  // user used to see "Account Creation Delayed", which is nonsense for them.
+  const copy = isTopup
+    ? {
+        initialMessage: 'Confirming your top-up...',
+        successHeading: 'Top-up Successful!',
+        successMessage: 'Top-up applied to your account!',
+        redirectMessage: 'Redirecting to your wallet...',
+        errorHeading: 'Top-up Delayed',
+        errorWhatHappened:
+          'Your payment was successful, but the top-up confirmation is taking longer than usual. The funds will be applied to your account as soon as our servers finish processing.',
+        errorTimeout:
+          'Top-up confirmation is taking longer than expected. Please contact support with your payment confirmation.',
+        supportSubject: 'Innopay top-up issue',
+      }
+    : {
+        initialMessage: 'Creating your account...',
+        successHeading: 'Account Created!',
+        successMessage: 'Account created successfully!',
+        redirectMessage: 'Redirecting to your account...',
+        errorHeading: 'Account Creation Delayed',
+        errorWhatHappened:
+          'Your payment was successful, but account creation is taking longer than usual. This sometimes happens when our servers are processing many requests.',
+        errorTimeout:
+          'Account creation is taking longer than expected. Please contact support with your payment confirmation.',
+        supportSubject: 'Innopay account creation issue',
+      };
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState('Creating your account...');
+  const [message, setMessage] = useState(copy.initialMessage);
   const [isExternalFlow, setIsExternalFlow] = useState(false);
 
   useEffect(() => {
@@ -33,12 +64,33 @@ function AccountSuccessContent() {
       return;
     }
 
-    pollForCredentials();
+    if (isTopup) {
+      // Top-up: skip credential polling (it queries account_credential_session,
+      // which only exists for account-creation flows). Stripe's success_url
+      // redirect is itself proof the payment cleared; the webhook applies the
+      // top-up server-side and the /user page will fetch the fresh balance.
+      handleTopupRedirect();
+    } else {
+      pollForCredentials();
+    }
   }, [sessionId]);
+
+  const handleTopupRedirect = () => {
+    setMessage(copy.successMessage);
+    setLoading(false);
+
+    const amountParam = searchParams.get('amount');
+    setTimeout(() => {
+      const params = new URLSearchParams();
+      params.set('topup_success', 'true');
+      if (amountParam) params.set('amount', amountParam);
+      window.location.href = `/user?${params.toString()}`;
+    }, 1500);
+  };
 
   const pollForCredentials = async () => {
     try {
-      setMessage('Waiting for account creation...');
+      setMessage(copy.initialMessage);
 
       // STEP 1: Poll for webhook completion and get FULL credentials directly
       const pollSession = async (): Promise<AccountCredentials> => {
@@ -70,13 +122,13 @@ function AccountSuccessContent() {
 
         // Timeout reached
         console.error(`[ACCOUNT POLL] ⏱️ Timeout after ${maxPolls} attempts`);
-        throw new Error('Account creation is taking longer than expected. Please contact support with your payment confirmation.');
+        throw new Error(copy.errorTimeout);
       };
 
       const credentials = await pollSession();
       console.log(`[SUCCESS] Got full credentials for account: ${credentials.accountName}`);
 
-      setMessage('Account created successfully!');
+      setMessage(copy.successMessage);
       setLoading(false);
 
       // STEP 2: Store FULL credentials in localStorage (no need for token!)
@@ -143,7 +195,7 @@ function AccountSuccessContent() {
         // INTERNAL FLOW: Stay on wallet.innopay.lu and redirect to /user for celebration
         console.log(`[SUCCESS] Internal flow detected, staying on wallet.innopay.lu`);
         setIsExternalFlow(false);
-        setMessage('Redirecting to your account...');
+        setMessage(copy.redirectMessage);
 
         // Get amount parameter to preserve for optimistic balance display
         const amountParam = searchParams.get('amount');
@@ -189,23 +241,39 @@ function AccountSuccessContent() {
                 </svg>
               </div>
               <div className="ml-3">
-                <h3 className="text-lg font-medium text-yellow-800">Account Creation Delayed</h3>
+                <h3 className="text-lg font-medium text-yellow-800">{copy.errorHeading}</h3>
                 <div className="mt-2 text-sm text-yellow-700">
                   <p>{error}</p>
                 </div>
                 <div className="mt-4">
                   <p className="text-sm text-yellow-800 font-semibold">What happened?</p>
                   <p className="text-xs text-yellow-700 mt-1">
-                    Your payment was successful, but account creation is taking longer than usual.
-                    This sometimes happens when our servers are processing many requests.
+                    {copy.errorWhatHappened}
                   </p>
                 </div>
                 <div className="mt-4">
                   <p className="text-sm text-yellow-800 font-semibold">What to do?</p>
                   <ul className="text-xs text-yellow-700 mt-1 list-disc list-inside space-y-1">
-                    <li>Check your email for account confirmation (may arrive in 5-10 minutes)</li>
-                    <li>Try the "Import Account" feature on the homepage with your email</li>
-                    <li>Contact support if the issue persists</li>
+                    {!isTopup && (
+                      <>
+                        <li>Check your email for account confirmation (may arrive in 5-10 minutes)</li>
+                        <li>Try the &quot;Import Account&quot; feature on the homepage with your email</li>
+                      </>
+                    )}
+                    {isTopup && (
+                      <li>Refresh your wallet page in a few minutes — the balance will update once the top-up is confirmed</li>
+                    )}
+                    <li>
+                      <a
+                        href={`mailto:contact@innopay.lu?subject=${encodeURIComponent(copy.supportSubject)}&body=${encodeURIComponent(
+                          `Hello,\n\nI ran into an issue with my Innopay ${isTopup ? 'top-up' : 'account creation'}.\n\nStripe session ID: ${sessionId ?? '(missing)'}\n\nPlease help.\n\nThank you.`,
+                        )}`}
+                        className="underline text-yellow-900 hover:text-yellow-700 font-medium"
+                      >
+                        Contact support
+                      </a>{' '}
+                      if the issue persists
+                    </li>
                   </ul>
                 </div>
               </div>
@@ -243,10 +311,10 @@ function AccountSuccessContent() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
           </svg>
         </div>
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Account Created!</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">{copy.successHeading}</h2>
         <p className="text-gray-600 mb-4">{message}</p>
         <p className="text-sm text-gray-500">
-          {isExternalFlow ? 'Redirecting back to restaurant...' : 'Redirecting to your wallet...'}
+          {isExternalFlow ? 'Redirecting back to restaurant...' : copy.redirectMessage}
         </p>
       </div>
     </div>

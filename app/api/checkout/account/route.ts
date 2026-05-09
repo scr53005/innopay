@@ -272,7 +272,9 @@ export async function POST(req: NextRequest) {
     }
     // INTERNAL flows (new_account, topup) - stay on innopay hub
     else if (detectedFlow === 'new_account' || detectedFlow === 'topup') {
-      successUrl = `${baseUrl}/user/success?session_id={CHECKOUT_SESSION_ID}&amount=${amount}`;
+      // Pass flow through so the success page can branch its copy (the same
+      // /user/success page handles both account creation and top-up).
+      successUrl = `${baseUrl}/user/success?session_id={CHECKOUT_SESSION_ID}&amount=${amount}&flow=${detectedFlow}`;
       cancelUrl = `${baseUrl}/user?cancelled=true`;
     }
     // EXTERNAL flows (create_account_only, create_account_and_pay) - redirect to spoke
