@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import Stripe from 'stripe';
 import prisma from '@/lib/prisma';
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2025-06-30.basil',
+});
 
 const CREDENTIAL_WAIT_ATTEMPTS = 12;
 const CREDENTIAL_WAIT_MS = 500;
@@ -13,6 +18,7 @@ function appendReturnParams(
   params: {
     sessionId: string;
     credentialToken?: string;
+    optimisticBalance?: number;
   },
 ) {
   const url = new URL(returnUrl);
@@ -28,7 +34,38 @@ function appendReturnParams(
     url.searchParams.set('credential_pending', 'true');
   }
 
+  if (typeof params.optimisticBalance === 'number' && !isNaN(params.optimisticBalance)) {
+    url.searchParams.set('optimistic_balance', params.optimisticBalance.toFixed(2));
+  }
+
   return url;
+}
+
+/**
+ * Compute the spoke's optimistic post-Flow-7 balance from the Stripe session
+ * metadata: pre-topup balance + topup amount - order amount. Returns null if
+ * any piece is missing (e.g., metadata wasn't recorded — older sessions or
+ * non-Flow-7 fallbacks). The spoke uses this value to display the right
+ * MiniWallet balance immediately on return; a fresh on-chain fetch overrides
+ * it once the trust window expires.
+ */
+async function computeOptimisticBalance(sessionId: string): Promise<number | null> {
+  try {
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const md = session.metadata || {};
+    const pre = md.accountBalanceBeforeTopup ? parseFloat(md.accountBalanceBeforeTopup) : NaN;
+    const order = md.orderAmountEuro ? parseFloat(md.orderAmountEuro) : 0;
+    const topupCents = session.amount_total ?? 0;
+    const topup = topupCents / 100;
+
+    if (isNaN(pre) || isNaN(topup)) return null;
+
+    const result = pre + topup - order;
+    return Math.max(0, result);
+  } catch (err) {
+    console.warn('[FLOW 7 RETURN] Could not compute optimistic balance:', err);
+    return null;
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -79,14 +116,18 @@ export async function GET(request: NextRequest) {
     await sleep(CREDENTIAL_WAIT_MS);
   }
 
+  const optimisticBalance = await computeOptimisticBalance(sessionId);
+
   const redirectUrl = appendReturnParams(parsedReturnUrl.toString(), {
     sessionId,
     credentialToken,
+    optimisticBalance: optimisticBalance ?? undefined,
   });
 
   console.log('[FLOW 7 RETURN] Redirecting to spoke:', {
     sessionId,
     credentialToken: credentialToken || null,
+    optimisticBalance,
     returnUrl: parsedReturnUrl.toString(),
     redirectUrl: redirectUrl.toString(),
   });

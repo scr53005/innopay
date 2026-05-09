@@ -80,6 +80,29 @@ function AccountSuccessContent() {
     setLoading(false);
 
     const amountParam = searchParams.get('amount');
+    const topup = amountParam ? parseFloat(amountParam) : NaN;
+
+    // Compute the post-topup optimistic balance and seed localStorage before
+    // /user mounts. /user reads `innopay_lastBalance` on mount; without this
+    // write, /user fetches the on-chain EURO balance, which is stale (the
+    // Stripe webhook + Hive-Engine indexing takes several seconds), so the
+    // customer sees pre-topup or 0 EUR until the chain catches up. The trust
+    // window tells /user's balance fetcher to keep using the cached value
+    // until the chain has actually updated.
+    if (!isNaN(topup)) {
+      const cachedPre = localStorage.getItem('innopay_lastBalance');
+      const pre = cachedPre ? parseFloat(cachedPre) : NaN;
+      if (!isNaN(pre)) {
+        const optimistic = Math.max(0, pre + topup);
+        localStorage.setItem('innopay_lastBalance', optimistic.toFixed(2));
+        localStorage.setItem('innopay_lastBalance_timestamp', Date.now().toString());
+        localStorage.setItem(
+          'innopay_balance_trustUntil',
+          (Date.now() + 60 * 1000).toString(),
+        );
+      }
+    }
+
     setTimeout(() => {
       const params = new URLSearchParams();
       params.set('topup_success', 'true');

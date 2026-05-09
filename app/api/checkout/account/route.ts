@@ -184,6 +184,17 @@ export async function POST(req: NextRequest) {
       metadata.campaignId = campaign.id.toString();
     }
 
+    // Pre-topup balance: snapshot of the customer's EURO balance fetched by the
+    // client before redirecting to Stripe (NOT the post-topup balance — the
+    // /user page fetches the live blockchain value and forwards that as
+    // `accountBalance`). flow7-return reads this on Stripe success_url callback
+    // to compute the post-topup optimistic balance (pre + topup - order) and
+    // pass it back to the spoke. /user/success uses the same value for the
+    // internal Flow 2 (pure topup) path.
+    if (typeof accountBalance === 'number' && !isNaN(accountBalance)) {
+      metadata.accountBalanceBeforeTopup = accountBalance.toString();
+    }
+
     // Add order info if provided (for indiesmenu orders)
     if (finalOrderAmountEuro) {
       // CRITICAL: Order amount without memo is INVALID - restaurant can't match payment to order

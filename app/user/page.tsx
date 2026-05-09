@@ -776,44 +776,64 @@ export default function HiveAccountCreationPage() {
           setAccountBalance(0);
         }
       } else {
-        // For real accounts, fetch balance from Hive-Engine
-        const fetchBalance = async () => {
-          try {
-            const response = await fetch('https://api.hive-engine.com/rpc/contracts', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                jsonrpc: '2.0',
-                method: 'find',
-                params: {
-                  contract: 'tokens',
-                  table: 'balances',
-                  query: { account: acc, symbol: 'EURO' },
-                },
-                id: 1,
-              }),
-            });
-
-            if (response.ok) {
-              const data = await response.json();
-              if (data.result && data.result.length > 0) {
-                const balance = parseFloat(data.result[0].balance);
-                setAccountBalance(balance);
-                console.log('[USER PAGE] Balance fetched from Hive-Engine:', balance, '€');
-
-                // Save to localStorage for optimistic balance calculations
-                localStorage.setItem('innopay_lastBalance', balance.toString());
-              } else {
-                setAccountBalance(0);
-                localStorage.setItem('innopay_lastBalance', '0');
-              }
-            }
-          } catch (e) {
-            console.error("[USER PAGE] Failed to fetch balance:", e);
+        // For real accounts, fetch balance from Hive-Engine — UNLESS we're
+        // inside an active "trust window" (set by /user/success right after a
+        // successful Stripe top-up). During the trust window the cached
+        // optimistic balance is authoritative: the on-chain value is still
+        // stale because Hive-Engine indexing trails the webhook by several
+        // seconds, so fetching now would overwrite the correct optimistic
+        // value with a wrong stale one. The window expires automatically
+        // after ~60s, at which point a regular page load resumes the fetch.
+        const trustUntilStr = localStorage.getItem('innopay_balance_trustUntil');
+        const trustUntil = trustUntilStr ? parseInt(trustUntilStr, 10) : 0;
+        if (trustUntil > Date.now()) {
+          const cached = localStorage.getItem('innopay_lastBalance');
+          const cachedNum = cached ? parseFloat(cached) : NaN;
+          if (!isNaN(cachedNum)) {
+            setAccountBalance(cachedNum);
+            console.log('[USER PAGE] Inside balance trust window, using cached:', cachedNum, '€');
+          } else {
             setAccountBalance(0);
           }
-        };
-        fetchBalance();
+        } else {
+          const fetchBalance = async () => {
+            try {
+              const response = await fetch('https://api.hive-engine.com/rpc/contracts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'find',
+                  params: {
+                    contract: 'tokens',
+                    table: 'balances',
+                    query: { account: acc, symbol: 'EURO' },
+                  },
+                  id: 1,
+                }),
+              });
+
+              if (response.ok) {
+                const data = await response.json();
+                if (data.result && data.result.length > 0) {
+                  const balance = parseFloat(data.result[0].balance);
+                  setAccountBalance(balance);
+                  console.log('[USER PAGE] Balance fetched from Hive-Engine:', balance, '€');
+
+                  // Save to localStorage for optimistic balance calculations
+                  localStorage.setItem('innopay_lastBalance', balance.toString());
+                } else {
+                  setAccountBalance(0);
+                  localStorage.setItem('innopay_lastBalance', '0');
+                }
+              }
+            } catch (e) {
+              console.error("[USER PAGE] Failed to fetch balance:", e);
+              setAccountBalance(0);
+            }
+          };
+          fetchBalance();
+        }
       }
 
       // Fetch metadata for existing account
@@ -2141,10 +2161,10 @@ export default function HiveAccountCreationPage() {
             />
           </button>
       </header>
-      <div className="flex flex-col items-center justify-center min-h-screen py-2">
-        <main className="flex flex-col items-center justify-center w-full flex-1 text-center">
-          <div className="flex flex-col items-center space-y-8 p-4 sm:p-6 lg:p-8 bg-white rounded-xl shadow-lg w-full max-w-xl mb-6">
-            <div className="relative w-4/5 h-auto aspect-video mb-6">
+      <div className="flex flex-col items-center justify-start min-h-screen py-2">
+        <main className="flex flex-col items-center justify-start w-full flex-1 text-center">
+          <div className="flex flex-col items-center space-y-3 sm:space-y-6 p-3 sm:p-6 lg:p-8 bg-white rounded-xl shadow-lg w-full max-w-xl mb-3">
+            <div className="relative w-2/3 sm:w-4/5 h-auto aspect-video mb-1">
               <Image
                 src={innopayLogoUrl}
                 alt="Innopay Logo"
@@ -2155,12 +2175,12 @@ export default function HiveAccountCreationPage() {
             {!showUpdateForm ? (
               <>
                 {/* Language Selector */}
-                <div className="w-full flex justify-center gap-2 mb-4">
+                <div className="w-full flex justify-center gap-2 mb-3">
                   {(['fr', 'en', 'de', 'lb'] as Language[]).map((lang) => (
                     <button
                       key={lang}
                       onClick={() => setLanguage(lang)}
-                      className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
+                      className={`px-3 py-1.5 rounded-lg font-medium text-sm transition-all ${
                         language === lang
                           ? 'bg-blue-600 text-white shadow-md'
                           : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -2172,31 +2192,31 @@ export default function HiveAccountCreationPage() {
                 </div>
 
                 {/* Success Message */}
-                <div className="mt-6 px-4 py-6 w-full bg-gradient-to-r from-blue-50 to-blue-100 border-2 border-blue-500 rounded-lg text-center">
-                  <p className="text-lg font-semibold text-blue-900 mb-3">
+                <div className="px-3 py-3 w-full bg-gradient-to-r from-blue-50 to-blue-100 border-2 border-blue-500 rounded-lg text-center">
+                  <p className="text-base font-semibold text-blue-900 mb-1">
                     {translations[language].accountIs}
                   </p>
-                  <p className="font-mono font-bold text-2xl text-blue-900 break-all mb-4">
+                  <p className="font-mono font-bold text-xl text-blue-900 break-all mb-2">
                     {existingAccount?.accountName}
                   </p>
                   {existingAccount?.email && (
                     <>
-                      <p className="text-sm text-blue-800 mb-1">
+                      <p className="text-xs text-blue-800 mb-0.5">
                         {translations[language].registeredWith}
                       </p>
-                      <p className="font-mono text-base text-blue-900 break-all mb-4">
+                      <p className="font-mono text-sm text-blue-900 break-all mb-2">
                         {existingAccount.email}
                       </p>
                     </>
                   )}
-                  <p className="text-base text-gray-700 mt-4">
+                  <p className="text-sm text-gray-700 mt-2">
                     {translations[language].callToAction}
                   </p>
                 </div>
 
                 {/* MiniWallet Component - Fixed with proper onClose */}
                 {accountBalance !== null && showWalletBalance && (
-                  <div className="w-full my-4">
+                  <div className="w-full my-1">
                     <MiniWallet
                       balance={{
                         accountName: existingAccount?.accountName || '',
@@ -2222,7 +2242,7 @@ export default function HiveAccountCreationPage() {
                 )}
 
                 {/* Action Buttons - Explorer above Beautify, with dynamic behavior based on restaurant param */}
-                <div className="w-full flex flex-col sm:flex-row gap-4 mt-6">
+                <div className="w-full flex flex-col sm:flex-row gap-2 mt-1">
                   {(() => {
                     const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
                     const restaurant = params.get('restaurant');
@@ -2289,7 +2309,7 @@ export default function HiveAccountCreationPage() {
                         {/* Explorer/Return Button - Now FIRST (more prominent) */}
                         <button
                           onClick={exploreButtonAction}
-                          className="flex-1 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold py-4 px-6 rounded-lg transition duration-300 shadow-lg"
+                          className="flex-1 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold py-2.5 sm:py-3 px-6 rounded-lg transition duration-300 shadow-lg"
                         >
                           {exploreButtonText}
                         </button>
@@ -2297,7 +2317,7 @@ export default function HiveAccountCreationPage() {
                         {/* Beautify Profile Button - Now SECOND */}
                         <button
                           onClick={() => setShowUpdateForm(true)}
-                          className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-lg transition duration-300"
+                          className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold py-2.5 sm:py-3 px-6 rounded-lg transition duration-300"
                         >
                           {translations[language].beautifyProfile}
                         </button>
@@ -2309,7 +2329,7 @@ export default function HiveAccountCreationPage() {
                             btn.classList.add('scale-95', 'brightness-125');
                             setTimeout(() => btn.classList.remove('scale-95', 'brightness-125'), 200);
                           }}
-                          className="flex-1 bg-gray-400 hover:bg-gray-500 text-white font-bold py-4 px-6 rounded-lg transition-all duration-200 cursor-default"
+                          className="flex-1 bg-gray-400 hover:bg-gray-500 text-white font-bold py-2.5 sm:py-3 px-6 rounded-lg transition-all duration-200 cursor-default"
                         >
                           {translations[language].historyButton}
                         </button>
