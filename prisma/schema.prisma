@@ -218,4 +218,26 @@ model spoke {
   // Metadata
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+
+  accounts spoke_account[]
+}
+
+model spoke_account {
+  id                 String   @id @default(cuid())
+  spoke_id           String   @db.VarChar(50)
+  spoke              spoke    @relation(fields: [spoke_id], references: [id], onDelete: Cascade)
+  hive_account       String   @db.VarChar(16)
+  environment        String   @db.VarChar(20)
+  role               String   @db.VarChar(30)
+  active             Boolean  @default(true)
+  settlement_enabled Boolean  @default(false)
+  primary            Boolean  @default(false)
+  notes              String?  @db.Text
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  @@unique([spoke_id, hive_account, environment, role])
+  @@index([spoke_id])
+  @@index([hive_account])
+  @@index([environment])
 }
