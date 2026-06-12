@@ -13,8 +13,11 @@ import { config } from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { Resend } from 'resend';
 
-// Load .env.local (Next.js does this automatically, but standalone scripts need it)
-config({ path: '.env.local' });
+// Load .env.local (Next.js does this automatically, but standalone scripts need it).
+// override:true is required — dotenv won't overwrite a var already in process.env,
+// so without it a pre-loaded .env (POSTGRES_URL=PROD) silently wins and the script
+// hits the production DB instead of local DEV.
+config({ path: '.env.local', override: true });
 
 const prisma = new PrismaClient();
 
