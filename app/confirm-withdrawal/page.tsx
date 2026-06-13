@@ -3,7 +3,7 @@
 import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 
-type State = 'idle' | 'loading' | 'ok' | 'expired' | 'notfound' | 'error';
+type State = 'idle' | 'loading' | 'ok' | 'late_confirmed' | 'expired' | 'notfound' | 'error';
 
 const card: React.CSSProperties = {
   maxWidth: 480,
@@ -33,8 +33,12 @@ function ConfirmInner() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token }),
       });
-      if (res.ok) setState('ok');
-      else if (res.status === 410) setState('expired');
+      if (res.ok) {
+        // A timely confirm re-executes the withdrawal; a click on an already-
+        // expired link is recorded as a "late confirm" (no re-broadcast).
+        const data = await res.json().catch(() => ({} as { status?: string }));
+        setState(data?.status === 'late_confirmed' ? 'late_confirmed' : 'ok');
+      } else if (res.status === 410) setState('expired');
       else if (res.status === 404) setState('notfound');
       else setState('error');
     } catch {
@@ -47,6 +51,14 @@ function ConfirmInner() {
       <div style={card}>
         <h2>Withdrawal confirmed ✅</h2>
         <p>Thanks — your withdrawal will be processed. The funds settle after Hive&apos;s standard 3-day savings delay.</p>
+      </div>
+    );
+  }
+  if (state === 'late_confirmed') {
+    return (
+      <div style={card}>
+        <h2>Thanks — noted it was you ✅</h2>
+        <p>This withdrawal had already expired, so it stays cancelled and your money is safe. We&apos;ve recorded that it was you. If you still want the funds, please request the withdrawal again.</p>
       </div>
     );
   }
