@@ -6,6 +6,7 @@ import 'react-toastify/dist/ReactToastify.css';
 import { useDropzone } from 'react-dropzone'; // For image picker
 import confetti from 'canvas-confetti';
 import Image from 'next/image';
+import { PrivateKey } from '@hiveio/dhive';
 import MiniWallet, { WalletReopenButton } from '@/app/components/MiniWallet';
 
 // Check if in dev/test environment
@@ -962,12 +963,23 @@ export default function HiveAccountCreationPage() {
         ? '*' // Allow any origin during local testing
         : 'https://indies.innopay.lu';
 
+      // Derive the REAL active private key from the master password — the same
+      // derivation the hub uses server-side (services/hive.ts generateHiveKeys:
+      // PrivateKey.fromLogin(account, master, 'active')). The spoke must store the
+      // active key, NEVER the master password (the owner-deriving secret — see
+      // SPOKE-KEY-SECURITY.md). The master password never leaves this page.
+      const activePrivateKey = PrivateKey.fromLogin(
+        results.accountName,
+        results.masterPassword,
+        'active',
+      ).toString();
+
       // Send message to the opener (indiesmenu)
       window.opener.postMessage(
         {
           type: 'INNOPAY_WALLET_CREATED',
           username: results.accountName,
-          activeKey: results.masterPassword, // For now, sending masterPassword as activeKey
+          activeKey: activePrivateKey,
         },
         targetOrigin
       );
