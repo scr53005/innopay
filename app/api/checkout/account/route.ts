@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { PrismaClient } from '@prisma/client';
 import { detectFlow, getRedirectUrl, FLOW_METADATA, type FlowContext } from '@/lib/flows';
+import { resolveSpokeCurrency } from '@/lib/spoke-currency';
 
 const prisma = new PrismaClient();
 
@@ -93,6 +94,12 @@ export async function POST(req: NextRequest) {
       restaurantAccount,  // Restaurant Hive account (for hub-and-spokes multi-restaurant)
     } = await req.json();
 
+    // Resolve the spoke's currency authoritatively (by spoke id, else recipient account).
+    // Defaults to EUR/EURO so internal/hub flows and unregistered spokes are unchanged.
+    // The resolved fiat sets the Stripe charge currency and is stamped into metadata for
+    // the webhook to consume.
+    const currencyConfig = await resolveSpokeCurrency({ spokeId: restaurantId, account: restaurantAccount });
+
     // DETECT FLOW using the systematic flow management system
     const flowContext: FlowContext = {
       hasLocalStorageAccount: hasLocalStorageAccount || false,
@@ -169,6 +176,7 @@ export async function POST(req: NextRequest) {
     const metadata: any = {
       flow: detectedFlow,  // Use detected flow instead of passed parameter
       flowCategory: flowMetadata.category,
+      fiat: currencyConfig.fiat,  // webhook resolves CurrencyConfig from this
       accountName,
       ...(redirectParams?.table && { table: redirectParams.table }),
     };
@@ -367,7 +375,7 @@ export async function POST(req: NextRequest) {
       line_items: [
         {
           price_data: {
-            currency: 'eur',
+            currency: currencyConfig.stripeCurrency,
             product_data: {
               name: productName,
               description: productDescription,

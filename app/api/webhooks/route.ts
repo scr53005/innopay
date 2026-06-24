@@ -43,7 +43,8 @@ import {
 } from '@/services/hive';
 
 // Import currency functions
-import { convertHbdToEur, getEurUsdRateServerSide, convertEurToHbd } from '@/services/currency';
+import { getUsdPerFiatServerSide } from '@/services/currency';
+import { getCurrencyConfig, convertFiatToHbd, type CurrencyConfig } from '@/lib/currency-config';
 
 // Import Prisma
 import prisma from '@/lib/prisma';
@@ -273,6 +274,7 @@ export async function POST(req: NextRequest) {
 async function handleGuestCheckout(session: Stripe.Checkout.Session) {
   console.log(`[GUEST] Processing guest checkout: ${session.id}`);
 
+  const currencyConfig = getCurrencyConfig(session.metadata?.fiat);
   const { hbdAmount, recipient, memo } = session.metadata!;
   const amountEuro = (session.amount_total || 0) / 100;
 
@@ -318,8 +320,8 @@ async function handleGuestCheckout(session: Stripe.Checkout.Session) {
       console.warn('[GUEST] Insufficient HBD, transferring EURO tokens instead');
       try {
         // Use the original EUR amount from Stripe (EURO tokens represent EUR 1:1)
-        const euroTxId = await transferEuroTokens(recipient, amountEuro, memo);
-        console.log(`[GUEST] EURO tokens transferred successfully: ${euroTxId}`);
+        const euroTxId = await transferEuroTokens(recipient, amountEuro, memo, currencyConfig.iouToken);
+        console.log(`[GUEST] ${currencyConfig.iouToken} tokens transferred successfully: ${euroTxId}`);
 
         // Try to record debt - innopay owes HBD to restaurant (non-blocking)
         try {
@@ -329,8 +331,10 @@ async function handleGuestCheckout(session: Stripe.Checkout.Session) {
               creditor: getRecipientForEnvironment(recipient),
               amount_hbd: hbdAmountNum,
               original_amount: hbdAmountNum,
+              fiat_currency: currencyConfig.fiat,
+              token_symbol: currencyConfig.iouToken,
               amount_euro: amountEuro,
-              euro_tx_id: euroTxId, // Use the EURO fallback TX as reference
+              euro_tx_id: euroTxId, // IOU token fallback TX reference
               eur_usd_rate: eurUsdRate,
               reason: 'guest_checkout',
               notes: `Guest checkout - HBD shortage at ${new Date().toISOString()}`
@@ -492,6 +496,7 @@ async function handleFlow7UnifiedApproach(
   restaurantAccount: string,
   restaurantId: string
 ) {
+  const currencyConfig = getCurrencyConfig(session.metadata?.fiat);
   console.log(`[FLOW 7] ========================================`);
   console.warn(`[FLOW 7] Unified approach: topup=${topupAmount}€, order=${orderCost}€`);
   console.warn(`[FLOW 7] Payment routing: ${accountName} → ${restaurantAccount} (spoke: ${restaurantId}), order=${orderCost}€, memo=${orderMemo}`);
@@ -503,10 +508,10 @@ async function handleFlow7UnifiedApproach(
   let restaurantHbdTxId: string | undefined;
 
   try {
-    // Fetch EUR/USD rate for HBD conversion
-    const rateData = await getEurUsdRateServerSide();
+    // Fetch USD-per-fiat for HBD conversion
+    const rateData = await getUsdPerFiatServerSide(currencyConfig.fiat);
     const eurUsdRate = rateData.conversion_rate;
-    const hbdAmountForOrder = convertEurToHbd(orderCost, eurUsdRate);
+    const hbdAmountForOrder = convertFiatToHbd(orderCost, eurUsdRate);
 
     console.log(`[FLOW 7] Calculated HBD amount for order: ${hbdAmountForOrder} (rate: ${eurUsdRate})`);
 
@@ -526,6 +531,8 @@ async function handleFlow7UnifiedApproach(
             creditor: getRecipientForEnvironment(restaurantAccount),
             amount_hbd: hbdAmountForOrder,
             original_amount: hbdAmountForOrder,
+            fiat_currency: currencyConfig.fiat,
+            token_symbol: currencyConfig.iouToken,
             amount_euro: orderCost,
             euro_tx_id: 'FLOW7_ORDER',
             eur_usd_rate: eurUsdRate,
@@ -538,9 +545,9 @@ async function handleFlow7UnifiedApproach(
         console.error('[FLOW 7] WARNING: Failed to record debt:', debtError);
       }
 
-      console.log(`[FLOW 7] Attempting EURO token transfer with memo:`, orderMemo);
-      restaurantEuroTxId = await transferEuroTokens(restaurantAccount, orderCost, orderMemo);
-      console.log(`[FLOW 7] ✅ EURO tokens transferred to restaurant: ${restaurantEuroTxId}`);
+      console.log(`[FLOW 7] Attempting ${currencyConfig.iouToken} token transfer with memo:`, orderMemo);
+      restaurantEuroTxId = await transferEuroTokens(restaurantAccount, orderCost, orderMemo, currencyConfig.iouToken);
+      console.log(`[FLOW 7] ✅ ${currencyConfig.iouToken} tokens transferred to restaurant: ${restaurantEuroTxId}`);
     }
   } catch (orderError: any) {
     console.error(`[FLOW 7] ❌ Restaurant payment to ${restaurantAccount} failed:`, orderError);
@@ -563,13 +570,13 @@ async function handleFlow7UnifiedApproach(
     console.log(`[FLOW 7] Step 3: Positive change - transferring ${change}€ to ${accountName}`);
 
     const changeMemo = 'Monnaie / Change';
-    changeTxId = await transferEuroTokens(accountName, change, changeMemo);
-    console.log(`[FLOW 7] ✅ Change EURO transferred to customer: ${changeTxId}`);
+    changeTxId = await transferEuroTokens(accountName, change, changeMemo, currencyConfig.iouToken);
+    console.log(`[FLOW 7] ✅ Change ${currencyConfig.iouToken} transferred to customer: ${changeTxId}`);
 
     // Also try to transfer HBD change
-    const rateData = await getEurUsdRateServerSide();
+    const rateData = await getUsdPerFiatServerSide(currencyConfig.fiat);
     const eurUsdRate = rateData.conversion_rate;
-    const hbdChange = convertEurToHbd(change, eurUsdRate);
+    const hbdChange = convertFiatToHbd(change, eurUsdRate);
 
     try {
       changeHbdTxId = await transferHbd(accountName, hbdChange, changeMemo);
@@ -583,6 +590,8 @@ async function handleFlow7UnifiedApproach(
             creditor: accountName,
             amount_hbd: hbdChange,
             original_amount: hbdChange,
+            fiat_currency: currencyConfig.fiat,
+            token_symbol: currencyConfig.iouToken,
             amount_euro: change,
             euro_tx_id: changeTxId,
             eur_usd_rate: eurUsdRate,
@@ -607,8 +616,8 @@ async function handleFlow7UnifiedApproach(
     const deficitMemo = 'Paiement manquant / Missing payment';
 
     try {
-      changeTxId = await transferEuroTokensFromAccount(accountName, 'innopay', deficit, deficitMemo);
-      console.log(`[FLOW 7] ✅ Deficit EURO transferred from customer to innopay: ${changeTxId}`);
+      changeTxId = await transferEuroTokensFromAccount(accountName, 'innopay', deficit, deficitMemo, currencyConfig.iouToken);
+      console.log(`[FLOW 7] ✅ Deficit ${currencyConfig.iouToken} transferred from customer to innopay: ${changeTxId}`);
     } catch (deficitError: any) {
       console.error(`[FLOW 7] ❌ Deficit transfer failed:`, deficitError.message);
       // Don't throw - order was already paid to restaurant, this is just reconciliation
@@ -720,6 +729,7 @@ async function handleFlow2PureTopup(
   customerEmail: string | null | undefined,
   walletUser: any
 ) {
+  const currencyConfig = getCurrencyConfig(session.metadata?.fiat);
   const topupMemo = 'Solde mis à jour! / Balance updated!';
 
   let userTxId: string | undefined;
@@ -727,12 +737,12 @@ async function handleFlow2PureTopup(
 
   // Transfer entire topup amount to customer
   if (amountEuro > 0) {
-    console.warn(`[FLOW 2] Transferring ${amountEuro} EURO tokens to ${accountName} with memo: ${topupMemo}`);
-    userTxId = await transferEuroTokens(accountName, amountEuro, topupMemo);
-    console.warn(`[FLOW 2] ✅ EURO transferred: ${userTxId}`);
+    console.warn(`[FLOW 2] Transferring ${amountEuro} ${currencyConfig.iouToken} tokens to ${accountName} with memo: ${topupMemo}`);
+    userTxId = await transferEuroTokens(accountName, amountEuro, topupMemo, currencyConfig.iouToken);
+    console.warn(`[FLOW 2] ✅ ${currencyConfig.iouToken} transferred: ${userTxId}`);
 
     // CRITICAL: Also transfer HBD to user
-    const rateData = await getEurUsdRateServerSide();
+    const rateData = await getUsdPerFiatServerSide(currencyConfig.fiat);
     const eurUsdRate = rateData.conversion_rate;
     const requiredHbd = amountEuro * eurUsdRate;
 
@@ -773,6 +783,8 @@ async function handleFlow2PureTopup(
               creditor: accountName,
               amount_hbd: requiredHbd,
               original_amount: requiredHbd,
+              fiat_currency: currencyConfig.fiat,
+              token_symbol: currencyConfig.iouToken,
               amount_euro: amountEuro,
               euro_tx_id: userTxId || 'TOPUP',
               eur_usd_rate: eurUsdRate,
@@ -796,6 +808,8 @@ async function handleFlow2PureTopup(
             creditor: accountName,
             amount_hbd: requiredHbd,
             original_amount: requiredHbd,
+            fiat_currency: currencyConfig.fiat,
+            token_symbol: currencyConfig.iouToken,
             amount_euro: amountEuro,
             euro_tx_id: userTxId || 'TOPUP',
             eur_usd_rate: eurUsdRate,
@@ -885,7 +899,8 @@ async function processRestaurantPayment(
   restaurantAccount: string,
   orderCost: number,
   orderMemo: string | undefined,
-  sessionId: string
+  sessionId: string,
+  currencyConfig: CurrencyConfig
 ): Promise<{ hbdTxId?: string; euroTxId?: string }> {
   const timestamp = new Date().toISOString();
 
@@ -914,10 +929,10 @@ async function processRestaurantPayment(
   let restaurantEuroTxId: string | undefined;
 
   try {
-    // Fetch current EUR/USD rate
-    const rateData = await getEurUsdRateServerSide();
+    // Fetch current USD-per-fiat rate
+    const rateData = await getUsdPerFiatServerSide(currencyConfig.fiat);
     const eurUsdRate = rateData.conversion_rate;
-    const hbdAmountForOrder = convertEurToHbd(orderCost, eurUsdRate);
+    const hbdAmountForOrder = convertFiatToHbd(orderCost, eurUsdRate);
 
     console.log(`[${timestamp}] [RESTAURANT PAYMENT] Calculated HBD amount: ${hbdAmountForOrder} (rate: ${eurUsdRate})`);
 
@@ -931,22 +946,24 @@ async function processRestaurantPayment(
       console.warn(`[${timestamp}] [RESTAURANT PAYMENT] ⚠️ HBD transfer failed, using EURO token fallback:`, hbdError.message);
 
       // Transfer EURO tokens as fallback
-      console.log(`[${timestamp}] [RESTAURANT PAYMENT] 🔄 Attempting EURO token transfer with memo:`, orderMemo);
-      restaurantEuroTxId = await transferEuroTokens(restaurantAccount, orderCost, orderMemo);
-      console.log(`[${timestamp}] [RESTAURANT PAYMENT] ✅ EURO tokens transferred to restaurant: ${restaurantEuroTxId}`);
+      console.log(`[${timestamp}] [RESTAURANT PAYMENT] 🔄 Attempting ${currencyConfig.iouToken} token transfer with memo:`, orderMemo);
+      restaurantEuroTxId = await transferEuroTokens(restaurantAccount, orderCost, orderMemo, currencyConfig.iouToken);
+      console.log(`[${timestamp}] [RESTAURANT PAYMENT] ✅ ${currencyConfig.iouToken} tokens transferred to restaurant: ${restaurantEuroTxId}`);
 
-      // Record debt with the actual EURO tx ID from the fallback transfer
+      // Record debt with the actual IOU-token tx ID from the fallback transfer
       try {
         await prisma.outstanding_debt.create({
           data: {
             creditor: getRecipientForEnvironment(restaurantAccount),
             amount_hbd: hbdAmountForOrder,
             original_amount: hbdAmountForOrder,
+            fiat_currency: currencyConfig.fiat,
+            token_symbol: currencyConfig.iouToken,
             amount_euro: orderCost,
             euro_tx_id: restaurantEuroTxId,
             eur_usd_rate: eurUsdRate,
             reason: 'restaurant_order_payment',
-            notes: `HBD shortage at ${timestamp} - Paid with EURO instead. Stripe session: ${sessionId}`
+            notes: `HBD shortage at ${timestamp} - Paid with ${currencyConfig.iouToken} instead. Stripe session: ${sessionId}`
           }
         });
         console.log(`📝 [DEBT] Recorded ${hbdAmountForOrder} HBD debt to restaurant ${restaurantAccount}`);
@@ -967,6 +984,7 @@ async function processRestaurantPayment(
 // ========================================
 async function handleAccountCreation(session: Stripe.Checkout.Session) {
   const timestamp = new Date().toISOString();
+  const currencyConfig = getCurrencyConfig(session.metadata?.fiat);
   console.log(`[${timestamp}] [WEBHOOK ACCOUNT] ========================================`);
   console.log(`[${timestamp}] [WEBHOOK ACCOUNT] Processing account creation: ${session.id}`);
   console.log(`[${timestamp}] [WEBHOOK ACCOUNT] Full metadata:`, JSON.stringify(session.metadata, null, 2));
@@ -1029,7 +1047,8 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
       targetRestaurant,
       orderCost,
       orderMemo,
-      session.id
+      session.id,
+      currencyConfig
     );
     restaurantHbdTxId = paymentResult.hbdTxId;
     restaurantEuroTxId = paymentResult.euroTxId;
@@ -1212,16 +1231,16 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
 
   console.log(`[ACCOUNT] Using transfer memo for flow '${flow}': ${transferMemo}`);
 
-  // Transfer EURO tokens to user (for display purposes, like casino chips)
-  const euroTxId = await transferEuroTokens(accountName, totalEuro, transferMemo);
-  console.log(`[ACCOUNT] EURO tokens transferred to user: ${euroTxId}`);
+  // Transfer IOU tokens to user (for display purposes, like casino chips)
+  const euroTxId = await transferEuroTokens(accountName, totalEuro, transferMemo, currencyConfig.iouToken);
+  console.log(`[ACCOUNT] ${currencyConfig.iouToken} tokens transferred to user: ${euroTxId}`);
 
   // Transfer HBD to user (real value that user paid for)
   let userHbdTxId: string | undefined;
   if (totalEuro > 0) {
-    const rateData = await getEurUsdRateServerSide();
+    const rateData = await getUsdPerFiatServerSide(currencyConfig.fiat);
     const eurUsdRate = rateData.conversion_rate;
-    const hbdAmount = convertEurToHbd(totalEuro, eurUsdRate);
+    const hbdAmount = convertFiatToHbd(totalEuro, eurUsdRate);
 
     try {
       userHbdTxId = await transferHbd(accountName, hbdAmount, transferMemo);
@@ -1236,6 +1255,8 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
             creditor: accountName,
             amount_hbd: hbdAmount,
             original_amount: hbdAmount,
+            fiat_currency: currencyConfig.fiat,
+            token_symbol: currencyConfig.iouToken,
             amount_euro: totalEuro,
             euro_tx_id: euroTxId,
             eur_usd_rate: eurUsdRate,

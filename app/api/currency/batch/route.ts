@@ -83,6 +83,7 @@ async function fetchRatesForDates(dates: string[]): Promise<Map<string, number>>
     const existingRates = await prisma.currencyConversion.findMany({
       where: {
         date: { in: dateObjects },
+        pair: 'EUR/USD',
       },
     });
 
@@ -102,6 +103,7 @@ async function fetchRatesForDates(dates: string[]): Promise<Map<string, number>>
       const nearestRate = await prisma.currencyConversion.findFirst({
         where: {
           date: { lte: new Date(dateStr + 'T23:59:59.999Z') },
+          pair: 'EUR/USD',
         },
         orderBy: { date: 'desc' },
       });
@@ -111,6 +113,7 @@ async function fetchRatesForDates(dates: string[]): Promise<Map<string, number>>
       } else {
         // No rate before this date — try the earliest available
         const earliestRate = await prisma.currencyConversion.findFirst({
+          where: { pair: 'EUR/USD' },
           orderBy: { date: 'asc' },
         });
         if (earliestRate) {

@@ -25,6 +25,7 @@ export async function GET(request: Request) {
   let latestRate;
   try {
     latestRate = await prisma.currencyConversion.findFirst({
+      where: { pair: 'EUR/USD' },
       orderBy: { date: 'desc' },
     });
   } catch (dbError) {
@@ -75,7 +76,7 @@ export async function GET(request: Request) {
     // Step 4: Check if ECB date already exists in the database
     try {
       const existingEcbRate = await prisma.currencyConversion.findUnique({
-        where: { date: ecbDate },
+        where: { date_pair: { date: ecbDate, pair: 'EUR/USD' } },
       });
       if (existingEcbRate) {
         return NextResponse.json({
@@ -97,6 +98,7 @@ export async function GET(request: Request) {
       await prisma.currencyConversion.create({
         data: {
           date: ecbDate,
+          pair: 'EUR/USD',
           conversionRate: rate,
         },
       });

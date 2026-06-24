@@ -426,7 +426,7 @@ export async function updateHiveAccountMetadata(
  * @param {string} memo - Optional custom memo for the transfer. Defaults to generic top-up message.
  * @returns {Promise<string>} The transaction ID of the transfer.
  */
-export async function transferEuroTokens(toAccount: string, amountInEuro: number, memo?: string): Promise<string> {
+export async function transferEuroTokens(toAccount: string, amountInEuro: number, memo?: string, tokenSymbol: string = 'EURO'): Promise<string> {
   // --- Step 1: Override recipient for dev environment ---
   const recipient = getRecipientForEnvironment(toAccount);
 
@@ -439,14 +439,16 @@ export async function transferEuroTokens(toAccount: string, amountInEuro: number
   }
 
   // --- Step 3: Construct the Hive-Engine transfer payload ---
+  // tokenSymbol defaults to 'EURO' (legacy/EUR spokes); RON spokes pass 'LEI'. Both are
+  // innopay-issued IOU tokens pegged 1:1 to their fiat with 2-decimal quantities.
   const transferPayload = {
     contractName: 'tokens',
     contractAction: 'transfer',
     contractPayload: {
-      symbol: 'EURO',
+      symbol: tokenSymbol,
       to: recipient,
       quantity: amountInEuro.toFixed(2), // Hive-Engine amounts are typically fixed-point with 8 decimals
-      memo: memo || `Top-up via Innopay for ${amountInEuro} EUR.`,
+      memo: memo || `Top-up via Innopay for ${amountInEuro}.`,
     },
   };
 
@@ -477,7 +479,7 @@ export async function transferEuroTokens(toAccount: string, amountInEuro: number
   };
 
   // --- Step 5: Sign and broadcast the transaction ---
-  console.log(`Broadcasting EURO token transfer of ${amountInEuro} to account '${recipient}' (original: ${toAccount}).`);
+  console.log(`Broadcasting ${tokenSymbol} token transfer of ${amountInEuro} to account '${recipient}' (original: ${toAccount}).`);
   const signedTransaction = hiveClient.broadcast.sign(baseTransaction, [PrivateKey.fromString(innopayPrivateKey)]);
   const broadcastResult = await hiveClient.broadcast.send(signedTransaction);
 
@@ -615,7 +617,8 @@ export async function transferEuroTokensFromAccount(
   fromAccount: string,
   toAccount: string,
   amountInEuro: number,
-  memo: string
+  memo: string,
+  tokenSymbol: string = 'EURO'
 ): Promise<string> {
   // --- Step 1: Override recipient for dev environment ---
   const recipient = getRecipientForEnvironment(toAccount);
@@ -628,11 +631,12 @@ export async function transferEuroTokensFromAccount(
   }
 
   // --- Step 3: Construct the Hive-Engine transfer payload ---
+  // tokenSymbol defaults to 'EURO' (legacy/EUR spokes); RON spokes pass 'LEI'.
   const transferPayload = {
     contractName: 'tokens',
     contractAction: 'transfer',
     contractPayload: {
-      symbol: 'EURO',
+      symbol: tokenSymbol,
       to: recipient,
       quantity: amountInEuro.toFixed(2),
       memo: memo,
@@ -666,7 +670,7 @@ export async function transferEuroTokensFromAccount(
   };
 
   // --- Step 5: Sign and broadcast the transaction using innopay's authority ---
-  console.log(`Broadcasting EURO token transfer of ${amountInEuro} from '${fromAccount}' to '${recipient}'.`);
+  console.log(`Broadcasting ${tokenSymbol} token transfer of ${amountInEuro} from '${fromAccount}' to '${recipient}'.`);
   const signedTransaction = hiveClient.broadcast.sign(baseTransaction, [PrivateKey.fromString(innopayPrivateKey)]);
   const broadcastResult = await hiveClient.broadcast.send(signedTransaction);
 

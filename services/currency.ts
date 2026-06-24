@@ -1,5 +1,9 @@
 // services/currency.ts
-// Currency conversion utilities for EUR/USD rate
+// Currency conversion utilities. Originally EUR/USD-only; generalized to any ECB fiat
+// (EUR, RON, …) for the multi-currency engine. The pure descriptor + math live in
+// lib/currency-config.ts; this module is the I/O layer (ECB fetch + DB cache).
+
+import { deriveUsdPerFiat } from '../lib/currency-config';
 
 // Interface for the return type
 export interface CurrencyRate {
@@ -43,6 +47,9 @@ export async function getLatestEurUsdRate(today: Date): Promise<CurrencyRate> {
  * @param hbdAmount - Amount in HBD (which equals USD)
  * @param eurUsdRate - EUR to USD exchange rate
  * @returns Amount in EUR
+ *
+ * NOTE: retained for the existing EUR call sites. New/multi-currency code should prefer
+ * convertHbdToFiat(hbdAmount, usdPerFiat) from lib/currency-config (identical math for EUR).
  */
 export function convertHbdToEur(hbdAmount: number, eurUsdRate: number): number {
   if (eurUsdRate === 0) {
@@ -59,6 +66,9 @@ export function convertHbdToEur(hbdAmount: number, eurUsdRate: number): number {
  * @param eurAmount - Amount in EUR
  * @param eurUsdRate - EUR to USD exchange rate
  * @returns Amount in HBD (USD equivalent)
+ *
+ * NOTE: retained for the existing EUR call sites. New/multi-currency code should prefer
+ * convertFiatToHbd(fiatAmount, usdPerFiat) from lib/currency-config (identical math for EUR).
  */
 export function convertEurToHbd(eurAmount: number, eurUsdRate: number): number {
   // To convert EUR to USD (HBD), multiply by the rate
@@ -67,22 +77,43 @@ export function convertEurToHbd(eurAmount: number, eurUsdRate: number): number {
 }
 
 /**
- * Server-side function to fetch EUR/USD rate directly from ECB or database
- * This bypasses the API route for server-side usage
- * @param today - The date to fetch the rate for (optional, defaults to today)
- * @returns CurrencyRate object
+ * Parse the ECB daily reference XML into a { CURRENCY: ratePerEur } map plus the ECB
+ * reference date. Each cube entry is "units of <currency> per 1 EUR" (USD 1.0834, …).
  */
-export async function getEurUsdRateServerSide(today?: Date): Promise<CurrencyRate> {
+function parseEcbRates(parsed: any): { ratesPerEur: Record<string, number>; ecbDate: Date } {
+  const inner = parsed['gesmes:Envelope']['Cube'][0]['Cube'][0];
+  const cube = inner['Cube'];
+  const ratesPerEur: Record<string, number> = {};
+  for (const entry of cube) {
+    const cur = entry['$'].currency;
+    const rate = parseFloat(entry['$'].rate);
+    if (cur && !Number.isNaN(rate)) ratesPerEur[cur] = rate;
+  }
+  return { ratesPerEur, ecbDate: new Date(inner['$'].time) };
+}
+
+/**
+ * Server-side: fetch/cache "USD per 1 unit of <fiat>" (= usdPerFiat, what
+ * convertFiatToHbd consumes, since 1 HBD ≈ 1 USD). Generalizes the original EUR/USD
+ * logic to any ECB-listed fiat. Rates are cached per (date, pair) in currency_conversion;
+ * EUR rows keep pair 'EUR/USD' so legacy data and behavior are unchanged.
+ *
+ * @param fiat - 'EUR' | 'RON' | … (defaults to 'EUR')
+ * @param today - target date (optional)
+ */
+export async function getUsdPerFiatServerSide(fiat: string = 'EUR', today?: Date): Promise<CurrencyRate> {
+  const pair = `${fiat.trim().toUpperCase()}/USD`;
   const targetDate = today || new Date();
   const todayStr = targetDate.toISOString().split('T')[0];
 
-  // Import prisma dynamically to avoid issues in client components
+  // Import prisma dynamically to avoid issues in client components / test/script chains
   const { default: prisma } = await import('@/lib/prisma');
   const { parseStringPromise } = await import('xml2js');
 
-  // Step 1: Check database for existing rate
+  // Step 1: latest cached rate for THIS pair
   try {
     const latestRate = await prisma.currencyConversion.findFirst({
+      where: { pair },
       orderBy: { date: 'desc' },
     });
 
@@ -94,30 +125,25 @@ export async function getEurUsdRateServerSide(today?: Date): Promise<CurrencyRat
       };
     }
   } catch (dbError) {
-    console.warn('Failed to fetch rate from DB:', dbError);
+    console.warn(`[CURRENCY] Failed to fetch ${pair} rate from DB:`, dbError);
   }
 
-  // Step 2: Fetch from ECB if not in database
+  // Step 2: Fetch from ECB if not cached for today
   try {
     const response = await fetch('https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml');
     if (response.ok) {
       const xml = await response.text();
       const parsed = await parseStringPromise(xml);
-      const cube = parsed['gesmes:Envelope']['Cube'][0]['Cube'][0]['Cube'];
-      const usdRate = cube.find((entry: any) => entry['$'].currency === 'USD')['$'].rate;
-      const ecbDateStr = parsed['gesmes:Envelope']['Cube'][0]['Cube'][0]['$'].time;
+      const { ratesPerEur, ecbDate } = parseEcbRates(parsed);
+      const usdPerFiat = deriveUsdPerFiat(ratesPerEur, fiat);
 
-      const rate = parseFloat(usdRate);
-      const ecbDate = new Date(ecbDateStr);
-
-      // Step 3: Check if this ECB date already exists in database
-      let existingRate = null;
+      // Step 3: Check if this (date, pair) already exists
       try {
-        existingRate = await prisma.currencyConversion.findUnique({
-          where: { date: ecbDate },
+        const existingRate = await prisma.currencyConversion.findUnique({
+          where: { date_pair: { date: ecbDate, pair } },
         });
         if (existingRate) {
-          console.log('[CURRENCY] ECB rate for date already in DB:', ecbDate.toISOString().split('T')[0]);
+          console.log(`[CURRENCY] ${pair} rate for date already in DB:`, ecbDate.toISOString().split('T')[0]);
           return {
             date: existingRate.date.toISOString(),
             conversion_rate: parseFloat(existingRate.conversionRate.toString()),
@@ -125,44 +151,50 @@ export async function getEurUsdRateServerSide(today?: Date): Promise<CurrencyRat
           };
         }
       } catch (dbCheckError) {
-        console.warn('[CURRENCY] Failed to check for existing ECB date:', dbCheckError);
+        console.warn(`[CURRENCY] Failed to check existing ${pair} date:`, dbCheckError);
       }
 
-      // Step 4: Determine if rate is fresh (ECB date matches requested date)
       const isFresh = ecbDate.toISOString().split('T')[0] === todayStr;
 
-      // Step 5: Save the new rate to database
+      // Step 4: Persist the new rate
       try {
         await prisma.currencyConversion.create({
-          data: {
-            date: ecbDate,
-            conversionRate: rate,
-          },
+          data: { date: ecbDate, pair, conversionRate: usdPerFiat },
         });
-        console.log('[CURRENCY] Saved new ECB rate to DB:', ecbDate.toISOString().split('T')[0], 'Rate:', rate);
+        console.log(`[CURRENCY] Saved new ${pair} rate to DB:`, ecbDate.toISOString().split('T')[0], 'Rate:', usdPerFiat);
       } catch (dbSaveError: any) {
         if (dbSaveError.code === 'P2002') {
-          console.warn('[CURRENCY] ECB rate already exists (race condition):', ecbDate.toISOString().split('T')[0]);
+          console.warn(`[CURRENCY] ${pair} rate already exists (race condition):`, ecbDate.toISOString().split('T')[0]);
         } else {
-          console.warn('[CURRENCY] Failed to save ECB rate to DB:', dbSaveError);
+          console.warn(`[CURRENCY] Failed to save ${pair} rate to DB:`, dbSaveError);
         }
         // Continue even if save fails - we still have the rate
       }
 
       return {
         date: ecbDate.toISOString(),
-        conversion_rate: rate,
+        conversion_rate: usdPerFiat,
         isFresh,
       };
     }
   } catch (error) {
-    console.warn('[CURRENCY] Failed to fetch from ECB:', error);
+    console.warn(`[CURRENCY] Failed to fetch/derive ${pair} from ECB:`, error);
   }
 
-  // Fallback to 1.0
+  // Fallback: EUR preserves the historical 1.0 fallback; non-EUR has no safe guess, so we
+  // return 0 (→ convertFiatToHbd yields 0 → no HBD leg → full IOU-token fallback + debt).
+  // Callers must treat a 0/stale rate as "could not price in HBD" (hardened in Step 4).
   return {
     date: targetDate.toISOString(),
-    conversion_rate: 1.0,
+    conversion_rate: fiat.trim().toUpperCase() === 'EUR' ? 1.0 : 0,
     isFresh: false,
   };
+}
+
+/**
+ * Backward-compatible EUR/USD accessor (USD per 1 EUR). Delegates to the generic fn so
+ * existing EUR call sites are byte-identical.
+ */
+export async function getEurUsdRateServerSide(today?: Date): Promise<CurrencyRate> {
+  return getUsdPerFiatServerSide('EUR', today);
 }

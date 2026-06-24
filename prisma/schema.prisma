@@ -98,10 +98,14 @@ model guestcheckout {
 
 model currencyConversion {
   id             Int      @id @default(autoincrement())
-  date           DateTime @unique
+  date           DateTime
+  // Exchange pair this row caches, e.g. 'EUR/USD' (legacy default) or 'RON/USD'.
+  // conversionRate is stored as "USD per 1 unit of the pair's fiat" (usdPerFiat).
+  pair           String   @default("EUR/USD") @db.VarChar(12)
   conversionRate Decimal  @db.Decimal(10, 6)
   createdAt      DateTime @default(now())
 
+  @@unique([date, pair])
   @@map("currency_conversion")
 }
 
@@ -134,6 +138,12 @@ model outstanding_debt {
   debtor          String    @default("innopay") @db.VarChar(16)
   amount_hbd      Decimal   @default(0) @db.Decimal(10, 3)
   original_amount Decimal?  @db.Decimal(10, 3) // immutable — set at creation, null for legacy rows until backfilled
+  // For multi-currency: fiat_currency/token_symbol say how to read the (historically
+  // EUR-named) amount_euro, euro_tx_id and eur_usd_rate columns. Defaults preserve all
+  // existing rows as EUR/EURO; RON spokes write 'RON'/'LEI' and those columns then hold
+  // the RON amount, LEI tx id and RON/USD rate respectively. amount_hbd stays canonical.
+  fiat_currency   String    @default("EUR") @db.VarChar(8)
+  token_symbol    String    @default("EURO") @db.VarChar(16)
   amount_euro     Decimal?  @db.Decimal(10, 2)
   euro_tx_id      String?   @db.Char(40)
   hbd_tx_id       String?   @db.Char(40)
@@ -210,6 +220,12 @@ model spoke {
 
   // Features & Capabilities
   has_delivery Boolean @default(false)
+
+  // Currency — the fiat this spoke prices in + its 1:1 Hive-Engine IOU token.
+  // Defaults keep every existing spoke on EUR/EURO; non-Eurozone spokes override
+  // (e.g. zenbar → RON/LEI). Authoritative source for the engine's CurrencyConfig.
+  fiat_currency String @default("EUR") @db.VarChar(8)
+  iou_token     String @default("EURO") @db.VarChar(16)
 
   // Status
   active  Boolean @default(true)

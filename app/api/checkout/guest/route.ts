@@ -1,7 +1,9 @@
 // app/api/checkout/guest/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { convertEurToHbd, getEurUsdRateServerSide } from '@/services/currency';
+import { getUsdPerFiatServerSide } from '@/services/currency';
+import { convertFiatToHbd } from '@/lib/currency-config';
+import { resolveSpokeCurrency } from '@/lib/spoke-currency';
 import { createGuestCheckout } from '@/services/database';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -125,14 +127,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Fetch EUR/USD rate server-side
-    const { conversion_rate: eurUsdRate } = await getEurUsdRateServerSide();
+    // Resolve the spoke's currency authoritatively from the recipient Hive account.
+    // Defaults to EUR/EURO (legacy behavior) for any unregistered recipient.
+    const currencyConfig = await resolveSpokeCurrency({ account: recipient });
 
-    // Convert EUR to HBD (HBD ≈ USD)
-    const hbdAmount = convertEurToHbd(amountEuro, eurUsdRate);
-    const amountCents = Math.round(amountEuro * 100); // Convert to cents for Stripe
+    // Fetch USD-per-fiat server-side and convert the fiat cart total to HBD (HBD ≈ USD).
+    // `amountEuro` is the cart total in the spoke's fiat (EUR or RON).
+    const { conversion_rate: usdPerFiat } = await getUsdPerFiatServerSide(currencyConfig.fiat);
 
-    console.log(`Guest checkout: ${amountEuro.toFixed(2)} EUR → ${hbdAmount.toFixed(3)} HBD (rate: ${eurUsdRate})`);
+    const hbdAmount = convertFiatToHbd(amountEuro, usdPerFiat);
+    const amountCents = Math.round(amountEuro * 100); // smallest unit; EUR & RON are both 2-decimal
+
+    console.log(`Guest checkout: ${amountEuro.toFixed(2)} ${currencyConfig.fiat} → ${hbdAmount.toFixed(3)} HBD (usdPerFiat: ${usdPerFiat})`);
 
     // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
@@ -140,7 +146,7 @@ export async function POST(req: NextRequest) {
       line_items: [
         {
           price_data: {
-            currency: 'eur',
+            currency: currencyConfig.stripeCurrency,
             product_data: {
               name: 'Order Payment',
               description: `Payment for order at ${recipient}`,
@@ -155,6 +161,7 @@ export async function POST(req: NextRequest) {
       cancel_url: cancelUrl,
       metadata: {
         flow: 'guest_checkout',
+        fiat: currencyConfig.fiat,
         amountEuro: amountEuro.toString(),
         hbdAmount: hbdAmount.toFixed(3),
         recipient,
