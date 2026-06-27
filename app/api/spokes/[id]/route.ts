@@ -27,6 +27,8 @@ export async function GET(
         attribute_storage_key_1: true,
         active: true,
         ready: true,
+        fiat_currency: true,
+        iou_token: true,
       },
     });
 

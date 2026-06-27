@@ -32,6 +32,30 @@ describe('getCurrencyConfig', () => {
   });
 });
 
+describe('minimum-amount floors', () => {
+  it('keeps the original EUR floors (15 top-up / 3 account creation)', () => {
+    expect(EUR_CONFIG.minTopup).toBe(15);
+    expect(EUR_CONFIG.minAccountCreation).toBe(3);
+  });
+
+  it('uses RON floors of EUR × 6 (90 / 18)', () => {
+    expect(RON_CONFIG.minTopup).toBe(90);
+    expect(RON_CONFIG.minAccountCreation).toBe(18);
+  });
+
+  it('carries the right display symbol and round increment per currency', () => {
+    expect(EUR_CONFIG.symbol).toBe('€');
+    expect(EUR_CONFIG.roundIncrement).toBe(5);
+    expect(RON_CONFIG.symbol).toBe('lei');
+    expect(RON_CONFIG.roundIncrement).toBe(30);
+  });
+
+  it('falls back to EUR floors for an unknown currency', () => {
+    expect(getCurrencyConfig('GBP').minTopup).toBe(15);
+    expect(getCurrencyConfig('GBP').minAccountCreation).toBe(3);
+  });
+});
+
 describe('currencyConfigFromSpoke', () => {
   it('resolves by fiat when the DB token matches the registry', () => {
     expect(currencyConfigFromSpoke('RON', 'LEI')).toEqual(RON_CONFIG);

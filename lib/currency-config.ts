@@ -25,6 +25,22 @@ export interface CurrencyConfig {
   stripeCurrency: string;
   /** ECB-derived exchange pair vs USD used to convert fiat ↔ HBD, e.g. 'EUR/USD' | 'RON/USD'. */
   ratePair: string;
+  /**
+   * Minimum top-up amount in fiat units. Floors are denominated per-currency (a flat
+   * "Stripe-fee-viable" value), NOT rate-derived — a rate-derived minimum would wobble
+   * daily and produce confusing, moving error messages. RON ≈ EUR × 6 (RON ~5.2/EUR and
+   * sliding; 6 leaves headroom).
+   */
+  minTopup: number;
+  /** Minimum account-creation amount in fiat units (same per-currency rationale as minTopup). */
+  minAccountCreation: number;
+  /** Display symbol for UI money strings, e.g. '€' | 'lei'. */
+  symbol: string;
+  /**
+   * Increment the top-up prefill rounds up to (fiat units). A UI nicety so suggested amounts
+   * land on tidy values (EUR → nearest 5; RON → nearest 30, ≈ EUR × 6). Not a correctness gate.
+   */
+  roundIncrement: number;
 }
 
 // EUR is the original instance and the system-wide default (backward compatibility).
@@ -33,6 +49,10 @@ export const EUR_CONFIG: CurrencyConfig = {
   iouToken: 'EURO',
   stripeCurrency: 'eur',
   ratePair: 'EUR/USD',
+  minTopup: 15,
+  minAccountCreation: 3,
+  symbol: '€',
+  roundIncrement: 5,
 };
 
 // RON is additive — used only by spokes whose `spoke.fiat_currency = 'RON'` (Zenbar).
@@ -41,6 +61,10 @@ export const RON_CONFIG: CurrencyConfig = {
   iouToken: 'LEI',
   stripeCurrency: 'ron',
   ratePair: 'RON/USD',
+  minTopup: 90, // EUR 15 × 6
+  minAccountCreation: 18, // EUR 3 × 6
+  symbol: 'lei',
+  roundIncrement: 30, // EUR 5 × 6
 };
 
 export const DEFAULT_CURRENCY: CurrencyConfig = EUR_CONFIG;

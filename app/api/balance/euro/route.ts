@@ -1,18 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getLatestEurUsdRate } from '@/services/currency';
+import { getUsdPerFiatServerSide } from '@/services/currency';
 
 /**
- * GET /api/balance/euro?account=<accountName>
- * Fetches EURO token balance with robust fallback mechanism
+ * GET /api/balance/euro?account=<accountName>&token=<EURO|LEI>&fiat=<EUR|RON>
+ * Fetches the customer's IOU-token balance with a robust fallback mechanism.
+ *
+ * `token`/`fiat` are optional and default to EURO/EUR, so existing callers (the Luxembourg
+ * spokes) are unchanged; RON spokes (Zenbar) pass token=LEI&fiat=RON to read the right token
+ * and convert the HBD fallback at the RON rate instead of EUR.
  *
  * Strategy:
  * 1. Try multiple Hive-Engine endpoints with 2-second timeout each
- * 2. Fallback to HBD balance from Hive blockchain (converted to EUR)
+ * 2. Fallback to HBD balance from Hive blockchain (converted to fiat)
  * 3. Return error only if all APIs fail
  */
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const accountName = searchParams.get('account');
+  const token = searchParams.get('token') || 'EURO';
+  const fiat = searchParams.get('fiat') || 'EUR';
 
   if (!accountName) {
     return NextResponse.json(
@@ -21,7 +27,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  console.log('[BALANCE API] Fetching EURO balance for:', accountName);
+  console.log(`[BALANCE API] Fetching ${token} balance for:`, accountName);
 
   // Step 1: Try to fetch real balance from Hive-Engine (multiple endpoints with timeout)
   const hiveEngineEndpoints = [
@@ -48,7 +54,7 @@ export async function GET(req: NextRequest) {
             table: 'balances',
             query: {
               account: accountName,
-              symbol: 'EURO'
+              symbol: token
             }
           },
           id: 1
@@ -61,11 +67,11 @@ export async function GET(req: NextRequest) {
       if (balanceResponse.ok) {
         const balanceData = await balanceResponse.json();
         if (balanceData.result && balanceData.result.length > 0) {
-          const euroBalance = parseFloat(balanceData.result[0].balance);
-          console.log('[BALANCE API] Real EURO balance from Hive-Engine:', euroBalance);
+          const tokenBalance = parseFloat(balanceData.result[0].balance);
+          console.log(`[BALANCE API] Real ${token} balance from Hive-Engine:`, tokenBalance);
 
           return NextResponse.json({
-            balance: euroBalance,
+            balance: tokenBalance,
             source: 'hive-engine',
             endpoint
           });
@@ -81,11 +87,10 @@ export async function GET(req: NextRequest) {
   console.log('[BALANCE API] All Hive-Engine endpoints failed, trying HBD balance from Hive');
 
   try {
-    // Fetch EUR/USD rate first
-    const today = new Date();
-    const rateData = await getLatestEurUsdRate(today);
-    const eurUsdRate = rateData.conversion_rate;
-    console.log('[BALANCE API] EUR/USD rate for fallback:', eurUsdRate);
+    // Fetch <fiat>/USD rate first (server-side, DB/ECB-backed)
+    const rateData = await getUsdPerFiatServerSide(fiat);
+    const usdPerFiat = rateData.conversion_rate;
+    console.log(`[BALANCE API] ${fiat}/USD rate for fallback:`, usdPerFiat);
 
     // Fetch HBD balance from Hive
     const controller = new AbortController();
@@ -110,15 +115,15 @@ export async function GET(req: NextRequest) {
       if (hiveData.result && hiveData.result.length > 0) {
         const hbdBalanceStr = hiveData.result[0].hbd_balance;
         const hbdBalance = parseFloat(hbdBalanceStr.split(' ')[0]);
-        const calculatedEuroBalance = hbdBalance / eurUsdRate;
+        const calculatedFiatBalance = hbdBalance / usdPerFiat;
 
-        console.log('[BALANCE API] HBD balance:', hbdBalance, 'Calculated EURO:', calculatedEuroBalance);
+        console.log(`[BALANCE API] HBD balance:`, hbdBalance, `Calculated ${fiat}:`, calculatedFiatBalance);
 
         return NextResponse.json({
-          balance: calculatedEuroBalance,
+          balance: calculatedFiatBalance,
           source: 'hive-hbd-conversion',
           hbdBalance,
-          eurUsdRate
+          eurUsdRate: usdPerFiat
         });
       }
     }

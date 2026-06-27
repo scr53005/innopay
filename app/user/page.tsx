@@ -8,9 +8,23 @@ import confetti from 'canvas-confetti';
 import Image from 'next/image';
 import { PrivateKey } from '@hiveio/dhive';
 import MiniWallet, { WalletReopenButton } from '@/app/components/MiniWallet';
+import { getCurrencyConfig, type CurrencyConfig } from '@/lib/currency-config';
 
 // Check if in dev/test environment
 const isDevOrTest = process.env.NEXT_PUBLIC_ENV !== 'production';
+
+/**
+ * Resolve the display CurrencyConfig synchronously from the current URL's `fiat` param.
+ * Spokes pass `&fiat=RON` on the redirect to /user so currency-dependent UI (labels,
+ * minimums) is correct on the very first render — before the async spoke fetch returns.
+ * This drives DISPLAY only; the actual Stripe charge currency is resolved server-side from
+ * the DB (resolveSpokeCurrency), so a tampered `fiat` param can't change what's charged.
+ * Absent/unknown → EUR, so the Luxembourg spokes behave exactly as before.
+ */
+function currencyFromUrl(): CurrencyConfig {
+  if (typeof window === 'undefined') return getCurrencyConfig('EUR');
+  return getCurrencyConfig(new URLSearchParams(window.location.search).get('fiat'));
+}
 const innopayLogoUrl = "/innopay.svg";
 const defaultAvatarUrl = "/images/Koala-BlueBg.png";
 
@@ -27,6 +41,8 @@ type SpokeData = {
   attribute_storage_key_1: string | null;
   active: boolean;
   ready: boolean;
+  fiat_currency?: string | null;
+  iou_token?: string | null;
 };
 
 // Helper function to get spoke base URL based on environment (hub-and-spoke architecture)
@@ -98,12 +114,12 @@ const translations = {
     createAccount: "Créer un compte Innopay",
     youSave: "Vous économisez",
     discountMessage: "En créant un compte Innopay, vous bénéficiez déjà d'une réduction sur votre commande",
-    topupLabel: "Montant de rechargement (EUR)",
+    topupLabel: (cur: string) => `Montant de rechargement (${cur})`,
     orderInfo: "Commande",
     minimumInfo: "Minimum",
-    amountHint: (min: number) => `Vous pouvez entrer n'importe quel montant ≥ ${min}€. Choisissez un palier de campagne ci-dessus pour une sélection rapide.`,
+    amountHint: (amt: string) => `Vous pouvez entrer n'importe quel montant ≥ ${amt}. Choisissez un palier de campagne ci-dessus pour une sélection rapide.`,
     invalidAmount: "Veuillez entrer un montant valide.",
-    minimumAmountError: (min: number) => `Le montant minimum est de ${min}€.`,
+    minimumAmountError: (amt: string) => `Le montant minimum est de ${amt}.`,
     redirecting: "Redirection vers le paiement...",
     chargeWallet: "Chargez votre portefeuille",
     breakdownYouLoad: "Vous chargez",
@@ -140,12 +156,12 @@ const translations = {
     createAccount: "Create an Innopay account",
     youSave: "You save",
     discountMessage: "By creating an Innopay account, you already get a discount on your order",
-    topupLabel: "Top-up amount (EUR)",
+    topupLabel: (cur: string) => `Top-up amount (${cur})`,
     orderInfo: "Order",
     minimumInfo: "Minimum",
-    amountHint: (min: number) => `You can enter any amount ≥ ${min}€. Choose a campaign tier above for quick selection.`,
+    amountHint: (amt: string) => `You can enter any amount ≥ ${amt}. Choose a campaign tier above for quick selection.`,
     invalidAmount: "Please enter a valid amount.",
-    minimumAmountError: (min: number) => `The minimum amount is ${min}€.`,
+    minimumAmountError: (amt: string) => `The minimum amount is ${amt}.`,
     redirecting: "Redirecting to payment...",
     chargeWallet: "Load your wallet",
     breakdownYouLoad: "You load",
@@ -182,12 +198,12 @@ const translations = {
     createAccount: "Innopay-Konto erstellen",
     youSave: "Sie sparen",
     discountMessage: "Mit der Erstellung eines Innopay-Kontos erhalten Sie bereits einen Rabatt auf Ihre Bestellung",
-    topupLabel: "Aufladebetrag (EUR)",
+    topupLabel: (cur: string) => `Aufladebetrag (${cur})`,
     orderInfo: "Bestellung",
     minimumInfo: "Minimum",
-    amountHint: (min: number) => `Sie können jeden Betrag ≥ ${min}€ eingeben. Wählen Sie oben eine Kampagnenstufe für eine Schnellauswahl.`,
+    amountHint: (amt: string) => `Sie können jeden Betrag ≥ ${amt} eingeben. Wählen Sie oben eine Kampagnenstufe für eine Schnellauswahl.`,
     invalidAmount: "Bitte geben Sie einen gültigen Betrag ein.",
-    minimumAmountError: (min: number) => `Der Mindestbetrag beträgt ${min}€.`,
+    minimumAmountError: (amt: string) => `Der Mindestbetrag beträgt ${amt}.`,
     redirecting: "Weiterleitung zur Zahlung...",
     chargeWallet: "Geldbörse aufladen",
     breakdownYouLoad: "Sie laden",
@@ -224,12 +240,12 @@ const translations = {
     createAccount: "Innopay Konto erstellen",
     youSave: "Dir spaart",
     discountMessage: "Mat der Erstellung vun engem Innopay Konto kritt Dir scho Rabatt op Är Bestellung",
-    topupLabel: "Opluedebetrag (EUR)",
+    topupLabel: (cur: string) => `Opluedebetrag (${cur})`,
     orderInfo: "Bestellung",
     minimumInfo: "Minimum",
-    amountHint: (min: number) => `Dir kënnt all Betrag ≥ ${min}€ aginn. Wielt uewen eng Kampagnestufe fir eng séier Auswiel.`,
+    amountHint: (amt: string) => `Dir kënnt all Betrag ≥ ${amt} aginn. Wielt uewen eng Kampagnestufe fir eng séier Auswiel.`,
     invalidAmount: "Gitt w.e.g. e gëltege Betrag an.",
-    minimumAmountError: (min: number) => `De Mindestbetrag ass ${min}€.`,
+    minimumAmountError: (amt: string) => `De Mindestbetrag ass ${amt}.`,
     redirecting: "Viruleedung op d'Bezuelung...",
     chargeWallet: "Geldbäitel oplueden",
     breakdownYouLoad: "Dir luet",
@@ -364,6 +380,15 @@ export default function HiveAccountCreationPage() {
   const [restaurantAccount, setRestaurantAccount] = useState<string>('indies.cafe'); // Restaurant Hive account (default: indies.cafe)
   const [spokeData, setSpokeData] = useState<SpokeData | null>(null); // Spoke data from database
 
+  // Display currency. Starts at EUR (matches SSR so there's no hydration mismatch), then the
+  // mount effect sets it from the URL `fiat` param (spoke row's fiat_currency as fallback).
+  // `currency` + `money()` drive every money label/minimum below; default EUR keeps the
+  // Luxembourg spokes byte-identical.
+  const [fiat, setFiat] = useState<string>('EUR');
+  const currency = getCurrencyConfig(fiat);
+  const money = (n: number | string) =>
+    currency.fiat === 'EUR' ? `${n}${currency.symbol}` : `${n} ${currency.symbol}`;
+
   // State for draggable validation toast
   const [toastPosition, setToastPosition] = useState({ x: 0, y: -60 }); // Start closer to input
   const [isDraggingToast, setIsDraggingToast] = useState(false);
@@ -418,8 +443,9 @@ export default function HiveAccountCreationPage() {
       console.log('[FLOW 5 EXISTING ACCOUNT] Unified approach - checking balance');
       console.log('[FLOW 5 EXISTING ACCOUNT] Return URL:', returnUrl);
 
-      // Step 1: Fetch robust EURO balance
-      const balanceResponse = await fetch(`/api/balance/euro?account=${accountName}`);
+      // Step 1: Fetch robust IOU-token balance (EURO for LU spokes, LEI for Zenbar)
+      const balCfg = currencyFromUrl();
+      const balanceResponse = await fetch(`/api/balance/euro?account=${accountName}&token=${balCfg.iouToken}&fiat=${balCfg.fiat}`);
       if (!balanceResponse.ok) {
         throw new Error('Failed to fetch balance');
       }
@@ -486,15 +512,16 @@ export default function HiveAccountCreationPage() {
           // BRANCH B: Insufficient balance - Show modal then redirect to Stripe topup
           console.log('[FLOW 5 BRANCH B] Insufficient balance - need topup');
 
+          const cfg = currencyFromUrl();
           const deficit = orderAmount - euroBalance;
 
-          // Round deficit UP to nearest euro first
+          // Round deficit UP to nearest whole unit first
           const deficitRoundedUp = Math.ceil(deficit);
 
-          // Then round UP to nearest 5€ increment
+          // Then round UP to the currency's increment, floored at the top-up minimum
           const topupAmount = Math.max(
-            Math.ceil(deficitRoundedUp / 5) * 5, // Round up to nearest 5€
-            15 // Minimum 15€
+            Math.ceil(deficitRoundedUp / cfg.roundIncrement) * cfg.roundIncrement,
+            cfg.minTopup
           );
 
           console.log('[FLOW 5 BRANCH B] Topup calculation:', {
@@ -646,22 +673,25 @@ export default function HiveAccountCreationPage() {
       if (!isNaN(parsedOrder) && parsedOrder >= 0) { // Changed from > 0 to >= 0 to support create_account_only (order=0)
         setOrderAmount(parsedOrder);
 
+        const cfg = currencyFromUrl();
         if (parsedOrder > 0) {
-          // create_account_and_pay: minimum must cover both account creation AND order
-          // Round UP to nearest 5€ increment with minimum 15€
-          const baseAmount = Math.max(3, parsedOrder);
+          // create_account_and_pay: minimum must cover both account creation AND order.
+          // Round UP to the currency's increment, floored at the top-up minimum.
+          const baseAmount = Math.max(cfg.minAccountCreation, parsedOrder);
           const calculatedMin = Math.max(
-            Math.ceil(baseAmount / 5) * 5,
-            15
+            Math.ceil(baseAmount / cfg.roundIncrement) * cfg.roundIncrement,
+            cfg.minTopup
           );
           setMinimumAmount(calculatedMin);
           setTopupAmount(calculatedMin);
           setTopupInputValue(String(calculatedMin));
-          console.log(`[ORDER] create_account_and_pay flow: order=${parsedOrder}€, rounded to: ${calculatedMin}€`);
+          console.log(`[ORDER] create_account_and_pay flow: order=${parsedOrder} ${cfg.fiat}, rounded to: ${calculatedMin}`);
         } else {
-          // create_account_only: minimum is just the account creation minimum (3€)
-          // Keep default minimumAmount (3€) - no need to adjust
-          console.log(`[ORDER] create_account_only flow: order_amount=0, minimum remains at account creation minimum (3€)`);
+          // create_account_only: minimum is just the account-creation minimum for this currency.
+          setMinimumAmount(cfg.minAccountCreation);
+          setTopupAmount(cfg.minAccountCreation);
+          setTopupInputValue(String(cfg.minAccountCreation));
+          console.log(`[ORDER] create_account_only flow: order_amount=0, minimum = account-creation minimum (${cfg.minAccountCreation} ${cfg.fiat})`);
         }
       }
     }
@@ -682,6 +712,14 @@ export default function HiveAccountCreationPage() {
       console.log(`[${new Date().toISOString()}] [ACCOUNT CREATION FRONTEND] Memo length:`, memoParam.length);
     }
 
+    // Display currency: the spoke passes &fiat=RON on the redirect (drives labels/minimums
+    // synchronously); the spoke row's fiat_currency is the fallback when the param is absent.
+    const fiatParam = params.get('fiat');
+    if (fiatParam) {
+      setFiat(fiatParam);
+      console.log(`[CURRENCY] Detected fiat from URL: ${fiatParam}`);
+    }
+
     // Read restaurant identification parameters
     const restaurantParam = params.get('restaurant');
     if (restaurantParam) {
@@ -694,6 +732,8 @@ export default function HiveAccountCreationPage() {
         .then(data => {
           if (data.spoke) {
             setSpokeData(data.spoke);
+            // Fallback currency from the DB row when the URL didn't carry &fiat.
+            if (!fiatParam && data.spoke.fiat_currency) setFiat(data.spoke.fiat_currency);
             console.log(`[RESTAURANT] Spoke data loaded:`, data.spoke);
           } else {
             console.warn(`[RESTAURANT] Spoke not found in database: ${restaurantParam}`);
@@ -808,7 +848,7 @@ export default function HiveAccountCreationPage() {
                   params: {
                     contract: 'tokens',
                     table: 'balances',
-                    query: { account: acc, symbol: 'EURO' },
+                    query: { account: acc, symbol: currencyFromUrl().iouToken },
                   },
                   id: 1,
                 }),
@@ -1830,7 +1870,7 @@ export default function HiveAccountCreationPage() {
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className="text-lg font-bold text-blue-600">{account.euroBalance.toFixed(2)} €</div>
+                          <div className="text-lg font-bold text-blue-600">{money(account.euroBalance.toFixed(2))}</div>
                           <div className="text-xs text-gray-500">Balance</div>
                         </div>
                       </div>
@@ -1950,7 +1990,7 @@ export default function HiveAccountCreationPage() {
       <div className="mb-4 p-4 bg-gradient-to-r from-green-50 to-green-100 border-2 border-green-500 rounded-lg text-center">
         <p className="text-2xl font-bold text-green-700 flex items-center justify-center gap-2">
           <span>🎉</span>
-          <span>{translations[language].youSave} {discount.toFixed(2)}€!</span>
+          <span>{translations[language].youSave} {money(discount.toFixed(2))}!</span>
           <span>🎉</span>
         </p>
         <p className="text-sm text-green-600 mt-1">
@@ -1960,7 +2000,7 @@ export default function HiveAccountCreationPage() {
     )}
 
     {/* Campaign Bonus Display with Quick-Select Buttons */}
-    {activeCampaign && (activeCampaign.remainingSlots50 > 0 || activeCampaign.remainingSlots100 > 0) && (
+    {currency.fiat === 'EUR' && activeCampaign && (activeCampaign.remainingSlots50 > 0 || activeCampaign.remainingSlots100 > 0) && (
       <div className="mb-4 p-4 bg-gradient-to-r from-yellow-50 to-yellow-100 border-2 border-yellow-400 rounded-lg">
         <h3 className="text-lg font-bold text-yellow-800 mb-3 flex items-center gap-2">
           <span>🎁</span>
@@ -2014,10 +2054,10 @@ export default function HiveAccountCreationPage() {
     {/* Amount Input Field */}
     <div className="mb-4">
       <label htmlFor="topupAmount" className="block text-sm font-semibold text-gray-700 mb-2">
-        {translations[language].topupLabel}
+        {translations[language].topupLabel(currency.fiat)}
         {orderAmount && (
           <span className="ml-2 text-xs font-normal text-gray-500">
-            ({translations[language].orderInfo}: {orderAmount}€, {translations[language].minimumInfo}: {minimumAmount}€)
+            ({translations[language].orderInfo}: {money(orderAmount ?? 0)}, {translations[language].minimumInfo}: {money(minimumAmount)})
           </span>
         )}
       </label>
@@ -2041,10 +2081,10 @@ export default function HiveAccountCreationPage() {
       />
       <p className={`mt-2 text-sm font-medium ${topupInputValue === '' ? 'text-black' : isAmountValid ? 'text-green-700' : 'text-red-700'}`}>
         {topupInputValue === '' || isAmountValid
-          ? translations[language].amountHint(minimumAmount)
+          ? translations[language].amountHint(money(minimumAmount))
           : isNaN(parseFloat(topupInputValue))
             ? translations[language].invalidAmount
-            : translations[language].minimumAmountError(minimumAmount)}
+            : translations[language].minimumAmountError(money(minimumAmount))}
       </p>
     </div>
 
@@ -2104,23 +2144,23 @@ export default function HiveAccountCreationPage() {
             {/* Flow 5: has order — show breakdown */}
             <div className="flex justify-between text-sm text-gray-700 mb-1">
               <span>{translations[language].breakdownYouLoad}:</span>
-              <span className="font-bold text-blue-700">{topupAmount.toFixed(2)}€</span>
+              <span className="font-bold text-blue-700">{money(topupAmount.toFixed(2))}</span>
             </div>
             <div className="flex justify-between text-sm text-gray-700 mb-1">
               <span>{translations[language].breakdownYourOrder}:</span>
-              <span className="font-semibold text-gray-600">-{orderAmount.toFixed(2)}€</span>
+              <span className="font-semibold text-gray-600">-{money(orderAmount.toFixed(2))}</span>
             </div>
             {discount && discount > 0 && (
               <div className="flex justify-between text-sm text-green-700 mb-1">
                 <span>{translations[language].youSave}:</span>
-                <span className="font-semibold">+{discount.toFixed(2)}€</span>
+                <span className="font-semibold">+{money(discount.toFixed(2))}</span>
               </div>
             )}
             <div className="border-t border-blue-200 my-2" />
             <div className="flex justify-between text-sm font-bold">
               <span className="text-gray-800">{translations[language].breakdownRemaining}:</span>
               <span className={topupAmount - orderAmount + (discount || 0) >= 0 ? 'text-green-600' : 'text-red-600'}>
-                {(topupAmount - orderAmount + (discount || 0)).toFixed(2)}€ ✓
+                {money((topupAmount - orderAmount + (discount || 0)).toFixed(2))} ✓
               </span>
             </div>
           </>
@@ -2130,7 +2170,7 @@ export default function HiveAccountCreationPage() {
             <div className="flex items-center gap-2 text-sm text-blue-800">
               <span className="text-lg">💰</span>
               <span>
-                <span className="font-bold">{topupAmount.toFixed(2)}€</span> {translations[language].breakdownAvailable}
+                <span className="font-bold">{money(topupAmount.toFixed(2))}</span> {translations[language].breakdownAvailable}
               </span>
             </div>
           </>
@@ -2145,7 +2185,7 @@ export default function HiveAccountCreationPage() {
     >
       {loading
         ? translations[language].redirecting
-        : `${translations[language].chargeWallet} (${isAmountValid ? topupAmount : '—'}€)`}
+        : `${translations[language].chargeWallet} (${isAmountValid ? money(topupAmount) : '—'})`}
     </button>
   </div>
 
@@ -2524,7 +2564,7 @@ export default function HiveAccountCreationPage() {
                 {translations[language].currentBalance}
               </p>
               <p className="text-2xl font-bold text-green-600">
-                {modalAccountInfo.balance.toFixed(2)} €
+                {money(modalAccountInfo.balance.toFixed(2))}
               </p>
             </div>
             <button
@@ -2553,7 +2593,7 @@ export default function HiveAccountCreationPage() {
                   {translations[language].currentBalance}
                 </p>
                 <p className="text-xl font-bold text-gray-800">
-                  {modalTopupInfo.currentBalance.toFixed(2)} €
+                  {money(modalTopupInfo.currentBalance.toFixed(2))}
                 </p>
               </div>
               <div className="mb-3">
@@ -2561,7 +2601,7 @@ export default function HiveAccountCreationPage() {
                   {translations[language].orderAmount}
                 </p>
                 <p className="text-xl font-bold text-gray-800">
-                  {modalTopupInfo.orderAmount.toFixed(2)} €
+                  {money(modalTopupInfo.orderAmount.toFixed(2))}
                 </p>
               </div>
               <div className="border-t-2 border-orange-300 pt-3 mt-3">
@@ -2569,7 +2609,7 @@ export default function HiveAccountCreationPage() {
                   {translations[language].topupRequired}
                 </p>
                 <p className="text-2xl font-bold text-orange-600">
-                  {modalTopupInfo.topupAmount.toFixed(2)} €
+                  {money(modalTopupInfo.topupAmount.toFixed(2))}
                 </p>
               </div>
             </div>

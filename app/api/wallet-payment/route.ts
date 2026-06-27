@@ -2,7 +2,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Client, PrivateKey } from '@hiveio/dhive';
 import { transferHbd, transferEuroTokens } from '@/services/hive';
-import { getEurUsdRateServerSide } from '@/services/currency';
+import { getUsdPerFiatServerSide } from '@/services/currency';
+import { resolveSpokeCurrency } from '@/lib/spoke-currency';
 import prisma from '@/lib/prisma';
 
 const client = new Client([
@@ -73,17 +74,25 @@ export async function POST(req: NextRequest) {
 
     console.warn('[WALLET PAYMENT] Final memo:', finalMemo);
 
+    // Resolve the spoke's currency from the recipient restaurant account. EUR/EURO for the
+    // Luxembourg spokes, RON/LEI for Zenbar; unknown recipients default to EUR. Everything
+    // downstream (rate pair, IOU fallback token, debt columns) keys off this — mirrors the
+    // webhook-handler pattern so Flow 6 prices in the right currency instead of always EUR.
+    const currencyConfig = await resolveSpokeCurrency({ account: recipient });
+    console.warn(`[WALLET PAYMENT] Currency: ${currencyConfig.fiat}/${currencyConfig.iouToken}`);
+
     // ========================================
-    // Resolve EUR/USD rate (use client-provided value or fetch server-side)
+    // Resolve <fiat>/USD rate (use client-provided value or fetch server-side by fiat)
     // ========================================
-    let resolvedEurUsdRate: number;
+    let resolvedUsdPerFiat: number;
     if (eurUsdRate) {
-      resolvedEurUsdRate = parseFloat(eurUsdRate);
-      console.warn(`[WALLET PAYMENT] Using client-provided EUR/USD rate: ${resolvedEurUsdRate}`);
+      // Legacy: indiesmenu passes an explicit rate (always EUR). Newer spokes omit it.
+      resolvedUsdPerFiat = parseFloat(eurUsdRate);
+      console.warn(`[WALLET PAYMENT] Using client-provided ${currencyConfig.fiat}/USD rate: ${resolvedUsdPerFiat}`);
     } else {
-      const rateData = await getEurUsdRateServerSide();
-      resolvedEurUsdRate = rateData.conversion_rate;
-      console.warn(`[WALLET PAYMENT] Fetched EUR/USD rate server-side: ${resolvedEurUsdRate} (date: ${rateData.date}, fresh: ${rateData.isFresh})`);
+      const rateData = await getUsdPerFiatServerSide(currencyConfig.fiat);
+      resolvedUsdPerFiat = rateData.conversion_rate;
+      console.warn(`[WALLET PAYMENT] Fetched ${currencyConfig.fiat}/USD rate server-side: ${resolvedUsdPerFiat} (date: ${rateData.date}, fresh: ${rateData.isFresh})`);
     }
 
     // ========================================
@@ -94,7 +103,7 @@ export async function POST(req: NextRequest) {
     let requiredHbd = 0;
 
     try {
-      requiredHbd = parseFloat(amountEuro) * resolvedEurUsdRate;
+      requiredHbd = parseFloat(amountEuro) * resolvedUsdPerFiat;
       console.warn(`[WALLET PAYMENT] Customer should transfer ${requiredHbd} HBD to innopay`);
     } catch (calcError: any) {
       console.error('[WALLET PAYMENT] ❌ Error calculating required HBD:', calcError.message);
@@ -143,7 +152,7 @@ export async function POST(req: NextRequest) {
               from: customerAccount,
               to: innopayAccount,
               amount: `${hbdToTransfer.toFixed(3)} HBD`,
-              memo: `Order payment: ${amountEuro} EUR`
+              memo: `Order payment: ${amountEuro} ${currencyConfig.fiat}`
             }
           ];
 
@@ -178,9 +187,11 @@ export async function POST(req: NextRequest) {
               debtor: customerAccount,
               amount_hbd: hbdShortfall,
               original_amount: hbdShortfall,
-              amount_euro: Math.round((hbdShortfall / resolvedEurUsdRate) * 100) / 100,
+              amount_euro: Math.round((hbdShortfall / resolvedUsdPerFiat) * 100) / 100, // generic fiat amount
+              fiat_currency: currencyConfig.fiat,
+              token_symbol: currencyConfig.iouToken,
               euro_tx_id: customerTxId,
-              eur_usd_rate: resolvedEurUsdRate,
+              eur_usd_rate: resolvedUsdPerFiat, // generic <fiat>/USD rate
               reason: 'customer_order_payment',
               notes: `Customer ${customerAccount} could not transfer ${hbdShortfall} HBD for order. Transferred ${customerHbdTransferred} HBD, shortfall ${hbdShortfall} HBD. EURO transfer: ${customerTxId}`
             }
@@ -232,10 +243,10 @@ export async function POST(req: NextRequest) {
       console.warn('[WALLET PAYMENT] ✅ HBD transfer to restaurant successful! TX:', transferTxId);
 
     } else {
-      // Transfer EURO tokens from innopay to restaurant using utility function
-      console.error('[WALLET PAYMENT] ⚠️ Insufficient HBD in innopay, transferring EURO tokens to restaurant...');
-      transferTxId = await transferEuroTokens(recipient, parseFloat(amountEuro), finalMemo);
-      console.warn('[WALLET PAYMENT] ✅ EURO transfer to restaurant successful! TX:', transferTxId);
+      // Transfer IOU tokens (EURO / LEI) from innopay to restaurant using utility function
+      console.error(`[WALLET PAYMENT] ⚠️ Insufficient HBD in innopay, transferring ${currencyConfig.iouToken} tokens to restaurant...`);
+      transferTxId = await transferEuroTokens(recipient, parseFloat(amountEuro), finalMemo, currencyConfig.iouToken);
+      console.warn(`[WALLET PAYMENT] ✅ ${currencyConfig.iouToken} transfer to restaurant successful! TX:`, transferTxId);
     }
 
     const response = NextResponse.json({
@@ -248,7 +259,7 @@ export async function POST(req: NextRequest) {
       innopayTxId: transferTxId,
       recipient,
       distriateSuffix,
-      innopayTransferType: hbdBalance >= requiredHbd ? 'HBD' : 'EURO'
+      innopayTransferType: hbdBalance >= requiredHbd ? 'HBD' : currencyConfig.iouToken
     }, { status: 200 });
 
     // Add CORS headers

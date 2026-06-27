@@ -159,11 +159,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validate minimum amount (TEMP: reduced for testing - was 30 EUR for account creation, 15 EUR for top-up)
-    const minAmount = detectedFlow === 'topup' ? 15 : 3;
+    // Validate minimum amount — floors are per-currency (currencyConfig, resolved above from
+    // the spoke). EUR stays 15/3; RON spokes (Zenbar) get 90/18 so the floor is fee-viable in lei.
+    const minAmount = detectedFlow === 'topup' ? currencyConfig.minTopup : currencyConfig.minAccountCreation;
     if (amount < minAmount) {
       return NextResponse.json(
-        { error: `Minimum amount is ${minAmount} EUR for ${flowMetadata.category === 'internal' && detectedFlow === 'topup' ? 'top-up' : 'account creation'}` },
+        { error: `Minimum amount is ${minAmount} ${currencyConfig.fiat} for ${flowMetadata.category === 'internal' && detectedFlow === 'topup' ? 'top-up' : 'account creation'}` },
         { status: 400, headers: corsHeaders }
       );
     }
