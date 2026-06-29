@@ -77,7 +77,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ sent: false, reason: 'no_linked_email', account_name: normalizedAccount });
   }
 
-  const base = process.env.NEXT_PUBLIC_BASE_URL || 'https://innopay.lu';
+  // The hub is served at wallet.innopay.lu (NOT the bare innopay.lu, which 404s) — the confirm
+  // page lives at `${hub}/confirm-withdrawal`. Default to the canonical hub host so a missing
+  // NEXT_PUBLIC_BASE_URL can't ship a broken (404) security-confirmation link.
+  const base = process.env.NEXT_PUBLIC_BASE_URL || 'https://wallet.innopay.lu';
   const confirmUrl = `${base}/confirm-withdrawal?token=${encodeURIComponent(body.confirm_token)}`;
   const amountStr = formatHbd(body.amount_hbd);
   const ttlStr = formatTtl(typeof body.ttl_days === 'number' ? body.ttl_days : 7);
