@@ -27,14 +27,15 @@ import { PrismaClient } from '@prisma/client';
 config({ path: path.resolve(__dirname, '../.env.local') });
 config({ path: path.resolve(__dirname, '../.env'), override: true });
 
-// settlement_enabled is FALSE for Zenbar on purpose: liman's debt settlement still does
-// a hardcoded EURO `tokens.transfer` and is NOT yet LEI-aware. Leaving it enabled would
-// make liman attempt to settle LEI debts with EURO (which @zenbar does not hold). Flip to
-// true only once liman supports LEI settlement. (Existing EUR spokes are seeded `true`.)
-const SETTLEMENT_ENABLED = false;
+// settlement_enabled is now TRUE: liman's authorized spoke IOU reimbursement became
+// multi-currency (2026-06-28) — it reads each debt's token_symbol and reclaims LEI for RON
+// spokes instead of the old hardcoded EURO transfer. PREREQUISITE: the LEI-aware liman code
+// must be LIVE IN PROD before flipping this on (otherwise liman would try to settle LEI debts
+// with EURO, which @zenbar does not hold). Re-run this script on dev + prod to apply.
+const SETTLEMENT_ENABLED = true;
 
 const SPOKE_NOTES =
-  'Zenbar RON/LEI spoke. settlement_enabled intentionally false until liman is LEI-aware.';
+  'Zenbar RON/LEI spoke. settlement_enabled true (liman is LEI-aware as of 2026-06-28).';
 
 async function main() {
   const dbUrl = process.env.POSTGRES_URL || '';
