@@ -624,6 +624,36 @@ async function handleFlow7UnifiedApproach(
       console.warn(`[FLOW 7] ⚠️ Customer owes innopay ${deficit}€ but transfer failed - manual reconciliation needed`);
     }
 
+    // Record the HBD the customer owes innopay. We clawed their IOU for the deficit above, but the
+    // matching HBD backing is locked in their savings — so liman's cron settles it via
+    // transfer_from_savings (customer → innopay), restoring the HBD ≈ IOU invariant. Recorded
+    // REGARDLESS of whether the IOU claw succeeded: the HBD is owed either way (it's the asset
+    // innopay already fronted to the restaurant). Without this row the customer keeps unbacked HBD
+    // — the collateralization drift the audit surfaced (e.g. romainlux). Mirrors the positive-change
+    // branch, which records a debt when its HBD move fails.
+    try {
+      const deficitRate = await getUsdPerFiatServerSide(currencyConfig.fiat);
+      const hbdDeficit = convertFiatToHbd(deficit, deficitRate.conversion_rate);
+      await prisma.outstanding_debt.create({
+        data: {
+          debtor: accountName,
+          creditor: 'innopay',
+          amount_hbd: hbdDeficit,
+          original_amount: hbdDeficit,
+          fiat_currency: currencyConfig.fiat,
+          token_symbol: currencyConfig.iouToken,
+          amount_euro: deficit,
+          euro_tx_id: changeTxId ?? null,
+          eur_usd_rate: deficitRate.conversion_rate,
+          reason: 'flow7_deficit',
+          notes: `Flow 7 deficit - customer owes HBD for clawed ${currencyConfig.iouToken} at ${new Date().toISOString()}`,
+        },
+      });
+      console.warn(`📝 [DEBT] Recorded ${hbdDeficit.toFixed(3)} HBD deficit debt: ${accountName} → innopay`);
+    } catch (debtError) {
+      console.error('[FLOW 7] WARNING: Failed to record deficit debt:', debtError);
+    }
+
     userBalance = 0; // Customer spent all their topup + some existing balance
 
   } else {
