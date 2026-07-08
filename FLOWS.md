@@ -305,6 +305,7 @@ The webhook performs a **single atomic transaction** with three possible change 
 - Minimum topup: 15€ (enforced in webhook)
 - Change transfers use memo: "Monnaie / Change"
 - Deficit transfers use memo: "Paiement manquant / Missing payment"
+- **Deficit also records an HBD `outstanding_debt`** (`debtor=account, creditor=innopay`, reason `flow7_deficit`) so liman settles the backing HBD from savings — the clawed IOU MUST be paired with an HBD debt or the customer keeps unbacked excess HBD (fixed 2026-07; caught by the collateralization audit — see `liman/AGENT-CHECKPOINT.md`)
 - Webhook skips account verification (assumes account exists in localStorage)
 - Mock accounts supported for dev/test (transfers will fail but flow works)
 
