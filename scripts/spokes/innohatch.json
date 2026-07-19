@@ -1,0 +1,30 @@
+{
+  "spoke": {
+    "id": "innohatch",
+    "name": "Innopay Farm",
+    "type": "street-food",
+    "domain_prod": "pay.innopay.lu",
+    "port_dev": 3004,
+    "path": "/mcc",
+    "attribute_name_1": "order",
+    "attribute_storage_key_1": "innohatch_order",
+    "fiat_currency": "EUR",
+    "iou_token": "EURO",
+    "has_delivery": false,
+    "memo_vendor_id": null,
+    "service_model": "counter_f2f",
+    "service_flags": ["counter_f2f"],
+    "active": true,
+    "ready": false
+  },
+  "accounts": [
+    {
+      "hive_account": "hatch-test",
+      "environment": "dev",
+      "role": "orders_and_tips",
+      "primary": false,
+      "settlement_enabled": false,
+      "notes": "innohatch PoC dev account (Monterey Coffee Cart test stand). One Hive account = one merchant-hub spoke."
+    }
+  ]
+}

@@ -227,6 +227,22 @@ model spoke {
   fiat_currency String @default("EUR") @db.VarChar(8)
   iou_token     String @default("EURO") @db.VarChar(16)
 
+  // Memo `V:` token — ecosystem-wide numeric vendor id (canonical grammar:
+  // SPOKE-DOCUMENTATION.md → MEMO GRAMMAR). Assigned: 1=indies,
+  // 2=croque-bedaine, 3=millewee, 4=zenbar. Farm (innohatch) vendors
+  // continue the sequence in innohatch's vendor table (5+); this registry
+  // is the authoritative source — ranges must never collide. Emitted
+  // unpadded (V:1, V:147). Nullable: container spokes (innohatch itself)
+  // are not vendors and carry no number.
+  memo_vendor_id Int? @unique
+
+  // Interaction model (HATCHERY-PLAN.md §14/§15): primary model +
+  // capability flags. Values: table_remote | counter_f2f | unattended |
+  // venue_umbrella | waiter_mode | self_order. Drives bell urgency,
+  // consume cadence/push policy, TABLE-vs-Q: memo semantics, till UI.
+  service_model String   @default("table_remote") @db.VarChar(30)
+  service_flags String[] @default([])
+
   // Status
   active  Boolean @default(true)
   ready   Boolean @default(false)

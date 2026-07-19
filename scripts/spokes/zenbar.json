@@ -1,0 +1,39 @@
+{
+  "spoke": {
+    "id": "zenbar",
+    "name": "Zen Bar",
+    "type": "restaurant",
+    "domain_prod": "zenbar.innopay.lu",
+    "port_dev": 3003,
+    "path": "/",
+    "attribute_name_1": "table",
+    "attribute_default_1": "0",
+    "attribute_storage_key_1": "zenbar_table",
+    "fiat_currency": "RON",
+    "iou_token": "LEI",
+    "has_delivery": false,
+    "memo_vendor_id": 4,
+    "service_model": "table_remote",
+    "service_flags": ["self_order"],
+    "active": true,
+    "ready": false
+  },
+  "accounts": [
+    {
+      "hive_account": "zenbar",
+      "environment": "prod",
+      "role": "orders_and_tips",
+      "primary": true,
+      "settlement_enabled": true,
+      "notes": "Zenbar RON/LEI spoke. settlement_enabled true (liman is LEI-aware as of 2026-06-28)."
+    },
+    {
+      "hive_account": "zenbar-test",
+      "environment": "dev",
+      "role": "orders_and_tips",
+      "primary": false,
+      "settlement_enabled": true,
+      "notes": "Zenbar RON/LEI spoke. settlement_enabled true (liman is LEI-aware as of 2026-06-28)."
+    }
+  ]
+}
