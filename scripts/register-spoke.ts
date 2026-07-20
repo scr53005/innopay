@@ -21,6 +21,9 @@ import { config } from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import { PrismaClient } from '@prisma/client';
+// Prisma-free module (pure decision + DI'd allocator) — safe to import above
+// the dotenv config() calls without triggering the lib/prisma singleton.
+import { decideMemoVendorId, allocateVendorMemoId } from '../lib/vendor-memo-id';
 
 config({ path: path.resolve(__dirname, '../.env.local') });
 config({ path: path.resolve(__dirname, '../.env'), override: true });
@@ -131,14 +134,50 @@ async function main() {
 
   const prisma = new PrismaClient();
   try {
-    const { id: _id, ...fields } = descriptor.spoke;
+    // Resolve the vendor number (memo `V:`) via the ONE authoritative path so
+    // a new Tier C restaurant can't hand-pick a number that collides with MCC
+    // (5, in innohatch) or the next Farm hatch. Existing numbers are immutable;
+    // brand-new spokes allocate atomically from vendor_memo_id_seq; an explicit
+    // number is a grandfathering override (warns if it bypasses the sequence);
+    // explicit null = umbrella/container spoke. See lib/vendor-memo-id.ts.
+    const { id: _id, memo_vendor_id: _descMemoId, ...fields } = descriptor.spoke;
+    const existingSpoke = await prisma.spoke.findUnique({
+      where: { id: spokeId },
+      select: { memo_vendor_id: true },
+    });
+    const decision = decideMemoVendorId({
+      spokeExists: existingSpoke !== null,
+      existing: existingSpoke?.memo_vendor_id ?? null,
+      descriptorHasKey: Object.prototype.hasOwnProperty.call(descriptor.spoke, 'memo_vendor_id'),
+      descriptorValue: descriptor.spoke.memo_vendor_id as number | null | undefined,
+    });
+
+    let memoVendorId: number | null;
+    if (decision.action === 'allocate') {
+      try {
+        memoVendorId = await allocateVendorMemoId((sql) => prisma.$queryRawUnsafe(sql));
+      } catch (err) {
+        throw new Error(
+          `Could not allocate memo_vendor_id from vendor_memo_id_seq — run scripts/create-vendor-sequence.ts first. (${err instanceof Error ? err.message : String(err)})`,
+        );
+      }
+      console.log(`[register-spoke] allocated memo_vendor_id ${memoVendorId} from vendor_memo_id_seq`);
+    } else {
+      memoVendorId = decision.value;
+      if ('warning' in decision && decision.warning) {
+        console.warn(`[register-spoke] ⚠ ${decision.warning}`);
+      }
+      console.log(`[register-spoke] memo_vendor_id: ${memoVendorId} (${decision.action})`);
+    }
+
+    const spokeData = { ...fields, memo_vendor_id: memoVendorId };
     const spoke = await prisma.spoke.upsert({
       where: { id: spokeId },
-      update: fields as never,
-      create: { id: spokeId, ...(fields as object) } as never,
+      update: spokeData as never,
+      create: { id: spokeId, ...(spokeData as object) } as never,
     });
     console.log(
-      `[register-spoke] spoke upserted: ${spoke.id} (${spoke.fiat_currency}/${spoke.iou_token}, ${spoke.service_model}, active=${spoke.active}, ready=${spoke.ready})`,
+      `[register-spoke] spoke upserted: ${spoke.id} (${spoke.fiat_currency}/${spoke.iou_token}, ${spoke.service_model}, V:${spoke.memo_vendor_id ?? '—'}, active=${spoke.active}, ready=${spoke.ready})`,
     );
 
     for (const a of descriptor.accounts) {

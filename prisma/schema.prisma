@@ -264,6 +264,9 @@ model spoke_account {
   active             Boolean  @default(true)
   settlement_enabled Boolean  @default(false)
   primary            Boolean  @default(false)
+  // Farm vendor payout destination (collected at hatch). Stored only; the
+  // liman→SEPA payout rail is EMI/legal-gated future work.
+  iban               String?  @db.VarChar(34)
   notes              String?  @db.Text
   created_at         DateTime @default(now())
   updated_at         DateTime @updatedAt
