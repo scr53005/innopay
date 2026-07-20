@@ -25,7 +25,7 @@ export async function POST(request: Request) {
 
     // Generate seed and keys on the server side for security
     const seed = getSeed(accountName);
-    console.log(`Generated seed for account ${accountName}: ${seed}`);
+    console.log(`Generated seed for account ${accountName}: 12 words`);
     const keychain = generateHiveKeys(accountName, seed);
     // console.log(`Generated keychain for account ${accountName}:`, keychain);
 

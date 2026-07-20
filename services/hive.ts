@@ -60,9 +60,22 @@ export type Keychain = {
   };
 };
 
+/**
+ * Mask a secret for logging: keep only the first 3 characters, redact the rest.
+ * Secrets (seed phrases, master password, private keys) must never appear in
+ * cleartext in the Vercel logs — the system is proven, so full values are both
+ * unsafe and unnecessary. A 3-char prefix is enough to correlate log lines
+ * without exposing anything usable.
+ */
+// exported for testing
+export function maskSecret(secret: string | undefined | null): string {
+  if (!secret) return '(none)';
+  return secret.slice(0, 3) + '…';
+}
+
 export function getSeed(accountName?: string): string {
   const seed = bip39.generateMnemonic(128); // 12-word seed
-  console.log("For account name '"+accountName+"' generated BIP-39 seed phrase: "+seed);
+  console.log("For account name '"+accountName+"' generated BIP-39 seed phrase: 12 words");
   return seed;
 }
 
@@ -131,7 +144,7 @@ export function getPostingKey(accountName: string, masterKey: string): PrivateKe
 
 export function generateHiveKeys(accountName: string, seed: string): Keychain {
   const masterKey = 'P' + PrivateKey.fromSeed(seed).toString();
-  console.log(`Using master key for account ${accountName} with seed ${seed}: ${masterKey}`);
+  console.log(`Using master key for account ${accountName} with seed 12 words: ${maskSecret(masterKey)}`);
 
   const owner = PrivateKey.fromLogin(accountName, masterKey, 'owner');
   const active = PrivateKey.fromLogin(accountName, masterKey, 'active'); 
@@ -162,7 +175,15 @@ export function generateHiveKeys(accountName: string, seed: string): Keychain {
       publicKey: memoPublic,
     },
   };
-  console.log(`Generated Hive keys for account ${accountName}:`, keychain);
+  // Log a masked view only — never the real private keys / master password.
+  // Public keys are safe to log in full; private material is reduced to a 3-char prefix.
+  console.log(`Generated Hive keys for account ${accountName}:`, {
+    masterPassword: maskSecret(keychain.masterPassword),
+    owner: { privateKey: maskSecret(keychain.owner.privateKey), publicKey: keychain.owner.publicKey },
+    active: { privateKey: maskSecret(keychain.active.privateKey), publicKey: keychain.active.publicKey },
+    posting: { privateKey: maskSecret(keychain.posting.privateKey), publicKey: keychain.posting.publicKey },
+    memo: { privateKey: maskSecret(keychain.memo.privateKey), publicKey: keychain.memo.publicKey },
+  });
   return keychain;
 }
 
