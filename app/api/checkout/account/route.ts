@@ -338,10 +338,23 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // innohatch is MULTI-TENANT: one spoke serves N vendors, each at /{handle}.
+      // The spoke's single fixed `path` can't encode the vendor, so for innohatch we
+      // swap it for /{handle} (from redirectParams) and carry the order id below.
+      // Gated on spokeId === 'innohatch' so every other spoke is untouched.
+      if (spokeId === 'innohatch' && redirectParams?.handle && spoke) {
+        const path = spoke.path || '';
+        let base = spokeUrl;
+        if (path && base.endsWith(path)) base = base.slice(0, base.length - path.length);
+        base = base.replace(/\/$/, '');
+        spokeUrl = `${base}/${redirectParams.handle}`;
+      }
+
       // Build query parameters
       // IMPORTANT: Stripe's {CHECKOUT_SESSION_ID} placeholder must NOT be URL-encoded
       // URLSearchParams.set() would encode it as %7BCHECKOUT_SESSION_ID%7D which Stripe won't replace
       const table = redirectParams?.table;
+      const innohatchOrderId = spokeId === 'innohatch' ? redirectParams?.orderId : undefined;
       const optimisticAmount = detectedFlow === 'create_account_and_pay' && orderAmountEuro
         ? amount - parseFloat(orderAmountEuro.toString())
         : amount;
@@ -349,6 +362,7 @@ export async function POST(req: NextRequest) {
       // Build success URL manually to preserve unencoded {CHECKOUT_SESSION_ID}
       const successQueryParts: string[] = [];
       if (table) successQueryParts.push(`table=${encodeURIComponent(table)}`);
+      if (innohatchOrderId) successQueryParts.push(`order=${encodeURIComponent(innohatchOrderId)}`);
       successQueryParts.push('topup_success=true');
       successQueryParts.push('session_id={CHECKOUT_SESSION_ID}'); // Must NOT be encoded!
       successQueryParts.push(`amount=${optimisticAmount}`);
@@ -357,6 +371,7 @@ export async function POST(req: NextRequest) {
 
       const cancelQueryParts: string[] = [];
       if (table) cancelQueryParts.push(`table=${encodeURIComponent(table)}`);
+      if (innohatchOrderId) cancelQueryParts.push(`order=${encodeURIComponent(innohatchOrderId)}`);
       cancelQueryParts.push('cancelled=true');
 
       successUrl = `${spokeUrl}?${successQueryParts.join('&')}`;

@@ -22,6 +22,8 @@ interface HatchResult {
   display_name: string;
   memo_vendor_id: number;
   env: string;
+  email: string | null;
+  credentials?: string; // e.g. 'sent' | 'skipped (no email)' | 'failed (...)'
   till_url: string;
   pay_url: string;
 }
@@ -31,6 +33,8 @@ export default function HatchPage() {
   const [hiveAccount, setHiveAccount] = useState('');
   const [templateKey, setTemplateKey] = useState('coffee_cart');
   const [iban, setIban] = useState(SPECIMEN_IBAN);
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [mock, setMock] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +53,8 @@ export default function HatchPage() {
           hive_account: hiveAccount,
           template_key: templateKey,
           iban,
+          email,
+          phone,
           mock,
         }),
       });
@@ -73,6 +79,8 @@ export default function HatchPage() {
           setDisplayName('');
           setHiveAccount('');
           setIban(SPECIMEN_IBAN);
+          setEmail('');
+          setPhone('');
           setMock(false);
         }}
       />
@@ -107,6 +115,28 @@ export default function HatchPage() {
           <input value={iban} onChange={(e) => setIban(e.target.value)}
             className="mt-1 w-full rounded-lg border p-3 font-mono" />
         </label>
+        <label className="block">
+          <span className="text-sm font-semibold">Vendor email (optional)</span>
+          <input type="email" value={email}
+            onChange={(e) => setEmail(e.target.value.toLowerCase())}
+            placeholder="owner@example.com" className="mt-1 w-full rounded-lg border p-3" />
+          <span className="text-xs text-gray-400">
+            If given, the vendor is emailed a one-time link to retrieve their own
+            account credentials (needed to log into their menu &amp; history). Can be
+            added later by re-hatching the same account.
+          </span>
+        </label>
+        <label className="block">
+          <span className="text-sm font-semibold">Vendor phone (optional)</span>
+          <input type="tel" value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="+352 621 123 456" className="mt-1 w-full rounded-lg border p-3" />
+          <span className="text-xs text-gray-400">
+            Full international format with country code (+352, +33, +32, +49, +39,
+            +34, …). A second channel to secure the account against email compromise
+            (future SMS 2FA). Stored on the person, not the till.
+          </span>
+        </label>
         <label className="flex items-start gap-2 rounded-lg bg-amber-50 p-3">
           <input type="checkbox" checked={mock} onChange={(e) => setMock(e.target.checked)} className="mt-1" />
           <span className="text-sm text-amber-800">
@@ -139,6 +169,23 @@ function HatchResultView({ result, onAgain }: { result: HatchResult; onAgain: ()
       <p className="mt-1 text-sm text-gray-500">
         Account <code>@{result.account}</code> · vendor #{result.memo_vendor_id} · {result.env}
       </p>
+
+      {/* Credential-retrieval status: tells the operator whether the vendor can log in yet */}
+      <div className="mx-auto mt-3 max-w-sm rounded-lg border p-3 text-left text-sm">
+        <span className="font-semibold">Vendor credentials: </span>
+        {result.credentials === 'sent' ? (
+          <span className="text-emerald-700">
+            ✉️ retrieval link emailed to {result.email}
+          </span>
+        ) : result.credentials?.startsWith('skipped') ? (
+          <span className="text-gray-500">
+            not sent ({result.credentials.replace('skipped ', '')}) — re-hatch with
+            an email to send it.
+          </span>
+        ) : (
+          <span className="text-red-600">{result.credentials || 'unknown'}</span>
+        )}
+      </div>
 
       {/* Generous till QR — the vendor scans it with their phone */}
       <div className="mx-auto mt-5 max-w-sm rounded-2xl border bg-white p-5 shadow-sm">

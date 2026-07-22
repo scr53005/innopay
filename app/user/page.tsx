@@ -1223,11 +1223,18 @@ export default function HiveAccountCreationPage() {
         // Get table parameter from URL if present
         const params = new URLSearchParams(window.location.search);
         const table = params.get('table');
+        // innohatch multi-tenant: the vendor handle + order id ride through to the
+        // checkout API so the post-payment redirect returns to /{handle}?order=…
+        // (other spokes simply don't send these).
+        const spokeHandle = params.get('spoke_handle');
+        const orderId = params.get('order_id');
 
         checkoutBody.redirectParams = {
           table: table,
           orderAmount: orderAmount.toString(),
           orderMemo: orderMemo || '',  // Empty string will trigger error in checkout API if order amount > 0
+          ...(spokeHandle && { handle: spokeHandle }),
+          ...(orderId && { orderId }),
         };
 
         // Also add as top-level for backward compatibility

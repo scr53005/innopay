@@ -6,9 +6,11 @@
 //   3. Upsert the spoke_account row under the innohatch umbrella (+ IBAN).
 //   4. Register the account on merchant-hub (PUSH → watched from next poll).
 //   5. Provision the vendor + catalogue on innohatch (from a category template).
-// A Farm vendor needs no keys day-to-day (the till signs nothing; liman
-// settles out via @innopay authority), so no credential handoff — the
-// operator just hands the owner the till URL.
+//   6. (workstream 0) If an email was given, link it and send the vendor the
+//      SAME conscious credential-retrieval mail customers get (sendCredentialEmail
+//      → one-time /credentials/{id} link). A Farm vendor signs nothing day-to-day,
+//      but they own their account: they need their keys to log into the menu/history
+//      admin (posting-key login) and to eventually self-custody.
 //
 // Failure handling: steps 3–5 are idempotent/reversible; the response reports
 // per-step status so a partial failure is diagnosable and the same form can be
@@ -20,6 +22,8 @@ import { createWalletUser, findWalletUserByAccountName } from '@/services/databa
 import prisma from '@/lib/prisma';
 import { allocateVendorMemoId } from '@/lib/vendor-memo-id';
 import { sendHatchNotification } from '@/lib/hatch-notify';
+import { sendCredentialEmail } from '@/services/credential-email';
+import { normalizePhone } from '@/lib/phone';
 
 const UMBRELLA_SPOKE_ID = 'innohatch';
 
@@ -41,6 +45,8 @@ export async function POST(request: Request) {
     hive_account?: unknown;
     template_key?: unknown;
     iban?: unknown;
+    email?: unknown;
+    phone?: unknown;
     mock?: unknown;
   };
   try {
@@ -53,12 +59,27 @@ export async function POST(request: Request) {
   const hive_account = typeof body.hive_account === 'string' ? body.hive_account.trim().toLowerCase() : '';
   const template_key = typeof body.template_key === 'string' ? body.template_key : undefined;
   const iban = typeof body.iban === 'string' && body.iban.trim() ? body.iban.trim().replace(/\s+/g, '') : null;
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
   const mock = body.mock === true; // dev-only: skip the real chain broadcast
 
   if (!display_name) return NextResponse.json({ error: 'display_name is required' }, { status: 400 });
   if (!/^[a-z][a-z0-9.-]{2,15}$/.test(hive_account)) {
     return NextResponse.json({ error: 'hive_account must be a valid Hive account name (3–16 chars)' }, { status: 400 });
   }
+  // Email is optional (operator may hatch before knowing it), but if given it must be well-formed.
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return NextResponse.json({ error: 'email is not a valid address' }, { status: 400 });
+  }
+  // Phone is optional, but if given we store the canonical E.164 form only (never the
+  // raw input), rejecting anything invalid so no dirty data lands. See lib/phone.ts.
+  const phoneResult = normalizePhone(body.phone);
+  if (!phoneResult.ok) {
+    return NextResponse.json(
+      { error: 'phone is not a valid number — use full international format, e.g. +352 621 123 456' },
+      { status: 400 },
+    );
+  }
+  const phone = phoneResult.e164;
 
   const env = targetEnv();
   const steps: Record<string, string> = {};
@@ -88,6 +109,49 @@ export async function POST(request: Request) {
         const txId = await createAndBroadcastHiveAccount(hive_account, keychain, { mockBroadcast: mock });
         await createWalletUser(hive_account, txId, seed, keychain.masterPassword);
         steps.account = mock ? 'created (mock)' : 'created';
+      }
+    }
+
+    // ── 1b. Vendor credentials: link email + send the conscious retrieval mail ──
+    // A mock vendor has no on-chain account, so credentials would be meaningless — skip.
+    if (!email) {
+      steps.credentials = 'skipped (no email)';
+    } else if (mock) {
+      steps.credentials = 'skipped (mock)';
+    } else {
+      try {
+        const wu = await findWalletUserByAccountName(hive_account);
+        if (!wu) {
+          steps.credentials = 'skipped (no walletuser)';
+        } else {
+          // Link an innouser carrying the email (+phone); conflict-tolerant because
+          // innouser.email is @unique but has drifted dupes in prod (findFirst, not findUnique).
+          // Email is the identity anchor, so a phone without an email can't be stored.
+          let inno = await prisma.innouser.findFirst({ where: { email } });
+          if (!inno) {
+            inno = await prisma.innouser.create({ data: { email, phoneNumber: phone } });
+          } else if (phone && !inno.phoneNumber) {
+            // Backfill a phone onto an existing person, but never clobber one already set.
+            inno = await prisma.innouser.update({ where: { id: inno.id }, data: { phoneNumber: phone } });
+          }
+          // Link the walletuser to this person if not already. (findWalletUserByAccountName
+          // returns a narrowed select without userId, so read it explicitly here.)
+          const link = await prisma.walletuser.findUnique({
+            where: { accountName: hive_account },
+            select: { userId: true },
+          });
+          if (link?.userId !== inno.id) {
+            await prisma.walletuser.update({
+              where: { accountName: hive_account },
+              data: { userId: inno.id },
+            });
+          }
+          const credId = await sendCredentialEmail(wu.id);
+          steps.credentials = credId ? 'sent' : 'failed (email not delivered)';
+        }
+      } catch (e) {
+        // Never fail the hatch over the credential mail — it's re-sendable.
+        steps.credentials = `failed (${e instanceof Error ? e.message : 'error'})`;
       }
     }
 
@@ -167,6 +231,8 @@ export async function POST(request: Request) {
       display_name,
       memo_vendor_id: memoVendorId,
       env,
+      email: email || null,
+      credentials: steps.credentials,
       till_url: prov.till_url,
       pay_url: prov.pay_url,
       steps,
