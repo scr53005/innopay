@@ -753,10 +753,16 @@ export default function HiveAccountCreationPage() {
     // FIRST PRIORITY: Check localStorage for existing account
     console.log('[USER PAGE] Checking localStorage for existing account...');
     const acc = localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName');
+    const activePriv = localStorage.getItem('innopay_activePrivate');
+    const memoPriv = localStorage.getItem('innopay_memoPrivate');
     const pass = localStorage.getItem('innopay_masterPassword') || localStorage.getItem('innopayMasterPassword');
     const seed = localStorage.getItem('innopay_seed') || localStorage.getItem('innopaySeed');
 
-    if (acc && pass) {
+    // Lean wallet format: an account is active+memo ONLY — the master password is
+    // deliberately not stored (SPOKE-KEY-SECURITY.md §4; the secure hand-off imports
+    // exactly these two). Detect an existing account by the active+memo pair, not the
+    // master password (which the old check required and thus missed every lean wallet).
+    if (acc && activePriv && memoPriv) {
       // Account exists! Show existing account view
       console.log('[USER PAGE] ✅ Existing account found in localStorage:', acc);
 
@@ -787,15 +793,15 @@ export default function HiveAccountCreationPage() {
         }
         const returnUrlParam = params.get('return_url'); // Get return URL to preserve environment
 
-        handleExistingAccountFlow5(acc, pass, parseFloat(orderParam), tableParam, memoParam, restaurantParam, restaurantAccountParam, returnUrlParam);
+        handleExistingAccountFlow5(acc, pass || '', parseFloat(orderParam), tableParam, memoParam, restaurantParam, restaurantAccountParam, returnUrlParam);
         return; // Exit early - redirect will happen
       }
 
       // Try to get email from localStorage (stored during account creation)
       const email = localStorage.getItem('innopay_email');
 
-      setExistingAccount({ accountName: acc, masterPassword: pass, seed: seed || '', email: email || undefined });
-      setResults({ accountName: acc, masterPassword: pass, seed: seed || '' });
+      setExistingAccount({ accountName: acc, masterPassword: pass || '', seed: seed || '', email: email || undefined });
+      setResults({ accountName: acc, masterPassword: pass || '', seed: seed || '' });
       setSuccess(true); // Show success state (existing account view)
 
       // Check if this is a mock account (starts with "mockaccount")

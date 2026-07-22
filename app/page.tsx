@@ -545,16 +545,20 @@ function TopUpContent() {
 
     const accountName = localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName');
     const activePrivate = localStorage.getItem('innopay_activePrivate');
-    const masterPassword = localStorage.getItem('innopay_masterPassword');
+    const memoPrivate = localStorage.getItem('innopay_memoPrivate');
 
     // Check if there are any URL parameters
     const hasSearchParams = Array.from(searchParams.keys()).length > 0;
 
-    // Validate that if accountName exists, the required keys also exist
-    // This handles the case where Safari/browser cleared some but not all localStorage items
-    if (accountName && (!activePrivate || !masterPassword)) {
-      console.warn('[LANDING] Corrupted localStorage detected (accountName exists but keys missing) - showing import modal');
-      // Clear corrupted data
+    // A wallet is now the LEAN format: account + active + memo ONLY (the master
+    // password and posting key are deliberately NOT stored — SPOKE-KEY-SECURITY.md
+    // §4; the secure hand-off imports exactly these two). So "corruption" is an
+    // INCOMPLETE active/memo pair (a partial browser wipe — one present, the other
+    // gone), NOT the absence of a master password. (The old guard required the
+    // master password and thus force-re-imported every lean wallet.)
+    if (accountName && (!activePrivate || !memoPrivate)) {
+      console.warn('[LANDING] Incomplete wallet in localStorage (active/memo pair broken) - showing import modal');
+      // Clear the broken remnant
       localStorage.removeItem('innopay_accountName');
       localStorage.removeItem('innopayAccountName');
       localStorage.removeItem('innopay_activePrivate');
@@ -577,7 +581,7 @@ function TopUpContent() {
       return;
     }
 
-    setHasAccount(!!accountName && !!activePrivate && !!masterPassword);
+    setHasAccount(!!accountName && !!activePrivate && !!memoPrivate);
 
     // Note: Balance fetching removed - React Query useBalance hook automatically handles this
     // The hook fetches fresh balance on mount and whenever accountName changes

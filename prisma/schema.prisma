@@ -131,6 +131,19 @@ model accountCredentialSession {
   @@map("account_credential_session")
 }
 
+// Replay guard for the secure spoke→hub wallet hand-off. Each signed challenge is
+// single-use: verify inserts the nonce, and a unique violation on a re-presented
+// nonce means "already used" → reject. Freshness (≤2 min) is checked from the ts
+// in the URL, so old rows are just harmless residue (periodically pruned).
+model handoff_challenge {
+  id        String   @id @default(cuid())
+  account   String   @db.VarChar(16)
+  nonce     String   @unique
+  createdAt DateTime @default(now())
+
+  @@map("handoff_challenge")
+}
+
 model outstanding_debt {
   id              String    @id @default(cuid())
   created_at      DateTime  @default(now())
