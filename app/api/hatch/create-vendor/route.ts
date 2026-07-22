@@ -60,15 +60,19 @@ export async function POST(request: Request) {
   const template_key = typeof body.template_key === 'string' ? body.template_key : undefined;
   const iban = typeof body.iban === 'string' && body.iban.trim() ? body.iban.trim().replace(/\s+/g, '') : null;
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
-  const mock = body.mock === true; // dev-only: skip the real chain broadcast
+  // Mock is a DEV-ONLY testing shortcut (skips the real chain broadcast). Hard-refuse
+  // it whenever we're targeting the prod ecosystem — a prod vendor must be real, and
+  // the client hides the checkbox there, but the server is the actual guardrail.
+  const mock = body.mock === true && targetEnv() !== 'prod';
 
   if (!display_name) return NextResponse.json({ error: 'display_name is required' }, { status: 400 });
   if (!/^[a-z][a-z0-9.-]{2,15}$/.test(hive_account)) {
     return NextResponse.json({ error: 'hive_account must be a valid Hive account name (3–16 chars)' }, { status: 400 });
   }
-  // Email is optional (operator may hatch before knowing it), but if given it must be well-formed.
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return NextResponse.json({ error: 'email is not a valid address' }, { status: 400 });
+  // Email is MANDATORY: it's our only reliable channel to the vendor (credential
+  // retrieval, support, future SMS-2FA enrolment). No hatch without it.
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return NextResponse.json({ error: 'a valid vendor email is required' }, { status: 400 });
   }
   // Phone is optional, but if given we store the canonical E.164 form only (never the
   // raw input), rejecting anything invalid so no dirty data lands. See lib/phone.ts.

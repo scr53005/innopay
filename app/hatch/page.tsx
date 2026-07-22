@@ -5,8 +5,9 @@
 // and the orchestration creates the account, allocates the V:, wires the
 // registry + merchant-hub + innohatch, and returns the till URL to hand over.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
+import { validateHiveAccountName } from '@/lib/hive-account-name';
 
 const CATEGORIES = [
   { key: 'coffee_cart', label: 'Coffee cart (espresso, double, cappuccino, latte)' },
@@ -16,6 +17,17 @@ const CATEGORIES = [
 
 // Valid-format but non-real LU specimen IBAN — evocative demo default.
 const SPECIMEN_IBAN = 'LU28 0019 4006 4475 0000';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Mock (skip the real chain broadcast) is a DEV-ONLY convenience. Hide the checkbox
+// in prod (the server refuses it there regardless). Prod = the env var says so, or
+// we're actually served from the prod hub host.
+function isProdHatch(): boolean {
+  if (process.env.NEXT_PUBLIC_ENV === 'prod') return true;
+  if (typeof window !== 'undefined' && window.location.hostname === 'wallet.innopay.lu') return true;
+  return false;
+}
 
 interface HatchResult {
   account: string;
@@ -39,6 +51,51 @@ export default function HatchPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<HatchResult | null>(null);
+
+  // Live Hive account-name validation (format now, availability debounced) —
+  // lifted from the customer account-creation flow (app/user/page.tsx).
+  const [nameMsg, setNameMsg] = useState('');
+  const [nameOk, setNameOk] = useState(false);
+  const nameDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showMock = !isProdHatch();
+
+  function onHiveAccountChange(raw: string) {
+    const value = raw.toLowerCase();
+    setHiveAccount(value);
+
+    if (value.length === 0) {
+      setNameMsg('');
+      setNameOk(false);
+      return;
+    }
+    const { valid, message } = validateHiveAccountName(value);
+    if (!valid) {
+      setNameMsg(message);
+      setNameOk(false);
+      return;
+    }
+    // Format is good — optimistic success, then confirm availability on chain.
+    setNameMsg('Looks good — checking availability…');
+    setNameOk(true);
+    if (nameDebounce.current) clearTimeout(nameDebounce.current);
+    nameDebounce.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/haf-accounts/check?accountName=${encodeURIComponent(value)}`);
+        const data = await res.json();
+        if (data.available === false) {
+          setNameMsg('That account name is already taken — choose another.');
+          setNameOk(false);
+        } else {
+          setNameMsg('Available ✓');
+          setNameOk(true);
+        }
+      } catch {
+        // HAF unreachable → keep optimistic; the create call verifies on chain anyway.
+        setNameMsg('Format OK (availability check unavailable)');
+        setNameOk(true);
+      }
+    }, 300);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -78,6 +135,8 @@ export default function HatchPage() {
           setResult(null);
           setDisplayName('');
           setHiveAccount('');
+          setNameMsg('');
+          setNameOk(false);
           setIban(SPECIMEN_IBAN);
           setEmail('');
           setPhone('');
@@ -99,9 +158,12 @@ export default function HatchPage() {
         <label className="block">
           <span className="text-sm font-semibold">Hive account name</span>
           <input value={hiveAccount}
-            onChange={(e) => setHiveAccount(e.target.value.toLowerCase())}
+            onChange={(e) => onHiveAccountChange(e.target.value)}
             placeholder="monterey-cart" className="mt-1 w-full rounded-lg border p-3 font-mono" />
           <span className="text-xs text-gray-400">3–16 chars, lowercase, digits, dots, hyphens. Used as the till URL slug.</span>
+          {nameMsg && (
+            <span className={`mt-1 block text-xs ${nameOk ? 'text-emerald-600' : 'text-red-600'}`}>{nameMsg}</span>
+          )}
         </label>
         <label className="block">
           <span className="text-sm font-semibold">Category</span>
@@ -116,14 +178,14 @@ export default function HatchPage() {
             className="mt-1 w-full rounded-lg border p-3 font-mono" />
         </label>
         <label className="block">
-          <span className="text-sm font-semibold">Vendor email (optional)</span>
-          <input type="email" value={email}
+          <span className="text-sm font-semibold">Vendor email <span className="text-red-500">*</span></span>
+          <input type="email" required value={email}
             onChange={(e) => setEmail(e.target.value.toLowerCase())}
             placeholder="owner@example.com" className="mt-1 w-full rounded-lg border p-3" />
           <span className="text-xs text-gray-400">
-            If given, the vendor is emailed a one-time link to retrieve their own
-            account credentials (needed to log into their menu &amp; history). Can be
-            added later by re-hatching the same account.
+            Required — our channel to the vendor. They’re emailed a one-time link to
+            retrieve their own account credentials (needed to log into their menu
+            &amp; history).
           </span>
         </label>
         <label className="block">
@@ -137,18 +199,20 @@ export default function HatchPage() {
             (future SMS 2FA). Stored on the person, not the till.
           </span>
         </label>
-        <label className="flex items-start gap-2 rounded-lg bg-amber-50 p-3">
-          <input type="checkbox" checked={mock} onChange={(e) => setMock(e.target.checked)} className="mt-1" />
-          <span className="text-sm text-amber-800">
-            <b>Mock</b> — test the wiring only. No real Hive account is created
-            (the vendor can’t receive real payments). Uncheck to create a real
-            account.
-          </span>
-        </label>
+        {showMock && (
+          <label className="flex items-start gap-2 rounded-lg bg-amber-50 p-3">
+            <input type="checkbox" checked={mock} onChange={(e) => setMock(e.target.checked)} className="mt-1" />
+            <span className="text-sm text-amber-800">
+              <b>Mock</b> — test the wiring only. No real Hive account is created
+              (the vendor can’t receive real payments). Uncheck to create a real
+              account. <i>(Dev only — refused in production.)</i>
+            </span>
+          </label>
+        )}
         {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-        <button type="submit" disabled={busy || !displayName || !hiveAccount}
+        <button type="submit" disabled={busy || !displayName || !nameOk || !EMAIL_RE.test(email)}
           className="w-full rounded-lg bg-emerald-600 py-3 font-bold text-white disabled:opacity-50">
-          {busy ? 'Hatching…' : 'Hatch'}
+          {busy ? 'Creating…' : 'Create new vendor'}
         </button>
       </form>
     </main>
