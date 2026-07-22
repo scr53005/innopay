@@ -418,9 +418,26 @@ export async function POST(req: NextRequest) {
     console.log(`[${new Date().toISOString()}] [CHECKOUT API] Success URL:`, sessionConfig.success_url);
     console.log(`[${new Date().toISOString()}] [CHECKOUT API] Cancel URL:`, sessionConfig.cancel_url);
 
-    // Add customer email if provided
-    if (email) {
-      sessionConfig.customer_email = email;
+    // Customer email for Stripe. For an EXISTING account the authoritative email
+    // is the one on the linked innouser — prefer it over whatever the client
+    // passed (localStorage can be empty for a Flow-8-imported wallet). Setting
+    // customer_email PREFILLS AND LOCKS the field, so the customer can't type a
+    // different address — which the Flow-7 webhook would otherwise mis-attribute
+    // the top-up to (it books the topup via findInnoUserByEmail on the typed email).
+    let checkoutEmail: string | undefined = email;
+    if (accountName) {
+      try {
+        const wu = await prisma.walletuser.findUnique({
+          where: { accountName },
+          select: { innouser: { select: { email: true } } },
+        });
+        if (wu?.innouser?.email) checkoutEmail = wu.innouser.email;
+      } catch (e) {
+        console.warn('[CHECKOUT API] innouser email lookup failed, using passed email:', e);
+      }
+    }
+    if (checkoutEmail) {
+      sessionConfig.customer_email = checkoutEmail;
     }
 
     const session = await stripe.checkout.sessions.create(sessionConfig);

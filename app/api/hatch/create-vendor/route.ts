@@ -44,6 +44,7 @@ export async function POST(request: Request) {
     display_name?: unknown;
     hive_account?: unknown;
     template_key?: unknown;
+    new_template?: unknown; // { name, items:[{kind,label,price_eur}] } — "Create new category"
     iban?: unknown;
     email?: unknown;
     phone?: unknown;
@@ -58,6 +59,9 @@ export async function POST(request: Request) {
   const display_name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
   const hive_account = typeof body.hive_account === 'string' ? body.hive_account.trim().toLowerCase() : '';
   const template_key = typeof body.template_key === 'string' ? body.template_key : undefined;
+  // "Create new category": passed straight through to innohatch provision, which
+  // find-or-creates the template (slug de-dup) and provisions from it. Validated there.
+  const new_template = body.new_template && typeof body.new_template === 'object' ? body.new_template : undefined;
   const iban = typeof body.iban === 'string' && body.iban.trim() ? body.iban.trim().replace(/\s+/g, '') : null;
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
   // Mock is a DEV-ONLY testing shortcut (skips the real chain broadcast). Hard-refuse
@@ -212,6 +216,7 @@ export async function POST(request: Request) {
         memo_vendor_id: memoVendorId,
         currency: 'EUR',
         template_key,
+        new_template,
       }),
     });
     if (!provRes.ok) throw new Error(`innohatch provision failed (${provRes.status}): ${await provRes.text()}`);

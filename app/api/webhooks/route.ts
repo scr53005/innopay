@@ -27,6 +27,7 @@ import {
   findGuestCheckoutBySessionId,
   updateGuestCheckout,
   createWalletUser,
+  bookTopupToWalletOwner,
 } from '@/services/database';
 
 // Import Hive functions
@@ -662,28 +663,20 @@ async function handleFlow7UnifiedApproach(
     userBalance = 0;
   }
 
-  // STEP 4: Update database with topup record
-  if (customerEmail && walletUser) {
+  // STEP 4: Update database with topup record.
+  // Book the topup to the TRUE OWNER of THIS Hive wallet — walletUser.userId —
+  // NOT to whoever a Stripe-typed email happens to resolve to. One innouser can
+  // own several walletusers (Hive accounts), and the on-chain EURO is credited by
+  // accountName, so the wallet's own userId is the authoritative person for this
+  // top-up. The email is used ONLY as a repair path for a wallet whose userId was
+  // never set (legacy/edge case).
+  if (walletUser) {
     try {
-      if (!walletUser.userId) {
-        console.error(`[FLOW 7] ⚠️ CRITICAL: walletuser.userId is NULL for accountName '${accountName}'!`);
-
-        const existingUser = await findInnoUserByEmail(customerEmail);
-        if (existingUser) {
-          await prisma.walletuser.update({
-            where: { id: walletUser.id },
-            data: { userId: existingUser.id }
-          });
-          console.warn(`[FLOW 7] ✅ Updated walletuser.userId to ${existingUser.id}`);
-          await createTopupForExistingUser(existingUser.id, topupAmount);
-          console.warn(`[FLOW 7] ✅ Topup record created for user ID: ${existingUser.id}`);
-        }
+      const bookedUserId = await bookTopupToWalletOwner(walletUser, customerEmail, topupAmount);
+      if (bookedUserId) {
+        console.warn(`[FLOW 7] ✅ Topup booked to wallet owner user ID: ${bookedUserId}`);
       } else {
-        const existingUser = await findInnoUserByEmail(customerEmail);
-        if (existingUser) {
-          await createTopupForExistingUser(existingUser.id, topupAmount);
-          console.warn(`[FLOW 7] ✅ Topup record created for user ID: ${existingUser.id}`);
-        }
+        console.error(`[FLOW 7] ⚠️ No innouser (and none creatable) — topup record NOT created (EURO still transferred on-chain).`);
       }
     } catch (dbError) {
       console.error('[FLOW 7] ❌ Database update failed, but transfers succeeded:', dbError);
@@ -854,52 +847,23 @@ async function handleFlow2PureTopup(
     }
   }
 
-  // If email provided, update database with topup record
-  if (customerEmail && walletUser) {
-    console.warn(`[FLOW 2] Attempting to update database with email: ${customerEmail}`);
+  // Book the top-up record — book to the wallet's TRUE OWNER (walletUser.userId),
+  // retrofitting a legacy no-email wallet into an innouser when needed. Same rule
+  // and helper as Flow 7 (see bookTopupToWalletOwner). Non-blocking: the EURO is
+  // already on-chain; a DB hiccup only skips the accounting record.
+  if (walletUser) {
     try {
-      if (!walletUser.userId) {
-        console.error(`[FLOW 2] ⚠️ CRITICAL: walletuser.userId is NULL for accountName '${accountName}'!`);
-
-        // Try to find innouser by email and create link
-        const existingUser = await findInnoUserByEmail(customerEmail);
-        if (existingUser) {
-          console.warn(`[FLOW 2] Found innouser with email ${customerEmail}, userId: ${existingUser.id}`);
-
-          // Update walletuser with userId
-          await prisma.walletuser.update({
-            where: { id: walletUser.id },
-            data: { userId: existingUser.id }
-          });
-          console.warn(`[FLOW 2] ✅ Updated walletuser.userId to ${existingUser.id}`);
-
-          // Now create topup record
-          await createTopupForExistingUser(existingUser.id, amountEuro);
-          console.warn(`[FLOW 2] ✅ Topup record created for user ID: ${existingUser.id}`);
-        } else {
-          console.error(`[FLOW 2] ❌ Email ${customerEmail} not found in innouser table. Cannot link walletuser.`);
-          console.error(`[FLOW 2] Top-up completed but not tracked in database.`);
-        }
+      const bookedUserId = await bookTopupToWalletOwner(walletUser, customerEmail, amountEuro);
+      if (bookedUserId) {
+        console.warn(`[FLOW 2] ✅ Topup booked to wallet owner user ID: ${bookedUserId}`);
       } else {
-        // userId exists, proceed normally
-        const existingUser = await findInnoUserByEmail(customerEmail);
-        if (existingUser) {
-          if (existingUser.id !== walletUser.userId) {
-            console.warn(`[FLOW 2] ⚠️ Email mismatch: walletuser.userId=${walletUser.userId}, but email maps to userId=${existingUser.id}`);
-            console.warn(`[FLOW 2] Updating email in innouser to ${customerEmail}`);
-          }
-          await createTopupForExistingUser(existingUser.id, amountEuro);
-          console.warn(`[FLOW 2] ✅ Topup record created for user ID: ${existingUser.id}`);
-        } else {
-          console.error(`[FLOW 2] ❌ Email ${customerEmail} not found in database. Top-up completed but not tracked.`);
-        }
+        console.error(`[FLOW 2] ⚠️ No innouser (and none creatable — no email?) — topup record NOT created (EURO still transferred on-chain).`);
       }
     } catch (dbError) {
       console.error('[FLOW 2] ❌ Database update failed, but transfers succeeded:', dbError);
-      // Don't throw - the payment went through, just log the DB issue
     }
   } else {
-    console.warn(`[FLOW 2] No customer email provided, skipping database update`);
+    console.warn(`[FLOW 2] No walletuser for ${accountName}, skipping topup record`);
   }
 
   return NextResponse.json({

@@ -182,6 +182,51 @@ export async function createTopupForExistingUser(userId: number, amountEuro: num
   });
 }
 
+/**
+ * Book a top-up to the TRUE OWNER of a Hive wallet — used by BOTH Flow 2 (pure
+ * top-up) and Flow 7 (top-up + order) so they stay consistent.
+ *
+ * - Wallet already linked (`userId` set) → book to that `userId`, IGNORING the
+ *   Stripe-typed email. The wallet's own owner is authoritative; one innouser can
+ *   own several wallets, and the EURO is credited on-chain by accountName anyway.
+ * - Wallet NOT linked (legacy early users with no innouser) → RETROFIT: find-or-
+ *   CREATE the innouser from the email the customer supplied at Stripe, link this
+ *   walletuser to it (which enables Flow 8 credential retrieval later), then book.
+ *
+ * find-or-create is conflict-tolerant: `innouser.email` is `@unique` but has drifted
+ * dupes in prod, so we `findFirst` (never `findUnique`) and swallow a create race.
+ *
+ * Returns the booked userId, or null when no record could be created (the caller
+ * has already transferred the EURO on-chain regardless — only the DB record is
+ * skipped). Never throws for the "no record" case; real DB errors propagate.
+ */
+export async function bookTopupToWalletOwner(
+  walletUser: { id: number; userId: number | null },
+  customerEmail: string | null | undefined,
+  amountEuro: number,
+): Promise<number | null> {
+  if (walletUser.userId) {
+    await createTopupForExistingUser(walletUser.userId, amountEuro);
+    return walletUser.userId;
+  }
+  if (!customerEmail) return null;
+
+  let user = await prisma.innouser.findFirst({ where: { email: customerEmail } });
+  if (!user) {
+    try {
+      user = await prisma.innouser.create({ data: { email: customerEmail } });
+    } catch {
+      // Unique-race / drifted dupe — re-fetch rather than fail the top-up.
+      user = await prisma.innouser.findFirst({ where: { email: customerEmail } });
+    }
+  }
+  if (!user) return null;
+
+  await prisma.walletuser.update({ where: { id: walletUser.id }, data: { userId: user.id } });
+  await createTopupForExistingUser(user.id, amountEuro);
+  return user.id;
+}
+
 // Finds the last created Hive account to determine the next sequential account name.
 export async function findLastHiveAccount() {
   return prisma.bip39seedandaccount.findFirst({

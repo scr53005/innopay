@@ -9,11 +9,21 @@ import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { validateHiveAccountName } from '@/lib/hive-account-name';
 
-const CATEGORIES = [
-  { key: 'coffee_cart', label: 'Coffee cart (espresso, double, cappuccino, latte)' },
-  { key: 'food_truck', label: 'Food truck (burger, cheeseburger, beer)' },
-  { key: 'buvette', label: 'Buvette / fête (soft, water, juice)' },
+// Fallback categories if the innohatch templates list can't be fetched (dev/offline).
+const FALLBACK_CATEGORIES = [
+  { key: 'coffee_cart', name: 'Coffee cart' },
+  { key: 'food_truck', name: 'Food truck' },
+  { key: 'buvette', name: 'Buvette / fête' },
 ];
+
+// Sentinel dropdown value for "Create new category".
+const NEW_CATEGORY = '__new__';
+
+interface NewItem {
+  kind: 'dish' | 'drink';
+  label: string;
+  price: string; // free-typed; coerced to number on submit
+}
 
 // Valid-format but non-real LU specimen IBAN — evocative demo default.
 const SPECIMEN_IBAN = 'LU28 0019 4006 4475 0000';
@@ -44,6 +54,10 @@ export default function HatchPage() {
   const [displayName, setDisplayName] = useState('');
   const [hiveAccount, setHiveAccount] = useState('');
   const [templateKey, setTemplateKey] = useState('coffee_cart');
+  const [categories, setCategories] = useState<{ key: string; name: string }[]>(FALLBACK_CATEGORIES);
+  // "Create new category" mini-form state.
+  const [newName, setNewName] = useState('');
+  const [newItems, setNewItems] = useState<NewItem[]>([{ kind: 'drink', label: '', price: '' }]);
   const [iban, setIban] = useState(SPECIMEN_IBAN);
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -58,6 +72,23 @@ export default function HatchPage() {
   const [nameOk, setNameOk] = useState(false);
   const nameDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showMock = !isProdHatch();
+
+  // Load the category list from innohatch (via the operator-gated hub proxy).
+  useEffect(() => {
+    fetch('/api/hatch/templates')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (Array.isArray(d?.templates) && d.templates.length) setCategories(d.templates);
+      })
+      .catch(() => {});
+  }, []);
+
+  const creatingCategory = templateKey === NEW_CATEGORY;
+  const validNewItems = newItems.filter((i) => i.label.trim() && Number.isFinite(Number(i.price)));
+  const newCategoryReady = creatingCategory ? newName.trim().length > 0 && validNewItems.length > 0 : true;
+
+  const setItem = (idx: number, patch: Partial<NewItem>) =>
+    setNewItems((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
 
   function onHiveAccountChange(raw: string) {
     const value = raw.toLowerCase();
@@ -102,13 +133,27 @@ export default function HatchPage() {
     setBusy(true);
     setError(null);
     try {
+      // "Create new category" → send new_template (name + items); else template_key.
+      const categoryPayload = creatingCategory
+        ? {
+            new_template: {
+              name: newName.trim(),
+              items: validNewItems.map((i) => ({
+                kind: i.kind,
+                label: i.label.trim(),
+                price_eur: Number(i.price),
+              })),
+            },
+          }
+        : { template_key: templateKey };
+
       const res = await fetch('/api/hatch/create-vendor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           display_name: displayName,
           hive_account: hiveAccount,
-          template_key: templateKey,
+          ...categoryPayload,
           iban,
           email,
           phone,
@@ -137,6 +182,9 @@ export default function HatchPage() {
           setHiveAccount('');
           setNameMsg('');
           setNameOk(false);
+          setTemplateKey('coffee_cart');
+          setNewName('');
+          setNewItems([{ kind: 'drink', label: '', price: '' }]);
           setIban(SPECIMEN_IBAN);
           setEmail('');
           setPhone('');
@@ -169,9 +217,49 @@ export default function HatchPage() {
           <span className="text-sm font-semibold">Category</span>
           <select value={templateKey} onChange={(e) => setTemplateKey(e.target.value)}
             className="mt-1 w-full rounded-lg border p-3">
-            {CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+            {categories.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
+            <option value={NEW_CATEGORY}>➕ Create new category…</option>
           </select>
         </label>
+
+        {/* "Create new category" mini-form: name + a few starter dishes/drinks. The
+            new category is saved (slug-deduped) and reusable on future hatches. */}
+        {creatingCategory && (
+          <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+            <label className="block">
+              <span className="text-sm font-semibold">New category name</span>
+              <input value={newName} onChange={(e) => setNewName(e.target.value)}
+                placeholder="Crêperie" className="mt-1 w-full rounded-lg border p-2" />
+              <span className="text-xs text-gray-500">
+                Reusable on future hatches. Accent-insensitive: “Crêperie” and “Creperie”
+                are the same category.
+              </span>
+            </label>
+
+            <div className="space-y-2">
+              <span className="text-sm font-semibold">Starter items</span>
+              {newItems.map((it, idx) => (
+                <div key={idx} className="flex items-center gap-1.5">
+                  <select value={it.kind} onChange={(e) => setItem(idx, { kind: e.target.value as 'dish' | 'drink' })}
+                    className="rounded border p-2 text-sm">
+                    <option value="drink">B</option>
+                    <option value="dish">D</option>
+                  </select>
+                  <input value={it.label} onChange={(e) => setItem(idx, { label: e.target.value })}
+                    placeholder="Crêpe sucrée" className="min-w-0 flex-1 rounded border p-2 text-sm" />
+                  <input value={it.price} onChange={(e) => setItem(idx, { price: e.target.value })}
+                    inputMode="decimal" placeholder="€" className="w-16 rounded border p-2 text-sm" />
+                  <button type="button" disabled={newItems.length <= 1}
+                    onClick={() => setNewItems((r) => r.filter((_, i) => i !== idx))}
+                    className="shrink-0 rounded border px-2 py-1 text-xs text-red-600 disabled:opacity-30">✕</button>
+                </div>
+              ))}
+              <button type="button"
+                onClick={() => setNewItems((r) => [...r, { kind: 'drink', label: '', price: '' }])}
+                className="rounded-lg border px-3 py-1.5 text-xs font-semibold">+ Add item</button>
+            </div>
+          </div>
+        )}
         <label className="block">
           <span className="text-sm font-semibold">IBAN (payout — optional)</span>
           <input value={iban} onChange={(e) => setIban(e.target.value)}
@@ -210,7 +298,7 @@ export default function HatchPage() {
           </label>
         )}
         {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-        <button type="submit" disabled={busy || !displayName || !nameOk || !EMAIL_RE.test(email)}
+        <button type="submit" disabled={busy || !displayName || !nameOk || !EMAIL_RE.test(email) || !newCategoryReady}
           className="w-full rounded-lg bg-emerald-600 py-3 font-bold text-white disabled:opacity-50">
           {busy ? 'Creating…' : 'Create new vendor'}
         </button>
