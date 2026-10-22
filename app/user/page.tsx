@@ -9,6 +9,8 @@ import Image from 'next/image';
 import { PrivateKey } from '@hiveio/dhive';
 import MiniWallet, { WalletReopenButton } from '@/app/components/MiniWallet';
 import { getCurrencyConfig, type CurrencyConfig } from '@/lib/currency-config';
+import { walletImportMessages, type WalletImportChoice } from '@/lib/wallet-import';
+import { parseHubWalletImport, saveHubWalletImport, type HubWalletImport } from '@/lib/hub-wallet-import';
 
 // Check if in dev/test environment
 const isDevOrTest = process.env.NEXT_PUBLIC_ENV !== 'production';
@@ -360,8 +362,12 @@ export default function HiveAccountCreationPage() {
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState('');
   const [importAttempts, setImportAttempts] = useState(5);
-  const [importStep, setImportStep] = useState<'email' | 'code' | 'select'>('email');
+  const [importStep, setImportStep] = useState<'email' | 'code' | 'select' | 'replace'>('email');
   const [verificationCode, setVerificationCode] = useState('');
+  const [showWalletImport, setShowWalletImport] = useState(false);
+  const [pendingWalletImport, setPendingWalletImport] = useState<HubWalletImport | null>(null);
+  const [walletBeingReplaced, setWalletBeingReplaced] = useState<string | null>(null);
+  const importText = walletImportMessages[language];
   const [multipleAccounts, setMultipleAccounts] = useState<Array<{
     accountName: string;
     creationDate: string;
@@ -626,6 +632,11 @@ export default function HiveAccountCreationPage() {
     // Check URL for account_created flag (from /user/success after new_account flow)
     const params = new URLSearchParams(window.location.search);
     const accountCreated = params.get('account_created');
+    const importingWallet = params.get('choice') === 'import';
+    if (importingWallet) {
+      setShowWalletImport(true);
+      setUserChoice('import');
+    }
 
     if (accountCreated === 'true') {
       console.log('[USER PAGE] ✨ New account creation detected! Showing celebration...');
@@ -772,7 +783,7 @@ export default function HiveAccountCreationPage() {
       // Try both 'memo' (from indiesmenu) and 'order_memo' (legacy) for backward compatibility
       const memoParam = params.get('memo') || params.get('order_memo');
 
-      if (orderParam && parseFloat(orderParam) > 0) {
+      if (orderParam && parseFloat(orderParam) > 0 && !importingWallet) {
         // Flow 5 with existing account - need to redirect back to indiesmenu with credentials
         console.log('[FLOW 5 EXISTING ACCOUNT] Detected Flow 5 with existing account');
         console.log('[FLOW 5 EXISTING ACCOUNT] Order:', orderParam, 'Table:', tableParam);
@@ -1570,6 +1581,43 @@ export default function HiveAccountCreationPage() {
     }
   };
 
+  function startWalletImport() {
+    setShowWalletImport(true);
+    setUserChoice('import');
+    setImportStep('email');
+    setImportEmail('');
+    setVerificationCode('');
+    setPendingWalletImport(null);
+    setImportError('');
+    setImportLoading(false);
+  }
+
+  function keepExistingWallet() {
+    setPendingWalletImport(null);
+    setImportStep('email');
+    setVerificationCode('');
+    setImportError('');
+    setShowWalletImport(false);
+    setUserChoice(null);
+  }
+
+  function finishWalletImport(data: unknown, choice?: WalletImportChoice) {
+    const wallet = parseHubWalletImport(data);
+    const action = saveHubWalletImport(localStorage, wallet, importEmail, choice);
+    if (action === 'confirm') {
+      setWalletBeingReplaced(localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName'));
+      setPendingWalletImport(wallet);
+      setImportStep('replace');
+      setImportLoading(false);
+      return;
+    }
+    if (action === 'keep') {
+      keepExistingWallet();
+      return;
+    }
+    window.location.href = '/';
+  }
+
   // Handle verification code submission
   const handleVerifyCode = async () => {
     if (!verificationCode || verificationCode.length !== 6) {
@@ -1582,7 +1630,6 @@ export default function HiveAccountCreationPage() {
     setImportError('');
 
     try {
-      console.log('[VERIFY] Checking code:', verificationCode);
 
       const response = await fetch('/api/verify/check-code', {
         method: 'POST',
@@ -1594,24 +1641,10 @@ export default function HiveAccountCreationPage() {
       });
 
       const data = await response.json();
-      console.log('[VERIFY] Check response:', data);
 
       if (data.success === true) {
         if (data.single === true) {
-          // Single account - auto-import
-          console.log('[VERIFY] Single account found:', data.accountName);
-
-          localStorage.setItem('innopay_accountName', data.accountName);
-          localStorage.setItem('innopay_masterPassword', data.masterPassword || '');
-
-          if (data.keys) {
-            localStorage.setItem('innopay_activePrivate', data.keys.active);
-            localStorage.setItem('innopay_postingPrivate', data.keys.posting);
-            localStorage.setItem('innopay_memoPrivate', data.keys.memo);
-          }
-
-          // Redirect to main page
-          window.location.href = '/';
+          finishWalletImport(data);
 
         } else {
           // Multiple accounts - show selection
@@ -1629,7 +1662,7 @@ export default function HiveAccountCreationPage() {
       }
     } catch (error) {
       console.error('[VERIFY] Network error:', error);
-      setImportError('Erreur de connexion au serveur');
+      setImportError(error instanceof Error && error.name !== 'TypeError' ? error.message : 'Erreur de connexion au serveur');
       setTimeout(() => {
         setImportError('');
         setImportLoading(false);
@@ -1655,20 +1688,9 @@ export default function HiveAccountCreationPage() {
       });
 
       const data = await response.json();
-      console.log('[VERIFY] Credentials response:', data);
 
       if (data.accountName) {
-        localStorage.setItem('innopay_accountName', data.accountName);
-        localStorage.setItem('innopay_masterPassword', data.masterPassword || '');
-
-        if (data.keys) {
-          localStorage.setItem('innopay_activePrivate', data.keys.active);
-          localStorage.setItem('innopay_postingPrivate', data.keys.posting);
-          localStorage.setItem('innopay_memoPrivate', data.keys.memo);
-        }
-
-        // Redirect to main page
-        window.location.href = '/';
+        finishWalletImport(data);
       } else if (data.error) {
         setImportError(data.error);
         setTimeout(() => {
@@ -1678,7 +1700,7 @@ export default function HiveAccountCreationPage() {
       }
     } catch (error) {
       console.error('[VERIFY] Network error:', error);
-      setImportError('Erreur de connexion au serveur');
+      setImportError(error instanceof Error && error.name !== 'TypeError' ? error.message : 'Erreur de connexion au serveur');
       setTimeout(() => {
         setImportError('');
         setImportLoading(false);
@@ -1735,10 +1757,10 @@ export default function HiveAccountCreationPage() {
       {userChoice === 'import' && (
         <div className="w-full max-w-md px-4 sm:px-0">
           <button
-            onClick={() => setUserChoice(null)}
+            onClick={() => existingAccount ? keepExistingWallet() : setUserChoice(null)}
             className="mb-4 text-blue-600 hover:text-blue-800 text-sm flex items-center gap-1"
           >
-            <span>←</span> Retour / Back
+            <span>←</span> {existingAccount ? importText.keep : translations[language].backButton}
           </button>
 
           <h2 className="text-2xl font-bold text-gray-900 mb-4 text-center">
@@ -1766,7 +1788,7 @@ export default function HiveAccountCreationPage() {
                 }}
                 placeholder="your.email@example.com"
                 className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 bg-white"
-                disabled={importLoading}
+                disabled={importLoading || importStep !== 'email'}
                 autoFocus
               />
             </div>
@@ -1859,6 +1881,25 @@ export default function HiveAccountCreationPage() {
                   ← Use a different email / Utiliser un autre email
                 </button>
               </div>
+            )}
+
+            {importStep === 'replace' && pendingWalletImport && (
+              <section aria-label={importText.title} className="space-y-4">
+                <h3 className="text-xl font-bold text-gray-900">{importText.title}</h3>
+                <p className="text-sm text-gray-700">{importText.current}: <strong>@{walletBeingReplaced}</strong></p>
+                <p className="text-sm text-gray-700">{importText.incoming}: <strong>@{pendingWalletImport.accountName}</strong></p>
+                <p className="text-sm text-gray-600">{importText.explanation}</p>
+                <div className="flex gap-3">
+                  <button type="button" onClick={() => finishWalletImport(pendingWalletImport, 'replace')}
+                    className="flex-1 rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white">
+                    {importText.replace}
+                  </button>
+                  <button type="button" onClick={() => finishWalletImport(pendingWalletImport, 'keep')}
+                    className="flex-1 rounded-lg border border-gray-400 px-4 py-3 font-semibold text-gray-800">
+                    {importText.keep}
+                  </button>
+                </div>
+              </section>
             )}
 
             {/* Step 3: Account selection (multiple accounts) */}
@@ -2279,6 +2320,11 @@ export default function HiveAccountCreationPage() {
                   </p>
                 </div>
 
+                <button type="button" onClick={startWalletImport}
+                  className="text-sm font-semibold text-blue-700 underline">
+                  {importText.importAnother}
+                </button>
+
                 {/* MiniWallet Component - Fixed with proper onClose */}
                 {accountBalance !== null && showWalletBalance && (
                   <div className="w-full my-1">
@@ -2541,7 +2587,7 @@ export default function HiveAccountCreationPage() {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen py-2">
-      {existingAccount ? renderExistingAccountView() : renderAccountCreationForm()}
+      {existingAccount && !showWalletImport ? renderExistingAccountView() : renderAccountCreationForm()}
       <ToastContainer
         position="top-center"
         autoClose={3000}

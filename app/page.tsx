@@ -7,6 +7,7 @@ import Draggable from '@/app/components/Draggable';
 import MiniWallet, { WalletReopenButton } from '@/app/components/MiniWallet';
 import { getAccountCredentials } from '@/app/actions/get-credentials';
 import { useBalance } from '@/hooks/useBalance';
+import { walletImportMessages } from '@/lib/wallet-import';
 
 const innopayLogoUrl = "/innopay.svg";
 
@@ -992,6 +993,14 @@ function TopUpContent() {
             )}
           </button>
         </form>
+
+        {hasAccount && (
+          <div className="mt-4 text-center">
+            <a href="/user?choice=import" className="text-sm font-semibold text-blue-700 underline">
+              {walletImportMessages[language].importAnother}
+            </a>
+          </div>
+        )}
 
         {/* Language Buttons */}
         <div className="mt-8 flex justify-center gap-2">
