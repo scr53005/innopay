@@ -1,6 +1,7 @@
 // app/api/verify/check-code/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { createVerificationLogger, verificationSnapshot, verificationDiagnosticSelect } from '@/lib/verification-diagnostics';
 
 // CORS configuration for cross-origin requests
 const corsHeaders = {
@@ -53,7 +54,8 @@ export async function POST(req: NextRequest) {
     const sanitizedEmail = email.trim().toLowerCase();
     const sanitizedCode = code.trim();
 
-    console.log(`[VERIFY CHECK] Email: ${sanitizedEmail}, Code: ${sanitizedCode}`);
+    const trace = createVerificationLogger(sanitizedEmail, req);
+    trace('check_started');
 
     // STEP 1: Find most recent pending verification for this email
     const verification = await prisma.email_verification.findFirst({
@@ -66,12 +68,26 @@ export async function POST(req: NextRequest) {
     });
 
     if (!verification) {
-      console.warn(`[VERIFY CHECK] No valid verification found for ${sanitizedEmail}`);
+      // The original lookup hides whether a record is missing, consumed or expired.
+      // This read is diagnostic only: it never authorizes a previously used code.
+      try {
+        const latest = await prisma.email_verification.findFirst({
+          where: { email: sanitizedEmail },
+          orderBy: { created_at: 'desc' },
+          select: verificationDiagnosticSelect,
+        });
+        trace('check_unavailable', verificationSnapshot(latest));
+      } catch {
+        // Keep the original response even if the diagnostic query fails.
+        trace('check_diagnostic_failed');
+      }
       return NextResponse.json(
         { success: false, error: 'No verification code found or code expired. Please request a new code.' },
         { status: 404, headers: corsHeaders }
       );
     }
+
+    trace('check_pending', verificationSnapshot(verification));
 
     // STEP 2: Check if code matches
     if (verification.code !== sanitizedCode) {
@@ -83,7 +99,7 @@ export async function POST(req: NextRequest) {
         data: { attempts: newAttempts }
       });
 
-      console.warn(`[VERIFY CHECK] Incorrect code for ${sanitizedEmail}, attempt ${newAttempts}/3`);
+      trace('check_incorrect', { ...verificationSnapshot(verification), attempts: newAttempts });
 
       // Max 3 attempts
       if (newAttempts >= 3) {
@@ -105,7 +121,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    console.log(`[VERIFY CHECK] Code verified successfully for ${sanitizedEmail}`);
+    trace('check_accepted', verificationSnapshot(verification));
 
     // STEP 3: Determine temporal cutoff for walletuser filtering
     // Check if email was found in current innouser.email OR in verification history
@@ -219,13 +235,15 @@ export async function POST(req: NextRequest) {
     }
 
     // STEP 6: Mark current verification as verified (do this AFTER querying walletusers!)
-    await prisma.email_verification.update({
+    const consumedVerification = await prisma.email_verification.update({
       where: { id: verification.id },
       data: {
         verified: true,
         verified_at: new Date()
       }
     });
+
+    trace('check_consumed', { ...verificationSnapshot(consumedVerification), accountsCount: accounts.length });
 
     // STEP 7: Update innouser.verified = true
     await prisma.innouser.update({
@@ -252,6 +270,7 @@ export async function POST(req: NextRequest) {
         };
       }
 
+      trace('check_response', { verificationId: verification.id, single: true, accountsCount: 1 });
       return NextResponse.json({
         success: true,
         single: true,
@@ -261,6 +280,7 @@ export async function POST(req: NextRequest) {
       }, { headers: corsHeaders });
 
     } else {
+      trace('check_response', { verificationId: verification.id, single: false, accountsCount: accounts.length });
       // Multiple accounts: Return list for user to choose
       return NextResponse.json({
         success: true,

@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Resend } from 'resend';
 import prisma from '@/lib/prisma';
+import { createVerificationLogger, verificationSnapshot } from '@/lib/verification-diagnostics';
 import { buildVerificationEmail, Language } from '@/lib/email-templates';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -49,7 +50,8 @@ export async function POST(req: NextRequest) {
     const sanitizedEmail = email.trim().toLowerCase();
     const lang = (language || 'en') as Language;
 
-    console.log(`[VERIFY REQUEST] Email: ${sanitizedEmail}, Language: ${lang}`);
+    const trace = createVerificationLogger(sanitizedEmail, req);
+    trace('request_started');
 
     // STEP 1: Find user_id by email (check current email OR historical verifications)
     let userId: number | null = null;
@@ -124,7 +126,6 @@ export async function POST(req: NextRequest) {
 
     // STEP 3: Generate 6-digit code
     const code = Math.floor(Math.random() * 900000 + 100000).toString();
-    console.log(`[VERIFY REQUEST] Generated code for ${sanitizedEmail}: ${code}`);
 
     // STEP 4: Create verification record
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
@@ -140,7 +141,7 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    console.log(`[VERIFY REQUEST] Created verification record: ${verificationRecord.id}`);
+    trace('request_created', verificationSnapshot(verificationRecord));
 
     // STEP 5: Send email via Resend
     const { subject, html, text } = buildVerificationEmail(code, lang);
@@ -154,9 +155,10 @@ export async function POST(req: NextRequest) {
         text,
       });
 
-      console.log(`[VERIFY REQUEST] Email sent successfully:`, emailResult);
+      trace(emailResult.error ? 'request_email_rejected' : 'request_email_sent', verificationSnapshot(verificationRecord));
     } catch (emailError: any) {
-      console.error(`[VERIFY REQUEST] Failed to send email:`, emailError);
+      trace('request_email_failed', verificationSnapshot(verificationRecord));
+      console.error('[VERIFY REQUEST] Failed to send email', { name: emailError?.name });
 
       // Delete the verification record since email failed
       await prisma.email_verification.delete({
@@ -177,7 +179,7 @@ export async function POST(req: NextRequest) {
     }, { headers: corsHeaders });
 
   } catch (error: any) {
-    console.error('[VERIFY REQUEST] Error:', error);
+    console.error('[VERIFY REQUEST] Error', { name: error?.name, code: error?.code });
     return NextResponse.json(
       {
         error: 'Failed to process request',
