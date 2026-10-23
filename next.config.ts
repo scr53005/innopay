@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  transpilePackages: ['@innopay/ui'],
   /* config options here */
   output: 'standalone',
   images: {

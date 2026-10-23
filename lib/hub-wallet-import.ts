@@ -15,7 +15,7 @@ export function parseHubWalletImport(data: unknown) {
 export type HubWalletImport = ReturnType<typeof parseHubWalletImport>;
 
 /** Save only after a verified import and an explicit choice when accounts differ. */
-export function saveHubWalletImport(storage: Storage, data: unknown, email: string, choice?: WalletImportChoice) {
+export function saveHubWalletImport(storage: Storage, data: unknown, email: string | null, choice?: WalletImportChoice) {
   const wallet = parseHubWalletImport(data);
   const current = storage.getItem('innopay_accountName') || storage.getItem('innopayAccountName');
   const action = walletImportAction(current, wallet.accountName, choice);
@@ -34,6 +34,7 @@ export function saveHubWalletImport(storage: Storage, data: unknown, email: stri
   if (wallet.seed) storage.setItem('innopay_seed', wallet.seed);
   if (wallet.keys.posting) storage.setItem('innopay_postingPrivate', wallet.keys.posting);
   storage.setItem('innopay_accountName', wallet.accountName);
-  storage.setItem('innopay_email', email.trim().toLowerCase());
+  if (email?.trim()) storage.setItem('innopay_email', email.trim().toLowerCase());
+  else storage.removeItem('innopay_email'); // Manual keys do not establish an email association.
   return action;
 }

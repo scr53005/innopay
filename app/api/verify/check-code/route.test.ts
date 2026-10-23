@@ -15,9 +15,9 @@ const fresh = {
   created_at: new Date('2026-10-23T10:00:00Z'), expires_at: new Date('2026-10-23T10:10:00Z'),
   verified: false, verified_at: null, attempts: 0,
 };
-const request = (code = fresh.code) => new NextRequest('https://wallet.innopay.lu/api/verify/check-code', {
+const request = (code = fresh.code, accountName?: string) => new NextRequest('https://wallet.innopay.lu/api/verify/check-code', {
   method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://innohatch.vercel.app' },
-  body: JSON.stringify({ email: ' USER@example.com ', code }),
+  body: JSON.stringify({ email: ' USER@example.com ', code, accountName }),
 });
 function traces() {
   return vi.mocked(console.warn).mock.calls.filter(call => call[0] === '[VERIFY TRACE]').map(call => JSON.parse(String(call[1])));
@@ -84,4 +84,34 @@ describe('verification endpoint diagnostics', () => {
     expect(db.walletuser.findMany).not.toHaveBeenCalled();
     expect(traces()).toContainEqual(expect.objectContaining({ event: 'check_incorrect', attempts: 1 }));
   });
+});
+
+it('rechecks account, verified user and current email together before returning targeted credentials', async () => {
+  db.walletuser.findMany.mockResolvedValueOnce([
+    { accountName: 'hatch-test', creationDate: now, masterPassword: 'synthetic-test-master', seed: null },
+  ]);
+  const response = await POST(request(fresh.code, '@HATCH-TEST'));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ success: true, single: true, accountName: 'hatch-test' });
+  expect(db.walletuser.findMany).toHaveBeenCalledWith({
+    where: { accountName: 'hatch-test', userId: 7, innouser: { is: { email: 'user@example.com' } } },
+    orderBy: { creationDate: 'desc' },
+  });
+});
+
+it('does not return another wallet after a valid code if the requested account is not linked', async () => {
+  db.walletuser.findMany.mockResolvedValueOnce([]);
+  const response = await POST(request(fresh.code, 'hatch-test'));
+  expect(response.status).toBe(404);
+  expect(await response.json()).toMatchObject({ success: false, manualImport: true });
+  expect(db.email_verification.update).not.toHaveBeenCalled();
+});
+
+it('offers manual keys if the requested account has no recoverable key material', async () => {
+  db.walletuser.findMany.mockResolvedValueOnce([
+    { accountName: 'hatch-test', creationDate: now, masterPassword: null, seed: null },
+  ]);
+  const response = await POST(request(fresh.code, 'hatch-test'));
+  expect(await response.json()).toMatchObject({ success: false, manualImport: true });
+  expect(db.email_verification.update).not.toHaveBeenCalled();
 });

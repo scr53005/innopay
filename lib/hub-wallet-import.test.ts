@@ -66,3 +66,11 @@ describe('saving a hub wallet import', () => {
     expect(storage.getItem('innopay_accountName')).toBe('hatch-test');
   });
 });
+
+it('does not associate an unverified email with a manual key import', () => {
+  const storage = oldWallet();
+  expect(saveHubWalletImport(storage, incoming, null, 'replace')).toBe('import');
+  expect(storage.getItem('innopay_email')).toBeNull();
+  expect(storage.getItem('innopay_masterPassword')).toBeNull();
+  expect(storage.getItem('innopay_accountName')).toBe('hatch-test');
+});

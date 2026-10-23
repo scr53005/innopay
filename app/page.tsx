@@ -4,10 +4,12 @@ import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Draggable from '@/app/components/Draggable';
-import MiniWallet, { WalletReopenButton } from '@/app/components/MiniWallet';
+import MiniWallet, { WalletReopenButton } from '@/app/components/SharedMiniWallet';
 import { getAccountCredentials } from '@/app/actions/get-credentials';
 import { useBalance } from '@/hooks/useBalance';
-import { walletImportMessages } from '@/lib/wallet-import';
+import { clearSavedWallet, walletImportMessages } from '@/lib/wallet-import';
+
+import ForgetWalletButton from '@/app/components/ForgetWalletButton';
 
 const innopayLogoUrl = "/innopay.svg";
 
@@ -999,6 +1001,10 @@ function TopUpContent() {
             <a href="/user?choice=import" className="text-sm font-semibold text-blue-700 underline">
               {walletImportMessages[language].importAnother}
             </a>
+            <div className="mt-2"><ForgetWalletButton language={language} onForget={() => {
+              clearSavedWallet(localStorage);
+              window.location.href = '/user?choice=import';
+            }} /></div>
           </div>
         )}
 
@@ -1029,6 +1035,7 @@ function TopUpContent() {
       {/* Persistent Wallet Balance Indicator */}
       {walletBalance && (
         <MiniWallet
+          language={language}
           balance={walletBalance}
           visible={showWalletBalance}
           onClose={() => setShowWalletBalance(false)}

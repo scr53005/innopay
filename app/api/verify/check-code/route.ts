@@ -1,6 +1,7 @@
 // app/api/verify/check-code/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { validateHiveAccountName } from '@/lib/hive-account-name';
 import { createVerificationLogger, verificationSnapshot, verificationDiagnosticSelect } from '@/lib/verification-diagnostics';
 
 // CORS configuration for cross-origin requests
@@ -41,7 +42,7 @@ interface WalletAccount {
  */
 export async function POST(req: NextRequest) {
   try {
-    const { email, code } = await req.json();
+    const { email, code, accountName } = await req.json();
 
     // Validate inputs
     if (!email || !code) {
@@ -51,6 +52,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const requestedAccount = typeof accountName === 'string' ? accountName.trim().replace(/^@/, '').toLowerCase() : '';
+    if ((accountName != null && typeof accountName !== 'string') ||
+        (requestedAccount && !validateHiveAccountName(requestedAccount).valid)) {
+      return NextResponse.json({ error: 'Invalid Hive account name' }, { status: 400, headers: corsHeaders });
+    }
     const sanitizedEmail = email.trim().toLowerCase();
     const sanitizedCode = code.trim();
 
@@ -131,7 +137,13 @@ export async function POST(req: NextRequest) {
 
     let walletusers;
 
-    if (currentUser) {
+    if (requestedAccount) {
+      walletusers = await prisma.walletuser.findMany({
+        where: { accountName: requestedAccount, userId: verification.user_id,
+          innouser: { is: { email: sanitizedEmail } } },
+        orderBy: { creationDate: 'desc' },
+      });
+    } else if (currentUser) {
       // Email is CURRENT innouser email - return ALL walletusers for this user
       console.log(`[VERIFY CHECK] Email is current innouser.email - fetching all accounts`);
 
@@ -179,9 +191,15 @@ export async function POST(req: NextRequest) {
 
     if (walletusers.length === 0) {
       return NextResponse.json(
-        { success: false, error: 'No accounts found for this email.' },
+        { success: false, manualImport: true, error: 'This account cannot be recovered with this email. Enter its private keys or try another email.' },
         { status: 404, headers: corsHeaders }
       );
+    }
+
+    if (requestedAccount && !walletusers[0].masterPassword) {
+      return NextResponse.json({ success: false, manualImport: true,
+        error: 'This account has no recoverable keys in Innopay. Enter its private keys.' },
+        { status: 404, headers: corsHeaders });
     }
 
     // STEP 5: Fetch EURO balance for each account from Hive-Engine API

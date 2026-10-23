@@ -8,6 +8,8 @@ interface DraggableProps {
   className?: string;
   style?: React.CSSProperties;
   disabled?: boolean;
+  keepInViewport?: boolean;
+  bottomInset?: number;
   onPositionChange?: (position: { x: number; y: number }) => void;
 }
 
@@ -17,11 +19,24 @@ export default function Draggable({
   className = '',
   style = {},
   disabled = false,
+  keepInViewport = false,
+  bottomInset = 8,
   onPositionChange,
 }: DraggableProps) {
   const [position, setPosition] = useState(initialPosition);
   const [isDragging, setIsDragging] = useState(false);
   const dragOffset = useRef({ x: 0, y: 0 });
+  const elementRef = useRef<HTMLDivElement>(null);
+
+
+  const constrainPosition = (x: number, y: number) => {
+    const rect = elementRef.current?.getBoundingClientRect();
+    if (!keepInViewport || !rect) return { x, y };
+    return {
+      x: Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - rect.height - bottomInset)),
+    };
+  };
 
   // Handle mouse drag start
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -52,8 +67,9 @@ export default function Draggable({
           x: e.clientX - dragOffset.current.x,
           y: e.clientY - dragOffset.current.y,
         };
-        setPosition(newPosition);
-        onPositionChange?.(newPosition);
+        const constrained = constrainPosition(newPosition.x, newPosition.y);
+        setPosition(constrained);
+        onPositionChange?.(constrained);
       }
     };
 
@@ -63,8 +79,9 @@ export default function Draggable({
           x: e.touches[0].clientX - dragOffset.current.x,
           y: e.touches[0].clientY - dragOffset.current.y,
         };
-        setPosition(newPosition);
-        onPositionChange?.(newPosition);
+        const constrained = constrainPosition(newPosition.x, newPosition.y);
+        setPosition(constrained);
+        onPositionChange?.(constrained);
       }
     };
 
@@ -87,8 +104,31 @@ export default function Draggable({
     }
   }, [isDragging, onPositionChange]);
 
+
+  // MiniWallet grows when its actions open; move it up before it slips below the footer.
+  useEffect(() => {
+    if (!keepInViewport || !elementRef.current) return;
+    const fit = () => {
+      const rect = elementRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setPosition(previous => {
+        const next = {
+          x: Math.max(8, Math.min(previous.x, window.innerWidth - rect.width - 8)),
+          y: Math.max(8, Math.min(previous.y, window.innerHeight - rect.height - bottomInset)),
+        };
+        return next.x === previous.x && next.y === previous.y ? previous : next;
+      });
+    };
+    fit();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit);
+    observer?.observe(elementRef.current);
+    window.addEventListener('resize', fit);
+    return () => { observer?.disconnect(); window.removeEventListener('resize', fit); };
+  }, [keepInViewport, bottomInset]);
+
   return (
     <div
+      ref={elementRef}
       className={className}
       style={{
         ...style,

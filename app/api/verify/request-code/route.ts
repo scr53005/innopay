@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Resend } from 'resend';
 import prisma from '@/lib/prisma';
+import { validateHiveAccountName } from '@/lib/hive-account-name';
 import { createVerificationLogger, verificationSnapshot } from '@/lib/verification-diagnostics';
 import { buildVerificationEmail, Language } from '@/lib/email-templates';
 
@@ -36,7 +37,7 @@ export async function OPTIONS() {
  */
 export async function POST(req: NextRequest) {
   try {
-    const { email, language } = await req.json();
+    const { email, language, accountName } = await req.json();
 
     // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -47,6 +48,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const requestedAccount = typeof accountName === 'string' ? accountName.trim().replace(/^@/, '').toLowerCase() : '';
+    if ((accountName != null && typeof accountName !== 'string') ||
+        (requestedAccount && !validateHiveAccountName(requestedAccount).valid)) {
+      return NextResponse.json({ error: 'Invalid Hive account name' }, { status: 400, headers: corsHeaders });
+    }
     const sanitizedEmail = email.trim().toLowerCase();
     const lang = (language || 'en') as Language;
 
@@ -56,36 +62,50 @@ export async function POST(req: NextRequest) {
     // STEP 1: Find user_id by email (check current email OR historical verifications)
     let userId: number | null = null;
 
-    // Option A: Check current innouser.email
-    const userByCurrent = await prisma.innouser.findUnique({
-      where: { email: sanitizedEmail }
-    });
-
-    if (userByCurrent) {
-      userId = userByCurrent.id;
-      console.log(`[VERIFY REQUEST] Found user by current email: user_id=${userId}`);
+    if (requestedAccount) {
+      // An email may own several wallets: resolve the requested account and its
+      // CURRENT innouser email together before sending any verification code.
+      const linkedWallet = await prisma.walletuser.findFirst({
+        where: { accountName: requestedAccount, innouser: { is: { email: sanitizedEmail } } },
+        select: { userId: true },
+      });
+      if (!linkedWallet?.userId) {
+        return NextResponse.json({ found: false, manualImport: true }, { headers: corsHeaders });
+      }
+      userId = linkedWallet.userId;
     } else {
-      // Option B: Check email_verification history
-      const verifiedRecord = await prisma.email_verification.findFirst({
-        where: {
-          email: sanitizedEmail,
-          verified: true
-        },
-        orderBy: {
-          verified_at: 'desc' // Most recent verification
-        }
+      // Option A: Check current innouser.email
+      const userByCurrent = await prisma.innouser.findUnique({
+        where: { email: sanitizedEmail }
       });
 
-      if (verifiedRecord) {
-        userId = verifiedRecord.user_id;
-        console.log(`[VERIFY REQUEST] Found user by verification history: user_id=${userId}`);
+      if (userByCurrent) {
+        userId = userByCurrent.id;
+        console.log(`[VERIFY REQUEST] Found user by current email: user_id=${userId}`);
+      } else {
+        // Option B: Check email_verification history
+        const verifiedRecord = await prisma.email_verification.findFirst({
+          where: {
+            email: sanitizedEmail,
+            verified: true
+          },
+          orderBy: {
+            verified_at: 'desc' // Most recent verification
+          }
+        });
+
+        if (verifiedRecord) {
+          userId = verifiedRecord.user_id;
+          console.log(`[VERIFY REQUEST] Found user by verification history: user_id=${userId}`);
+        }
       }
+
     }
 
     // If email not found anywhere
     if (userId === null) {
       console.log(`[VERIFY REQUEST] Email not found: ${sanitizedEmail}`);
-      return NextResponse.json({ found: false }, { headers: corsHeaders });
+      return NextResponse.json({ found: false, manualImport: true }, { headers: corsHeaders });
     }
 
     // STEP 2: Rate limiting - check recent verification requests

@@ -88,3 +88,15 @@ export const walletImportMessages = {
     keep: 'Den aktuelle behalen',
   },
 };
+
+/** Remove the saved identity on this origin. Spokes must also clear their key cache. */
+export function clearSavedWallet(storage: Pick<Storage, 'removeItem'>): void {
+  clearWalletContext(storage);
+  for (const key of [
+    'innopay_accountName', 'innopayAccountName', 'innopay_activePrivate', 'innopay_memoPrivate',
+    'innopay_masterPassword', 'innopayMasterPassword', 'innopay_seed', 'innopaySeed',
+    'innopay_postingPrivate', 'innopay_postingPublic', 'innopay_activePublic', 'innopay_memoPublic',
+    'innopay_ownerPrivate', 'innopay_ownerPublic', 'innopay_email', 'innopay_accounts',
+    'innopay_import_attempts', 'innopay_pending_order', 'innopay_flow_pending', 'innopay_wallet_hidden',
+  ]) storage.removeItem(key);
+}

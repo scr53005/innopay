@@ -7,10 +7,14 @@ import { useDropzone } from 'react-dropzone'; // For image picker
 import confetti from 'canvas-confetti';
 import Image from 'next/image';
 import { PrivateKey } from '@hiveio/dhive';
-import MiniWallet, { WalletReopenButton } from '@/app/components/MiniWallet';
+import MiniWallet, { WalletReopenButton } from '@/app/components/SharedMiniWallet';
 import { getCurrencyConfig, type CurrencyConfig } from '@/lib/currency-config';
-import { walletImportMessages, type WalletImportChoice } from '@/lib/wallet-import';
+import { clearSavedWallet, walletImportMessages, type WalletImportChoice } from '@/lib/wallet-import';
 import { parseHubWalletImport, saveHubWalletImport, type HubWalletImport } from '@/lib/hub-wallet-import';
+
+import ManualWalletImport from '@/app/components/ManualWalletImport';
+import ForgetWalletButton from '@/app/components/ForgetWalletButton';
+import { walletRecoveryMessages } from '@/lib/wallet-recovery-messages';
 
 // Check if in dev/test environment
 const isDevOrTest = process.env.NEXT_PUBLIC_ENV !== 'production';
@@ -361,13 +365,15 @@ export default function HiveAccountCreationPage() {
   const [importEmail, setImportEmail] = useState('');
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState('');
-  const [importAttempts, setImportAttempts] = useState(5);
-  const [importStep, setImportStep] = useState<'email' | 'code' | 'select' | 'replace'>('email');
+  const [importStep, setImportStep] = useState<'email' | 'code' | 'select' | 'replace' | 'keys'>('email');
   const [verificationCode, setVerificationCode] = useState('');
   const [showWalletImport, setShowWalletImport] = useState(false);
   const [pendingWalletImport, setPendingWalletImport] = useState<HubWalletImport | null>(null);
   const [walletBeingReplaced, setWalletBeingReplaced] = useState<string | null>(null);
   const importText = walletImportMessages[language];
+  const recoveryText = walletRecoveryMessages[language];
+  const [importAccountName, setImportAccountName] = useState('');
+  const [manualImport, setManualImport] = useState(false);
   const [multipleAccounts, setMultipleAccounts] = useState<Array<{
     accountName: string;
     creationDate: string;
@@ -621,12 +627,6 @@ export default function HiveAccountCreationPage() {
     const savedLang = localStorage.getItem('innopay_language') as Language | null;
     if (savedLang && ['fr', 'en', 'de', 'lb'].includes(savedLang)) {
       setLanguageState(savedLang);
-    }
-
-    // Load import attempts from localStorage
-    const storedAttempts = localStorage.getItem('innopay_import_attempts');
-    if (storedAttempts) {
-      setImportAttempts(parseInt(storedAttempts, 10));
     }
 
     // Check URL for account_created flag (from /user/success after new_account flow)
@@ -1531,7 +1531,7 @@ export default function HiveAccountCreationPage() {
       const response = await fetch('/api/verify/request-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: sanitizedEmail, language: 'en' }) // TODO: Detect user language
+        body: JSON.stringify({ email: sanitizedEmail, language, accountName: importAccountName.trim() || undefined })
       });
 
       const data = await response.json();
@@ -1542,28 +1542,8 @@ export default function HiveAccountCreationPage() {
         setImportStep('code');
         setImportLoading(false);
       } else if (data.found === false) {
-        // Email not found - decrement attempts
-        const newAttempts = importAttempts - 1;
-        setImportAttempts(newAttempts);
-        localStorage.setItem('innopay_import_attempts', newAttempts.toString());
-
-        if (newAttempts <= 0) {
-          setImportError('Rien dans la base de données, désolé!');
-
-          // After showing error for 3 seconds, hide import form and show create account
-          setTimeout(() => {
-            setImportError('');
-            setImportLoading(false);
-            setUserChoice('create'); // Switch to create account view
-          }, 3000);
-        } else {
-          setImportError(`Vous avez peut-être utilisé une adresse mail différente (${newAttempts} tentatives restantes)`);
-
-          setTimeout(() => {
-            setImportError('');
-            setImportLoading(false);
-          }, 3000);
-        }
+        setImportError(recoveryText.fallback);
+        setImportLoading(false);
       } else if (data.error) {
         setImportError(data.error);
         setTimeout(() => {
@@ -1581,7 +1561,20 @@ export default function HiveAccountCreationPage() {
     }
   };
 
+  function startManualImport() {
+    setImportError('');
+    setManualImport(true);
+    setImportStep('keys');
+  }
+
+  function forgetWallet() {
+    clearSavedWallet(localStorage);
+    window.location.href = '/user?choice=import';
+  }
+
   function startWalletImport() {
+    setManualImport(false);
+    setImportAccountName('');
     setShowWalletImport(true);
     setUserChoice('import');
     setImportStep('email');
@@ -1603,7 +1596,7 @@ export default function HiveAccountCreationPage() {
 
   function finishWalletImport(data: unknown, choice?: WalletImportChoice) {
     const wallet = parseHubWalletImport(data);
-    const action = saveHubWalletImport(localStorage, wallet, importEmail, choice);
+    const action = saveHubWalletImport(localStorage, wallet, manualImport ? null : importEmail, choice);
     if (action === 'confirm') {
       setWalletBeingReplaced(localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName'));
       setPendingWalletImport(wallet);
@@ -1636,13 +1629,17 @@ export default function HiveAccountCreationPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: importEmail.trim().toLowerCase(),
-          code: verificationCode
+          code: verificationCode,
+          accountName: importAccountName.trim() || undefined
         })
       });
 
       const data = await response.json();
 
-      if (data.success === true) {
+      if (data.manualImport) {
+        setImportError(data.error || recoveryText.fallback);
+        setImportLoading(false);
+      } else if (data.success === true) {
         if (data.single === true) {
           finishWalletImport(data);
 
@@ -1766,13 +1763,19 @@ export default function HiveAccountCreationPage() {
           <h2 className="text-2xl font-bold text-gray-900 mb-4 text-center">
             Importer un compte
           </h2>
-          <p className="text-sm text-gray-600 mb-6 text-center">
-            Enter your email to recover your account.
-            <br />
-            <span className="italic">Entrez votre email pour récupérer votre compte.</span>
-          </p>
-
+          {importStep === 'keys' ? (
+            <ManualWalletImport accountName={importAccountName} language={language}
+              onImport={wallet => finishWalletImport(wallet)}
+              onBack={() => { setManualImport(false); setImportStep('email'); }} />
+          ) : (
           <div className="space-y-4">
+            <label className="block text-sm font-medium text-gray-700">
+              {recoveryText.account}
+              <input type="text" value={importAccountName} onChange={e => setImportAccountName(e.target.value)}
+                disabled={importLoading || importStep !== 'email'} autoCapitalize="none" spellCheck={false}
+                className="mt-1 w-full rounded-lg border-2 border-gray-300 bg-white px-4 py-3 text-gray-900" />
+              <span className="mt-1 block text-xs font-normal">{recoveryText.optional}</span>
+            </label>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Email
@@ -1799,15 +1802,15 @@ export default function HiveAccountCreationPage() {
               </div>
             )}
 
-            <div className="text-xs text-gray-500">
-              Attempts remaining: {importAttempts} / 5
-            </div>
+            {importStep !== 'replace' && <button type="button" disabled={importLoading} onClick={startManualImport}
+              className="text-sm font-semibold text-blue-700 underline">{recoveryText.manual}</button>}
+            {existingAccount && <ForgetWalletButton onForget={forgetWallet} language={language} disabled={importLoading} />}
 
             {/* Step 1: Email entry */}
             {importStep === 'email' && (
               <button
                 onClick={handleRequestCode}
-                disabled={importLoading || importAttempts <= 0}
+                disabled={importLoading}
                 className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-indigo-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {importLoading ? (
@@ -1934,6 +1937,7 @@ export default function HiveAccountCreationPage() {
               </div>
             )}
           </div>
+          )}
         </div>
       )}
 
@@ -2324,11 +2328,13 @@ export default function HiveAccountCreationPage() {
                   className="text-sm font-semibold text-blue-700 underline">
                   {importText.importAnother}
                 </button>
+                <ForgetWalletButton onForget={forgetWallet} language={language} />
 
                 {/* MiniWallet Component - Fixed with proper onClose */}
                 {accountBalance !== null && showWalletBalance && (
                   <div className="w-full my-1">
                     <MiniWallet
+                      language={language}
                       balance={{
                         accountName: existingAccount?.accountName || '',
                         euroBalance: accountBalance
