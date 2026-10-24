@@ -2341,7 +2341,6 @@ export default function HiveAccountCreationPage() {
                       }}
                       onClose={() => setShowWalletBalance(false)}
                       visible={showWalletBalance}
-                      title="Votre portefeuille Innopay"
                       initialPosition={{
                         x: typeof window !== 'undefined' ? (window.innerWidth / 2) - 150 : 0,
                         y: 20
@@ -2353,6 +2352,7 @@ export default function HiveAccountCreationPage() {
                 {/* Wallet Reopen Button */}
                 {accountBalance !== null && !showWalletBalance && (
                   <WalletReopenButton
+                    language={language}
                     onClick={() => setShowWalletBalance(true)}
                     visible={true}
                   />

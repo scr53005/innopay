@@ -1028,6 +1028,7 @@ function TopUpContent() {
 
       {/* Wallet Balance Reopen Button */}
       <WalletReopenButton
+        language={language}
         visible={!showWalletBalance && !!walletBalance}
         onClick={() => setShowWalletBalance(true)}
       />
@@ -1039,7 +1040,6 @@ function TopUpContent() {
           balance={walletBalance}
           visible={showWalletBalance}
           onClose={() => setShowWalletBalance(false)}
-          title="Your Innopay Wallet"
           balanceSource={balanceSource || undefined}
           initialPosition={{
             x: typeof window !== 'undefined' ? (window.innerWidth / 2) - 150 : 0, // Centered (300px max-width / 2)
