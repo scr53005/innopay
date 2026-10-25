@@ -2,6 +2,7 @@ import 'dotenv/config';
 import * as bip39 from 'bip39';
 import { PrivateKey, Client, Transaction } from '@hiveio/dhive';
 import { formatAccountName } from './utils';
+import { assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
 
 // Configure the Hive client to connect to a public node.
 const hiveClient = new Client(['https://api.hive.blog', 'https://api.syncad.com', 'https://api.openhive.network']);
@@ -448,6 +449,7 @@ export async function updateHiveAccountMetadata(
  * @returns {Promise<string>} The transaction ID of the transfer.
  */
 export async function transferEuroTokens(toAccount: string, amountInEuro: number, memo?: string, tokenSymbol: string = 'EURO'): Promise<string> {
+  await assertFarmOrderRecipientActive(toAccount, memo);
   // --- Step 1: Override recipient for dev environment ---
   const recipient = getRecipientForEnvironment(toAccount);
 
@@ -517,6 +519,7 @@ export async function transferEuroTokens(toAccount: string, amountInEuro: number
  * @returns {Promise<string>} The transaction ID of the transfer
  */
 export async function transferHbd(toAccount: string, amountHbd: number, memo: string): Promise<string> {
+  await assertFarmOrderRecipientActive(toAccount, memo);
   // --- Step 1: Override recipient for dev environment ---
   const recipient = getRecipientForEnvironment(toAccount);
 

@@ -4,6 +4,7 @@
 import { convertEurToHbd, getEurUsdRateServerSide } from './currency';
 import { transferEuroTokens, transferHbd, transferEuroTokensFromAccount, transferHbdFromAccount, getRecipientForEnvironment } from './hive';
 import prisma from '@/lib/prisma';
+import { assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
 
 export interface PaymentResult {
   restaurantHbdTxId?: string;
@@ -31,6 +32,7 @@ export async function processOrderPayment(params: {
   reason?: string; // For debt tracking (e.g., 'flow5_branch_a', 'flow7_order')
 }): Promise<PaymentResult> {
   const { customerAccount, restaurantAccount, orderAmount, orderMemo, fromCustomer = false, reason = 'order_payment' } = params;
+  await assertFarmOrderRecipientActive(restaurantAccount, orderMemo);
 
   console.log(`[PAYMENT] ========================================`);
   console.log(`[PAYMENT] Processing order payment:`, {

@@ -5,6 +5,7 @@ import { transferHbd, transferEuroTokens } from '@/services/hive';
 import { getUsdPerFiatServerSide } from '@/services/currency';
 import { resolveSpokeCurrency } from '@/lib/spoke-currency';
 import prisma from '@/lib/prisma';
+import { ArchivedFarmVendorError, assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
 
 const client = new Client([
   'https://api.hive.blog',
@@ -56,6 +57,15 @@ export async function POST(req: NextRequest) {
       errorResponse.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
       errorResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type');
       return errorResponse;
+    }
+
+    try {
+      await assertFarmOrderRecipientActive(recipient, orderMemo);
+    } catch (error) {
+      if (!(error instanceof ArchivedFarmVendorError)) throw error;
+      const blocked = NextResponse.json({ error: 'Farm vendor archived; payment disabled' }, { status: 410 });
+      blocked.headers.set('Access-Control-Allow-Origin', '*');
+      return blocked;
     }
 
     // Get innopay account name from environment?

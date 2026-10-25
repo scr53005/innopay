@@ -23,7 +23,11 @@ function LoginForm() {
         body: JSON.stringify({ password }),
       });
       if (res.ok) {
-        router.push(params.get('returnUrl') || '/hatch');
+        const requested = params.get('returnUrl');
+        const destination = requested && /^\/hatch(?:\/|\?|$)/.test(requested) && !requested.includes('\\')
+          ? requested
+          : '/hatch';
+        router.push(destination);
         return;
       }
       const d = await res.json().catch(() => ({}));

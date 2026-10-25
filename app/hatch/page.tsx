@@ -197,6 +197,9 @@ export default function HatchPage() {
   return (
     <main className="mx-auto max-w-md p-6">
       <h1 className="text-2xl font-bold">🐣 Hatch a vendor</h1>
+      <a href="/hatch/archive" className="mt-2 inline-block text-sm text-blue-700 underline">
+        Vendor archive →
+      </a>
       <form onSubmit={submit} className="mt-5 space-y-4">
         <label className="block">
           <span className="text-sm font-semibold">Business name</span>

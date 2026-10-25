@@ -5,6 +5,7 @@ import { getUsdPerFiatServerSide } from '@/services/currency';
 import { convertFiatToHbd } from '@/lib/currency-config';
 import { resolveSpokeCurrency } from '@/lib/spoke-currency';
 import { createGuestCheckout } from '@/services/database';
+import { ArchivedFarmVendorError, assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-06-30.basil',
@@ -82,6 +83,16 @@ export async function POST(req: NextRequest) {
             'Access-Control-Allow-Origin': origin,
           },
         }
+      );
+    }
+
+    try {
+      await assertFarmOrderRecipientActive(recipient, memo);
+    } catch (error) {
+      if (!(error instanceof ArchivedFarmVendorError)) throw error;
+      return NextResponse.json(
+        { error: 'This Farm vendor is archived; checkout is disabled' },
+        { status: 410, headers: { 'Access-Control-Allow-Origin': req.headers.get('origin') || '*' } },
       );
     }
 

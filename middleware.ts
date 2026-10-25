@@ -31,7 +31,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   const loginUrl = new URL('/hatch/login', request.url);
-  loginUrl.searchParams.set('returnUrl', pathname);
+  loginUrl.searchParams.set('returnUrl', pathname + request.nextUrl.search);
   return NextResponse.redirect(loginUrl);
 }
 

@@ -4,6 +4,7 @@ import Stripe from 'stripe';
 import { PrismaClient } from '@prisma/client';
 import { detectFlow, getRedirectUrl, FLOW_METADATA, type FlowContext } from '@/lib/flows';
 import { resolveSpokeCurrency } from '@/lib/spoke-currency';
+import { ArchivedFarmVendorError, assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
 
 const prisma = new PrismaClient();
 
@@ -117,6 +118,18 @@ export async function POST(req: NextRequest) {
     // Extract order data from redirectParams for metadata (Flow 7)
     const finalOrderAmountEuro = orderAmountEuro || (redirectParams?.orderAmount ? parseFloat(redirectParams.orderAmount) : undefined);
     const finalOrderMemo = orderMemo || redirectParams?.orderMemo;
+
+    if (restaurantAccount && finalOrderMemo) {
+      try {
+        await assertFarmOrderRecipientActive(restaurantAccount, finalOrderMemo);
+      } catch (error) {
+        if (!(error instanceof ArchivedFarmVendorError)) throw error;
+        return NextResponse.json(
+          { error: 'This Farm vendor is archived; checkout is disabled' },
+          { status: 410, headers: corsHeaders },
+        );
+      }
+    }
 
     console.log(`[${new Date().toISOString()}] [CHECKOUT API] Flow Detection:`, {
       detectedFlow,

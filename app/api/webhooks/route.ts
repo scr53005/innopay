@@ -49,6 +49,7 @@ import { getCurrencyConfig, convertFiatToHbd, type CurrencyConfig } from '@/lib/
 
 // Import Prisma
 import prisma from '@/lib/prisma';
+import { assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -283,6 +284,7 @@ async function handleGuestCheckout(session: Stripe.Checkout.Session) {
   if (!hbdAmount || !recipient || !memo) {
     throw new Error('Missing required metadata for guest checkout');
   }
+  await assertFarmOrderRecipientActive(recipient, memo);
 
   const hbdAmountNum = parseFloat(hbdAmount);
 
@@ -497,6 +499,7 @@ async function handleFlow7UnifiedApproach(
   restaurantAccount: string,
   restaurantId: string
 ) {
+  await assertFarmOrderRecipientActive(restaurantAccount, orderMemo);
   const currencyConfig = getCurrencyConfig(session.metadata?.fiat);
   console.log(`[FLOW 7] ========================================`);
   console.warn(`[FLOW 7] Unified approach: topup=${topupAmount}€, order=${orderCost}€`);
@@ -908,6 +911,7 @@ async function processRestaurantPayment(
     console.error(`[${timestamp}] [RESTAURANT PAYMENT] ❌ CRITICAL: Order cost ${orderCost} EUR but NO MEMO! Skipping transfer to prevent order mismatch!`);
     return {};
   }
+  await assertFarmOrderRecipientActive(restaurantAccount, orderMemo);
 
   console.log(`[${timestamp}] [RESTAURANT PAYMENT] ========================================`);
   console.log(`[${timestamp}] [RESTAURANT PAYMENT] Processing payment to ${restaurantAccount}`);
