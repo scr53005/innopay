@@ -165,6 +165,7 @@ model outstanding_debt {
   status          String    @default("unpaid") @db.VarChar(30) // unpaid | recovery_ongoing | withdrawal_pending | paid | settled_out_of_band
   paid_at         DateTime?
   payment_tx_id   String?   @db.Char(40)
+  settlement_id   String?   @db.VarChar(30) // active Liman customer repayment
   notes           String?   @db.Text
   payments        debt_payment[]
 }
@@ -176,6 +177,7 @@ model debt_payment {
   tx_id       String?  @db.VarChar(64)
   paid_at     DateTime @default(now())
   notes       String?  @db.Text
+  settlement_key String? @unique @db.VarChar(100) // repayment id + leg + debt id
 
   debt        outstanding_debt @relation(fields: [debt_id], references: [id])
 

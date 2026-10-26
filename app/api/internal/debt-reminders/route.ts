@@ -41,6 +41,7 @@ function formatDate(value: string | null): string {
 function buildEmail(params: {
   accountName: string;
   amountHbd: number;
+  debtTotalHbd: number;
   responseDays: number;
   debts: ReminderDebt[];
 }) {
@@ -61,14 +62,14 @@ function buildEmail(params: {
     .map((debt) => `<li><code>${debt.debt_id}</code></li>`)
     .join('');
 
-  const subject = `Action requested: ${formatHbd(params.amountHbd)} needed in @${params.accountName} savings`;
+  const subject = `Action requested: ${formatHbd(params.amountHbd)} needed in @${params.accountName}`;
 
   const text = [
     `Hello,`,
     ``,
-    `Innopay recorded an outstanding balance of ${formatHbd(params.amountHbd)} for Hive account @${params.accountName}.`,
+    `Innopay recorded an outstanding balance of ${formatHbd(params.debtTotalHbd)} for Hive account @${params.accountName}.`,
     ``,
-    `Please transfer at least ${formatHbd(params.amountHbd)} into HBD savings for @${params.accountName} within ${params.responseDays} days. Innopay will then use those savings to settle the outstanding balance automatically.`,
+    `Please add at least ${formatHbd(params.amountHbd)} in HBD to @${params.accountName} within ${params.responseDays} days. Innopay will use liquid HBD first, then savings if needed, to settle the outstanding balance automatically.`,
     ``,
     `Recorded debt details:`,
     debtRowsText,
@@ -84,8 +85,8 @@ function buildEmail(params: {
   const html = `
     <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #111827;">
       <p>Hello,</p>
-      <p>Innopay recorded an outstanding balance of <strong>${formatHbd(params.amountHbd)}</strong> for Hive account <strong>@${params.accountName}</strong>.</p>
-      <p>Please transfer at least <strong>${formatHbd(params.amountHbd)}</strong> into HBD savings for <strong>@${params.accountName}</strong> within ${params.responseDays} days. Innopay will then use those savings to settle the outstanding balance automatically.</p>
+      <p>Innopay recorded an outstanding balance of <strong>${formatHbd(params.debtTotalHbd)}</strong> for Hive account <strong>@${params.accountName}</strong>.</p>
+      <p>Please add at least <strong>${formatHbd(params.amountHbd)}</strong> in HBD to <strong>@${params.accountName}</strong> within ${params.responseDays} days. Innopay will use liquid HBD first, then savings if needed, to settle the outstanding balance automatically.</p>
       <p><strong>Recorded debt details</strong></p>
       <ul>${debtRowsHtml}</ul>
       <p>If you have questions, please contact <a href="mailto:contact@innopay.lu">contact@innopay.lu</a> and include the support references below.</p>
@@ -106,6 +107,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json() as {
     account_name?: string;
     debt_total_hbd?: number;
+    shortfall_hbd?: number;
     response_days?: number;
     debt_ids?: string[];
     debts?: ReminderDebt[];
@@ -113,6 +115,10 @@ export async function POST(req: NextRequest) {
 
   if (!body.account_name || typeof body.debt_total_hbd !== 'number') {
     return NextResponse.json({ error: 'account_name and debt_total_hbd are required' }, { status: 400 });
+  }
+
+  if (typeof body.shortfall_hbd !== 'number' || !Number.isFinite(body.shortfall_hbd) || body.shortfall_hbd < 0.001) {
+    return NextResponse.json({ sent: false, reason: 'no_actual_shortfall' });
   }
 
   const normalizedAccount = normalizeAccountName(body.account_name);
@@ -145,7 +151,8 @@ export async function POST(req: NextRequest) {
   const responseDays = body.response_days && body.response_days > 0 ? body.response_days : 7;
   const emailBody = buildEmail({
     accountName: normalizedAccount,
-    amountHbd: body.debt_total_hbd,
+    amountHbd: body.shortfall_hbd,
+    debtTotalHbd: body.debt_total_hbd,
     responseDays,
     debts,
   });
