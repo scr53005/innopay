@@ -236,6 +236,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
+      handle: prov.handle,
       account: hive_account,
       display_name,
       memo_vendor_id: memoVendorId,

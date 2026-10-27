@@ -4,6 +4,7 @@ export interface FarmVendor {
   display_name: string;
   hive_account: string;
   is_active: boolean;
+  logo_url?: string | null;
   created_at?: string;
 }
 
@@ -18,7 +19,7 @@ export async function farmRequest(path: string, init: RequestInit = {}): Promise
     ...init,
     headers: {
       Authorization: `Bearer ${secret}`,
-      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
     },
     cache: 'no-store',
   });

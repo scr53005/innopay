@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { validateHiveAccountName } from '@/lib/hive-account-name';
+import LogoCropper from '@/app/components/LogoCropper';
 
 // Fallback categories if the innohatch templates list can't be fetched (dev/offline).
 const FALLBACK_CATEGORIES = [
@@ -40,6 +41,7 @@ function isProdHatch(): boolean {
 }
 
 interface HatchResult {
+  handle: string;
   account: string;
   display_name: string;
   memo_vendor_id: number;
@@ -48,6 +50,8 @@ interface HatchResult {
   credentials?: string; // e.g. 'sent' | 'skipped (no email)' | 'failed (...)'
   till_url: string;
   pay_url: string;
+  logo_url?: string;
+  logo_error?: string;
 }
 
 export default function HatchPage() {
@@ -61,6 +65,8 @@ export default function HatchPage() {
   const [iban, setIban] = useState(SPECIMEN_IBAN);
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoSourceSelected, setLogoSourceSelected] = useState(false);
   const [mock, setMock] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -162,6 +168,20 @@ export default function HatchPage() {
       });
       const data = await res.json();
       if (res.ok) {
+        if (logoFile) {
+          try {
+            const form = new FormData();
+            form.set('logo', logoFile);
+            const logoResponse = await fetch(`/api/hatch/vendors/${encodeURIComponent(data.handle)}/logo`, {
+              method: 'POST', body: form,
+            });
+            const logoData = await logoResponse.json();
+            if (logoResponse.ok) data.logo_url = logoData.logo_url;
+            else data.logo_error = logoData.error || 'Logo upload failed';
+          } catch {
+            data.logo_error = 'Logo upload unavailable. The vendor was created; add its logo later in Customize.';
+          }
+        }
         setResult(data);
       } else {
         setError(`${data.error}${data.steps ? ` — completed: ${JSON.stringify(data.steps)}` : ''}`);
@@ -188,6 +208,8 @@ export default function HatchPage() {
           setIban(SPECIMEN_IBAN);
           setEmail('');
           setPhone('');
+          setLogoFile(null);
+          setLogoSourceSelected(false);
           setMock(false);
         }}
       />
@@ -199,6 +221,9 @@ export default function HatchPage() {
       <h1 className="text-2xl font-bold">🐣 Hatch a vendor</h1>
       <a href="/hatch/archive" className="mt-2 inline-block text-sm text-blue-700 underline">
         Vendor archive →
+      </a>
+      <a href="/hatch/customize" className="ml-4 mt-2 inline-block text-sm text-blue-700 underline">
+        Vendor logos →
       </a>
       <form onSubmit={submit} className="mt-5 space-y-4">
         <label className="block">
@@ -290,6 +315,12 @@ export default function HatchPage() {
             (future SMS 2FA). Stored on the person, not the till.
           </span>
         </label>
+        <div>
+          <span className="text-sm font-semibold">Vendor logo (optional)</span>
+          <p className="text-xs text-gray-500">Choose a PNG, JPEG or WebP source up to 20 MB. Crop it to the circular logo before hatching.</p>
+          <LogoCropper onCropped={setLogoFile} onSourceSelected={setLogoSourceSelected} />
+          {logoSourceSelected && !logoFile && <p className="mt-1 text-xs text-amber-700">Tap “Use this circular crop” before creating the vendor, or clear the selection.</p>}
+        </div>
         {showMock && (
           <label className="flex items-start gap-2 rounded-lg bg-amber-50 p-3">
             <input type="checkbox" checked={mock} onChange={(e) => setMock(e.target.checked)} className="mt-1" />
@@ -301,7 +332,7 @@ export default function HatchPage() {
           </label>
         )}
         {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-        <button type="submit" disabled={busy || !displayName || !nameOk || !EMAIL_RE.test(email) || !newCategoryReady}
+        <button type="submit" disabled={busy || !displayName || !nameOk || !EMAIL_RE.test(email) || !newCategoryReady || (logoSourceSelected && !logoFile) || (!!logoFile && logoFile.size > 1_000_000)}
           className="w-full rounded-lg bg-emerald-600 py-3 font-bold text-white disabled:opacity-50">
           {busy ? 'Creating…' : 'Create new vendor'}
         </button>
@@ -341,6 +372,10 @@ function HatchResultView({ result, onAgain }: { result: HatchResult; onAgain: ()
           <span className="text-red-600">{result.credentials || 'unknown'}</span>
         )}
       </div>
+
+      {result.logo_url && <div className="mx-auto mt-3 max-w-sm rounded-lg border p-3 text-sm text-emerald-700">Logo saved for the till.</div>}
+      {result.logo_error && <div className="mx-auto mt-3 max-w-sm rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">Vendor created, but its logo was not saved: {result.logo_error} You can retry from its admin Customize page.</div>}
+      <a href={`/hatch/customize?handle=${encodeURIComponent(result.handle)}`} className="mt-3 inline-block text-sm text-blue-700 underline">Manage this vendor’s logo →</a>
 
       {/* Generous till QR — the vendor scans it with their phone */}
       <div className="mx-auto mt-5 max-w-sm rounded-2xl border bg-white p-5 shadow-sm">
