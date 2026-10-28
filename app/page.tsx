@@ -4,14 +4,16 @@ import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Draggable from '@/app/components/Draggable';
-import MiniWallet, { WalletReopenButton } from '@/app/components/SharedMiniWallet';
+import WalletHubHeader from '@/app/components/WalletHubHeader';
+import WalletHubFrame from '@/app/components/WalletHubFrame';
+import HubMiniWallet from '@/app/components/HubMiniWallet';
+import WalletQrScanner from '@/app/components/WalletQrScanner';
+import { canBrowsePartner, hasRestaurantContext, partnerImage, partnerLocation, walletNavigationMessages } from '@/lib/wallet-navigation';
 import { getAccountCredentials } from '@/app/actions/get-credentials';
 import { useBalance } from '@/hooks/useBalance';
 import { clearSavedWallet, walletImportMessages } from '@/lib/wallet-import';
 
 import ForgetWalletButton from '@/app/components/ForgetWalletButton';
-
-const innopayLogoUrl = "/innopay.svg";
 
 // Spoke type from database
 interface Spoke {
@@ -109,8 +111,14 @@ const translations = {
     topUpWallet: "Recharger Votre Portefeuille",
     minAmount: "Montant minimum: 15€",
     maxAmount: "Montant maximum: 999€",
-    nearbyBusinesses: "Commerces à proximité acceptant Innopay",
-    lowBalanceWarning: "Votre solde est trop bas, veuillez recharger votre portefeuille d'abord."
+    nearbyBusinesses: "Commerces acceptant Innopay",
+    browseDirectory: "Explorer les commerces",
+    viewMenu: "Voir le menu",
+    openingSoon: "Ouverture prochaine",
+    comingSoon: "Bientôt",
+    noBusinesses: "Aucun commerce disponible",
+    processing: "Traitement en cours…",
+    lowBalanceWarning: walletNavigationMessages.fr.lowBalance
   },
   en: {
     title: "Welcome to Innopay",
@@ -119,8 +127,14 @@ const translations = {
     topUpWallet: "Top Up Your Wallet",
     minAmount: "Minimum amount: 15€",
     maxAmount: "Maximum amount: 999€",
-    nearbyBusinesses: "Nearby businesses accepting Innopay",
-    lowBalanceWarning: "Your balance is too low, please top up your wallet first."
+    nearbyBusinesses: "Businesses accepting Innopay",
+    browseDirectory: "Browse businesses",
+    viewMenu: "View menu",
+    openingSoon: "Opening soon",
+    comingSoon: "Coming soon",
+    noBusinesses: "No businesses available",
+    processing: "Processing…",
+    lowBalanceWarning: walletNavigationMessages.en.lowBalance
   },
   de: {
     title: "Willkommen bei Innopay",
@@ -129,8 +143,14 @@ const translations = {
     topUpWallet: "Brieftasche Aufladen",
     minAmount: "Mindestbetrag: 15€",
     maxAmount: "Höchstbetrag: 999€",
-    nearbyBusinesses: "Geschäfte in der Nähe, die Innopay akzeptieren",
-    lowBalanceWarning: "Ihr Guthaben ist zu niedrig, bitte laden Sie zuerst Ihre Brieftasche auf."
+    nearbyBusinesses: "Geschäfte, die Innopay akzeptieren",
+    browseDirectory: "Geschäfte entdecken",
+    viewMenu: "Speisekarte ansehen",
+    openingSoon: "Eröffnung demnächst",
+    comingSoon: "Demnächst",
+    noBusinesses: "Keine Geschäfte verfügbar",
+    processing: "Wird verarbeitet…",
+    lowBalanceWarning: walletNavigationMessages.de.lowBalance
   },
   lb: {
     title: "Wëllkomm bei Innopay",
@@ -139,8 +159,14 @@ const translations = {
     topUpWallet: "Äre Portemonnaie Oplueden",
     minAmount: "Mindestbetrag: 15€",
     maxAmount: "Maximal Betrag: 999€",
-    nearbyBusinesses: "Geschäfter an der Noperschaft déi Innopay akzeptéieren",
-    lowBalanceWarning: "Äert Solde ass ze niddreg, luet w.e.g. Äre Portemonnaie éischt op."
+    nearbyBusinesses: "Geschäfter déi Innopay akzeptéieren",
+    browseDirectory: "Geschäfter entdecken",
+    viewMenu: "Menü kucken",
+    openingSoon: "Mécht geschwënn op",
+    comingSoon: "Geschwënn",
+    noBusinesses: "Keng Geschäfter disponibel",
+    processing: "Gëtt verschafft…",
+    lowBalanceWarning: walletNavigationMessages.lb.lowBalance
   }
 };
 
@@ -149,6 +175,7 @@ type Language = 'fr' | 'en' | 'de' | 'lb';
 function TopUpContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const navigationSearch = searchParams.toString() ? `?${searchParams.toString()}` : '';
 
   const [amount, setAmount] = useState(100);
   const [language, setLanguageState] = useState<Language>('fr');
@@ -168,7 +195,8 @@ function TopUpContent() {
   const [error, setError] = useState('');
 
   // Mini-wallet state
-  const [showWalletBalance, setShowWalletBalance] = useState(false);
+  const [showWalletBalance, setShowWalletBalance] = useState(true);
+  const [avatarUrl, setAvatarUrl] = useState<string>();
   const [walletBalance, setWalletBalance] = useState<{
     accountName: string;
     euroBalance: number;
@@ -180,9 +208,6 @@ function TopUpContent() {
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState('');
   const [importAttempts, setImportAttempts] = useState(5);
-
-  // State for showing nearby businesses (balance >= 4.99€)
-  const [showNearbyBusinesses, setShowNearbyBusinesses] = useState(false);
 
   // State for spokes (fetched from database)
   const [spokes, setSpokes] = useState<Spoke[]>([]);
@@ -203,6 +228,19 @@ function TopUpContent() {
     ? (localStorage.getItem('innopay_accountName') || localStorage.getItem('innopayAccountName'))
     : null;
 
+  // Avatar display only; leave restaurant checkout requests and credential handling alone.
+  useEffect(() => {
+    if (!accountName || hasRestaurantContext(navigationSearch)) return;
+    let current = true;
+    setAvatarUrl(undefined);
+    fetch('/api/fetch-hive-metadata', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accountName }),
+    }).then(response => response.ok ? response.json() : null).then(data => {
+      if (current && data?.metadata?.avatarUri) setAvatarUrl(data.metadata.avatarUri);
+    }).catch(() => { /* Keep the existing default avatar. */ });
+    return () => { current = false; };
+  }, [accountName, navigationSearch]);
+
   // Fetch balance using React Query (replaces manual fetchWalletBalance)
   const { balance, isLoading: balanceLoading, refetch: refetchBalance, source: balanceSource } = useBalance(accountName, {
     enabled: !!accountName && !accountName.startsWith('mockaccount'),
@@ -216,15 +254,6 @@ function TopUpContent() {
         accountName,
         euroBalance: balance
       });
-      setShowWalletBalance(true);
-
-      // Check if we should show nearby businesses
-      if (balance >= 4.99) {
-        console.log('[React Query] Balance >= 4.99€ - showing nearby businesses');
-        setShowNearbyBusinesses(true);
-      } else {
-        setShowNearbyBusinesses(false);
-      }
     }
   }, [balance, accountName, balanceSource]);
 
@@ -814,37 +843,15 @@ function TopUpContent() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 px-4">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
-        {/* Logo */}
-        <div className="flex justify-center mb-6">
-          <Image
-            src={innopayLogoUrl}
-            alt="Innopay Logo"
-            width={200}
-            height={60}
-            priority
-          />
+    <WalletHubFrame language={language} className="hub-home-page">
+      <main className="hub-home-panel">
+        <WalletHubHeader language={language} onLanguageChange={setLanguage} avatarUrl={avatarUrl} search={navigationSearch} />
+        <div className={!hasRestaurantContext(navigationSearch) ? 'hub-home-tools' : undefined}>
+          {hasAccount && accountName && <HubMiniWallet accountName={accountName} balance={walletBalance?.euroBalance ?? null}
+            language={language} visible={showWalletBalance} onVisibilityChange={setShowWalletBalance}
+            balanceSource={balanceSource || undefined} search={navigationSearch} overlap={!hasRestaurantContext(navigationSearch)} />}
+          {!hasRestaurantContext(navigationSearch) && <WalletQrScanner language={language} accountName={accountName} onTransferSubmitted={refetchBalance} />}
         </div>
-
-        {/* Title */}
-        <h1 className="text-2xl font-bold text-center text-gray-800 mb-8">
-          {t.title}
-        </h1>
-
-        {/* Low Balance Warning - Show when balance < 5.00€ AND not from restaurant (Flow 7) */}
-        {walletBalance && walletBalance.euroBalance < 5.00 && !orderContext && (
-          <div className="mb-6 border-2 border-green-400 rounded-lg p-4 bg-gradient-to-r from-green-50 to-emerald-50 shadow-md">
-            <div className="flex items-start gap-3">
-              <div className="text-2xl">💡</div>
-              <div className="flex-1">
-                <p className="text-base font-semibold text-gray-800">
-                  {t.lowBalanceWarning}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Order Context Banner - Show when topping up for restaurant order (Flow 7) */}
         {orderContext && (
@@ -867,35 +874,40 @@ function TopUpContent() {
           </div>
         )}
 
-        {/* Nearby Businesses - Show ABOVE form if balance >= 4.99€ AND not from restaurant (Flow 7) */}
-        {showNearbyBusinesses && !orderContext && (
-          <div className="mb-8">
-            <h2 className="text-xl font-bold text-gray-800 mb-4 text-center">
+        {/* Discovery stays accessible at any balance; the order checkout banner keeps its existing role. */}
+        {!orderContext && (
+          <section className="hub-shops" aria-labelledby="hub-shops-heading">
+            <h2 id="hub-shops-heading" className="hub-shops-title text-lg sm:text-xl font-bold text-gray-800 mb-2 text-center">
               {t.nearbyBusinesses}
             </h2>
-            <div className="max-h-56 overflow-y-auto border-2 border-blue-300 rounded-lg p-4 bg-gradient-to-br from-blue-50 to-indigo-50 shadow-lg">
+            {walletBalance && walletBalance.euroBalance < 5 && <p className="hub-low-balance" role="status">{t.lowBalanceWarning}</p>}
+            <div className={`hub-shop-window${walletBalance && walletBalance.euroBalance < 5 ? ' hub-shop-window-low' : ''}`}>
               {spokesLoading ? (
                 <div className="flex justify-center items-center py-8">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                 </div>
               ) : spokes.length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
-                  No businesses available
+                  {t.noBusinesses}
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {spokes.map((spoke) => (
-                    <div
+                <div className="hub-shop-list">
+                  {spokes.map((spoke) => {
+                    const browsable = canBrowsePartner(spoke);
+                    const location = partnerLocation(spoke.id, language);
+                    const image = partnerImage(spoke.id, spoke.image_1);
+                    return (
+                    <button type="button"
                       key={spoke.id}
                       onClick={async () => {
-                        if (!spoke.ready) {
+                        if (!browsable) {
                           // Show alert for coming soon
-                          alert(`${spoke.name} coming soon!`);
+                          alert(`${spoke.name} — ${t.openingSoon}`);
                           return;
                         }
 
                         // Build base spoke URL
-                        const spokeUrl = buildSpokeUrl(spoke);
+                        const spokeUrl = spoke.id === 'innohatch' ? `${getSpokeBaseUrl(spoke)}/` : buildSpokeUrl(spoke);
 
                         // FLOW 4: Import credentials to spoke if account exists
                         const { prepareUrlWithCredentials } = await import('@/lib/credential-session');
@@ -904,64 +916,66 @@ function TopUpContent() {
                         // Navigate to spoke
                         window.location.href = finalUrl;
                       }}
-                      className={`relative flex items-center gap-4 p-4 bg-white rounded-lg transition-all border-2 ${
-                        spoke.ready
-                          ? 'cursor-pointer hover:shadow-xl hover:scale-[1.02] border-gray-200 hover:border-blue-400'
+                      className={`hub-shop-card relative flex items-center bg-white rounded-lg transition-all border-2 ${
+                        browsable
+                          ? 'cursor-pointer hover:shadow-md border-gray-200 hover:border-blue-400'
                           : 'opacity-75 cursor-not-allowed border-gray-300'
                       }`}
                     >
-                      {!spoke.ready && (
-                        <div className="absolute top-2 right-2 bg-blue-500 text-white text-xs px-2 py-1 rounded-full font-semibold shadow-md z-10">
-                          Coming Soon
-                        </div>
-                      )}
-                      <div className="relative w-20 h-20 flex-shrink-0 bg-gray-200 rounded-lg overflow-hidden shadow-md">
-                        {spoke.image_1 && (
+                      <div className="hub-shop-photo relative w-[72px] h-[72px] flex-shrink-0 bg-gray-200 rounded-lg overflow-hidden shadow-sm">
+                        {image && (
                           <Image
-                            src={spoke.image_1}
+                            src={image}
                             alt={spoke.name}
                             fill
                             className="object-cover"
-                            unoptimized
+                            sizes="72px"
+                            unoptimized={!image.startsWith('/')}
                           />
                         )}
                       </div>
-                      <div className="flex-1">
-                        <p className="font-bold text-lg text-gray-900">{spoke.name}</p>
-                        <p className="text-sm text-blue-600 font-medium">
-                          {spoke.ready ? 'Click to view menu' : 'Opening soon'}
+                      <div className="flex-1 min-w-0 text-left">
+                        <div className="hub-shop-name-line">
+                          <p className="hub-shop-name font-bold text-base text-gray-900">{spoke.name}</p>
+                          {!spoke.ready && <span className="hub-shop-badge">{t.comingSoon}</span>}
+                        </div>
+                        {location && <p className="hub-partner-location">{location}</p>}
+                        <p className="hub-shop-action text-sm text-blue-600 font-medium">
+                          {spoke.id === 'innohatch' ? t.browseDirectory : spoke.ready ? t.viewMenu : t.openingSoon}
                         </p>
                       </div>
-                      {spoke.ready && (
+                      {browsable && (
                         <div className="text-blue-500">
                           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                           </svg>
                         </div>
                       )}
-                    </div>
-                  ))}
+                    </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
-          </div>
+          </section>
         )}
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form id="top-up" onSubmit={handleSubmit} className={`hub-top-up ${orderContext ? 'space-y-4' : 'space-y-2.5'}`}>
           {/* Amount Input */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label htmlFor="wallet-top-up-amount" className="block text-sm font-medium text-gray-700 mb-2">
               {t.amountLabel}
             </label>
             <input
+              id="wallet-top-up-amount"
               type="number"
               min="15"
               max="999"
               step="1"
               value={amount}
               onChange={(e) => setAmount(Number(e.target.value))}
-              className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-4xl font-bold text-center text-gray-900 bg-white"
+              className={`w-full px-4 ${orderContext ? 'py-2' : 'py-1.5'} border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-3xl font-bold text-center text-gray-900 bg-white`}
               disabled={loading}
             />
             <p className="mt-1 text-xs text-gray-500">
@@ -980,7 +994,7 @@ function TopUpContent() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-4 rounded-lg font-semibold text-lg hover:from-blue-700 hover:to-indigo-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+            className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 rounded-lg font-semibold text-lg hover:from-blue-700 hover:to-indigo-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
           >
             {loading ? (
               <span className="flex items-center justify-center">
@@ -988,7 +1002,7 @@ function TopUpContent() {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-                Processing...
+                {t.processing}
               </span>
             ) : (
               hasAccount ? t.topUpWallet : t.createAndTopUp
@@ -1008,45 +1022,7 @@ function TopUpContent() {
           </div>
         )}
 
-        {/* Language Buttons */}
-        <div className="mt-8 flex justify-center gap-2">
-          {(['fr', 'en', 'de', 'lb'] as Language[]).map((lang) => (
-            <button
-              key={lang}
-              onClick={() => setLanguage(lang)}
-              className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
-                language === lang
-                  ? 'bg-blue-600 text-white shadow-md'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              {lang.toUpperCase()}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Wallet Balance Reopen Button */}
-      <WalletReopenButton
-        language={language}
-        visible={!showWalletBalance && !!walletBalance}
-        onClick={() => setShowWalletBalance(true)}
-      />
-
-      {/* Persistent Wallet Balance Indicator */}
-      {walletBalance && (
-        <MiniWallet
-          language={language}
-          balance={walletBalance}
-          visible={showWalletBalance}
-          onClose={() => setShowWalletBalance(false)}
-          balanceSource={balanceSource || undefined}
-          initialPosition={{
-            x: typeof window !== 'undefined' ? (window.innerWidth / 2) - 150 : 0, // Centered (300px max-width / 2)
-            y: 20  // 20px from top
-          }}
-        />
-      )}
+      </main>
 
       {/* Import Account Modal (for corrupted localStorage) */}
       {showImportModal && (
@@ -1150,7 +1126,7 @@ function TopUpContent() {
           </button>
         </div>
       )}
-    </div>
+    </WalletHubFrame>
   );
 }
 

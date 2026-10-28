@@ -1,13 +1,16 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { toast, ToastContainer } from 'react-toastify'; // Kept import, but not using for validation; remove if unused
 import 'react-toastify/dist/ReactToastify.css';
 import { useDropzone } from 'react-dropzone'; // For image picker
 import confetti from 'canvas-confetti';
 import Image from 'next/image';
 import { PrivateKey } from '@hiveio/dhive';
-import MiniWallet, { WalletReopenButton } from '@/app/components/SharedMiniWallet';
+import WalletHubHeader from '@/app/components/WalletHubHeader';
+import WalletHubFrame from '@/app/components/WalletHubFrame';
+import HubMiniWallet from '@/app/components/HubMiniWallet';
+import { hasRestaurantContext, standaloneTopUpHref, walletNavigationMessages } from '@/lib/wallet-navigation';
 import { getCurrencyConfig, type CurrencyConfig } from '@/lib/currency-config';
 import { clearSavedWallet, walletImportMessages, type WalletImportChoice } from '@/lib/wallet-import';
 import { parseHubWalletImport, saveHubWalletImport, type HubWalletImport } from '@/lib/hub-wallet-import';
@@ -323,6 +326,23 @@ export default function HiveAccountCreationPage() {
   // New state for existing account from localStorage
   const [existingAccount, setExistingAccount] = useState<{ accountName: string; masterPassword: string; seed: string; email?: string } | null>(null);
   const [showUpdateForm, setShowUpdateForm] = useState(false);
+  const [navigationSearch, setNavigationSearch] = useState('');
+  useEffect(() => { setNavigationSearch(window.location.search); }, []);
+  const displayedAccountName = existingAccount?.accountName;
+  // Refresh account details from the existing database endpoint, independent of checkout.
+  useEffect(() => {
+    if (!displayedAccountName || hasRestaurantContext(navigationSearch)) return;
+    let current = true;
+    fetch(`/api/account/email?accountName=${encodeURIComponent(displayedAccountName)}`)
+      .then(response => response.ok ? response.json() : null)
+      .then(data => {
+        if (!current || !data || typeof data.found !== 'boolean') return;
+        const email = data.found && typeof data.email === 'string' && data.email.trim() ? data.email.trim() : undefined;
+        setExistingAccount(account => account?.accountName === displayedAccountName && account.email !== email ? { ...account, email } : account);
+      })
+      .catch(() => { /* Preserve the cached display if the account service is unavailable. */ });
+    return () => { current = false; };
+  }, [displayedAccountName, navigationSearch]);
 
   // State for account balance (for MiniWallet)
   const [accountBalance, setAccountBalance] = useState<number | null>(null);
@@ -2262,45 +2282,18 @@ export default function HiveAccountCreationPage() {
 
   const renderExistingAccountView = () => (
     <>
-      <header className="fixed top-4 right-4 z-10 flex items-center space-x-2">
-          <button onClick={() => setShowUpdateForm(!showUpdateForm)}>
-            <img
-              src={metadata.avatarUri || defaultAvatarUrl}
-              alt="User Avatar"
-              className="w-10 h-10 rounded-full border-2 border-white shadow-md"
-            />
-          </button>
-      </header>
-      <div className="flex flex-col items-center justify-start min-h-screen py-2">
+      <div className="hub-account-content">
         <main className="flex flex-col items-center justify-start w-full flex-1 text-center">
-          <div className="flex flex-col items-center space-y-3 sm:space-y-6 p-3 sm:p-6 lg:p-8 bg-white rounded-xl shadow-lg w-full max-w-xl mb-3">
-            <div className="relative w-2/3 sm:w-4/5 h-auto aspect-video mb-1">
-              <Image
-                src={innopayLogoUrl}
-                alt="Innopay Logo"
-                fill
-                className="object-contain"
-              />
-            </div>
+          <div className="hub-account-panel">
+            <WalletHubHeader language={language} onLanguageChange={setLanguage} avatarUrl={metadata.avatarUri || defaultAvatarUrl}
+              onAvatarClick={() => setShowUpdateForm(!showUpdateForm)} search={navigationSearch} />
+            <HubMiniWallet accountName={existingAccount?.accountName || ''} balance={accountBalance}
+              language={language} visible={showWalletBalance} onVisibilityChange={setShowWalletBalance} search={navigationSearch} />
+            {standaloneTopUpHref(navigationSearch) && <a className="hub-recharge-action" href={standaloneTopUpHref(navigationSearch)!}>
+              {walletNavigationMessages[language].recharge}
+            </a>}
             {!showUpdateForm ? (
               <>
-                {/* Language Selector */}
-                <div className="w-full flex justify-center gap-2 mb-3">
-                  {(['fr', 'en', 'de', 'lb'] as Language[]).map((lang) => (
-                    <button
-                      key={lang}
-                      onClick={() => setLanguage(lang)}
-                      className={`px-3 py-1.5 rounded-lg font-medium text-sm transition-all ${
-                        language === lang
-                          ? 'bg-blue-600 text-white shadow-md'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                      }`}
-                    >
-                      {lang.toUpperCase()}
-                    </button>
-                  ))}
-                </div>
-
                 {/* Success Message */}
                 <div className="px-3 py-3 w-full bg-gradient-to-r from-blue-50 to-blue-100 border-2 border-blue-500 rounded-lg text-center">
                   <p className="text-base font-semibold text-blue-900 mb-1">
@@ -2314,7 +2307,7 @@ export default function HiveAccountCreationPage() {
                       <p className="text-xs text-blue-800 mb-0.5">
                         {translations[language].registeredWith}
                       </p>
-                      <p className="font-mono text-sm text-blue-900 break-all mb-2">
+                      <p className="font-mono text-lg text-blue-900 break-all mb-2">
                         {existingAccount.email}
                       </p>
                     </>
@@ -2323,40 +2316,6 @@ export default function HiveAccountCreationPage() {
                     {translations[language].callToAction}
                   </p>
                 </div>
-
-                <button type="button" onClick={startWalletImport}
-                  className="text-sm font-semibold text-blue-700 underline">
-                  {importText.importAnother}
-                </button>
-                <ForgetWalletButton onForget={forgetWallet} language={language} />
-
-                {/* MiniWallet Component - Fixed with proper onClose */}
-                {accountBalance !== null && showWalletBalance && (
-                  <div className="w-full my-1">
-                    <MiniWallet
-                      language={language}
-                      balance={{
-                        accountName: existingAccount?.accountName || '',
-                        euroBalance: accountBalance
-                      }}
-                      onClose={() => setShowWalletBalance(false)}
-                      visible={showWalletBalance}
-                      initialPosition={{
-                        x: typeof window !== 'undefined' ? (window.innerWidth / 2) - 150 : 0,
-                        y: 20
-                      }}
-                    />
-                  </div>
-                )}
-
-                {/* Wallet Reopen Button */}
-                {accountBalance !== null && !showWalletBalance && (
-                  <WalletReopenButton
-                    language={language}
-                    onClick={() => setShowWalletBalance(true)}
-                    visible={true}
-                  />
-                )}
 
                 {/* Action Buttons - Explorer above Beautify, with dynamic behavior based on restaurant param */}
                 <div className="w-full flex flex-col sm:flex-row gap-2 mt-1">
@@ -2434,31 +2393,33 @@ export default function HiveAccountCreationPage() {
                         {/* Beautify Profile Button - Now SECOND */}
                         <button
                           onClick={() => setShowUpdateForm(true)}
-                          className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold py-2.5 sm:py-3 px-6 rounded-lg transition duration-300"
+                          className="flex-1 inline-flex items-center justify-center gap-1.5 bg-blue-500 hover:bg-blue-600 text-white font-bold py-2.5 sm:py-3 px-4 rounded-lg transition duration-300"
                         >
-                          {translations[language].beautifyProfile}
+                          <Image src="/images/rubis-295x295.png" alt="" aria-hidden="true" width={20} height={20} className="shrink-0 object-contain" />
+                          <span className="min-w-0">{translations[language].beautifyProfile}</span>
+                          <Image src="/images/rubis-295x295.png" alt="" aria-hidden="true" width={20} height={20} className="shrink-0 object-contain" />
                         </button>
 
-                        {/* History Button - Coming Soon */}
-                        <button
-                          onClick={(e) => {
-                            const btn = e.currentTarget;
-                            btn.classList.add('scale-95', 'brightness-125');
-                            setTimeout(() => btn.classList.remove('scale-95', 'brightness-125'), 200);
-                          }}
-                          className="flex-1 bg-gray-400 hover:bg-gray-500 text-white font-bold py-2.5 sm:py-3 px-6 rounded-lg transition-all duration-200 cursor-default"
-                        >
-                          {translations[language].historyButton}
-                        </button>
                       </>
                     );
                   })()}
                 </div>
+                <div className="hub-account-management">
+                  <button type="button" onClick={startWalletImport} className="text-sm font-semibold text-blue-700 underline">
+                    {importText.importAnother}
+                  </button>
+                  <ForgetWalletButton onForget={forgetWallet} language={language} />
+                </div>
+                <div className="hub-history">
+                  <button type="button" aria-disabled="true" className="w-full rounded-lg bg-gray-100 text-gray-600 text-sm px-4 py-2.5 cursor-default">
+                    {translations[language].historyButton}
+                  </button>
+                </div>
               </>
             ) : (
               <div className="w-full">
-                <h1 className="text-4xl font-bold mb-6">Welcome, {existingAccount?.accountName}!</h1>
-                <p className="mt-3 text-xl mb-8">
+                <h2 className="text-2xl font-bold mb-3">Welcome, {existingAccount?.accountName}!</h2>
+                <p className="mt-2 text-base mb-4">
                   Your account is live! Now, let's create your profile.
                 </p>
 
@@ -2592,7 +2553,8 @@ export default function HiveAccountCreationPage() {
   );
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen py-2">
+    <WalletHubFrame language={language} enabled={!!existingAccount && !showWalletImport}
+      className={existingAccount && !showWalletImport ? 'hub-user-page' : 'flex flex-col items-center justify-center min-h-screen py-2'}>
       {existingAccount && !showWalletImport ? renderExistingAccountView() : renderAccountCreationForm()}
       <ToastContainer
         position="top-center"
@@ -2721,6 +2683,6 @@ export default function HiveAccountCreationPage() {
           </button>
         </div>
       )}
-    </div>
+    </WalletHubFrame>
   );
 }

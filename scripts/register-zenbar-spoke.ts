@@ -66,7 +66,8 @@ async function main() {
       iou_token: 'LEI',
       has_delivery: false,
       active: true,
-      ready: false, // not customer-ready until the drawer widget ships
+      ready: true, // Live customer-facing spoke.
+      image_1: '/images/businesses/zenbar-bucharest.jpg',
     };
 
     const spoke = await prisma.spoke.upsert({

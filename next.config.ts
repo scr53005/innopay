@@ -5,7 +5,9 @@ const nextConfig: NextConfig = {
   /* config options here */
   output: 'standalone',
   images: {
-    domains: ['cdn.innopay.lu'],  // For your custom domain
+    remotePatterns: [
+      { protocol: 'https', hostname: 'cdn.innopay.lu', port: '', pathname: '/**' },
+    ],
   },
 };
 

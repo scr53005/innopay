@@ -1,3 +1,111 @@
+# Innopay Hub — Project Status
+
+**Last updated**: 2026-10-28
+**Status**: Wallet navigation/layout and QR scanner implemented locally. User confirms the complete suite passed after the direct-navigation change and Samsung photo scanning opens the approved menu immediately. The subsequent scanner-placement/right-edge-wallet changes await a fresh suite run. Real-device camera/live-transfer checks and the deferred shop-card handoff fixes remain outstanding.
+
+### Follow-up — scanner placement and wallet docking (2026-10-28)
+
+At the user's request, the scanner action moves between the language flags and
+the shops heading. The user clarified that it should be centered partly beneath
+MiniWallet; its height is now 70px, about 80% of the normal 88px wallet. Both share
+the existing 76px reserved row. Flag buttons shrink to 36×32px with 6px
+gaps; graphics and the blue selection outline remain. MiniWallet starts flush
+with the right viewport edge on standalone `/`. Its accepted 76px reserved space
+is retained and shared with the scanner, recovering space above the recharge
+form. Dragged positions survive minimize/reopen without an extra edge shift.
+The account-page wallet position, scanner behavior and restaurant checkout
+handlers retain their existing behavior. Placement/order and drag/reopen
+regressions are included in the full `npm test` suite; this follow-up still needs
+the user's full-suite run.
+
+### Follow-up — real Indies photo decoding (2026-10-28)
+
+The user found that image import failed on a photograph of an Indies sticker in
+Samsung Internet on Android, while another company's QR decoded and correctly
+hit the domain restriction. Reproduced the same failure in the real browser with
+an original Indies print-document image. The initial generated plain QR check
+and mocked image tests had missed this existing rounded-finder sticker format.
+
+The replacement image reader, ZXing-WASM 3.1.6, decoded the original sticker and
+the user's exact 4000×3000 table-16 photograph locally (about 118ms / 353ms on the
+development computer; these are not phone performance claims). The decoded
+links are HTTP even though the stickers' printed captions say HTTPS. Image
+import now uses this stronger local reader first, retains Nimiq as fallback,
+self-hosts the pinned WASM asset, and separates initialization failures from
+unreadable-image errors. Camera capture and restaurant payments are unchanged.
+
+Approved legacy HTTP URLs are validated against the same host/credential/port
+policy, then upgraded to HTTPS with the complete path/query/table preserved.
+The modal only offers HTTPS. Added a real WASM integration regression using the
+original public sticker, helper/fallback tests, a startup-error UI check and
+legacy-link security tests. The user's personal photograph remains outside the
+repository. The prior 242-pass result predates this fix; a fresh full-suite run
+and exact-photo browser/phone recheck are required.
+
+The user then reported the new suite passing, but Samsung Internet remained on
+“Lecture de l’image…”. The exact photo succeeds in the desktop browser and
+offers the HTTPS table-16 menu. Follow-up diagnostics now emit file-read,
+module-import, initialization and decode start/end markers without image or QR
+contents. Async stages are bounded, and the UI has a 28-second watchdog that
+ignores late results. Added stalled-initialization and late-result regressions.
+The user restarted the dev server and confirmed the same photo then worked in
+Samsung Internet; the close button had remained responsive during the stall.
+The precise stalled stage was not captured. The timeout and diagnostics remain
+as recovery/observability measures. Eruda's absence on the phone was also reported.
+
+At the user's explicit request, approved web links now open without a confirmation
+screen. The original scanner action opens `/scan` in a new tab using a normal
+link; successful decoding navigates that tab directly to the validated HTTPS
+destination, retaining the original wallet tab and avoiding async-popup blockers.
+Hive transfers still require review and explicit confirmation before sending.
+An ephemeral cross-tab notice preserves the original wallet's delayed balance
+refresh after a QR transfer. Navigation, timeout and cross-tab regressions were
+added/updated; this follow-up needs a fresh full-suite run.
+
+## Current status — wallet home and account page
+
+- `/` and `/user` share the compact logo/title/avatar header and FR/EN/DE/LB flags. The avatar opens the account page; the logo returns home. Useful visible content and actions take priority over padding and empty space.
+- MiniWallet remains the essential branded wallet: draggable when expanded, minimized to the dollar purse rather than dismissed. On `/`, its accepted 76px reserved gap is shared with the scanner; it starts at the right viewport edge with slight overlap on phones. The purse and expanded wallet coordinate with the collapsed/expanded BottomBanner.
+- Merchant discovery remains available with an empty wallet. A faint red tint and translated low-balance reminder suggest recharging. The shop window shows two cards and part of a third; Zen Bar has its supplied image and a translated Bucharest/Romania location. Farm opens the directory root and keeps its coming-soon badge while only test businesses are present.
+- With a saved wallet, `/user` shows MiniWallet and a prominent recharge action; History remains below the main actions. The associated email is fetched from the existing account/email API instead of relying on a browser-cached email. Its typography follows the user's latest styling choice. The profile button has a ruby on each side of its translated label. No-wallet onboarding is retained.
+- The latest small home-page adjustment translates shop actions, availability badges/alerts, the empty list and processing label. On standalone `/`, the form gap decreases from 16px to 10px and input vertical padding from 8px to 6px; restaurant order context keeps its previous spacing.
+- Restaurant checkout handlers, Stripe payloads, balance trust, credential-token creation and payment-return contracts were preserved during the hub layout work. A future fix to the issues below must be a separate, focused change with regression coverage.
+
+Implementation detail: [Wallet hub layout](docs/wallet-navigation.md).
+
+## Known issues — shop-card navigation
+
+Reported by the user on 2026-10-28 while browsing from the hub with an existing wallet. These are deferred TODOs, not fixed by the current layout/copy work.
+
+- [ ] **Keep the wallet hub open when browsing a shop.** The home-page card handler currently assigns `window.location.href`, replacing the wallet page. Requirement: open the shop in a separate tab/window while preserving the existing credential handoff. Account for popup blocking around the asynchronous credential-session request. Check all live cards and Farm, with and without a saved wallet.
+- [ ] **Investigate repeated Millewee Flow 4 credential redemption.** Reproduction: tap “Brasserie Millewee” on `/` with a saved account. Hub logs show two overlapping `POST /api/account/credentials` requests for the same one-use token: one returns 200, the other 410 (“Token already used”). Millewee logs show repeated `Invalid transition: processing -> RETURN_FROM_HUB` and a `PaymentReturnHost` fetch failure. The logs establish duplicate redemption attempts; the trigger and the relationship to the fetch failure are not yet confirmed. Start with `millewee/components/innopay/PaymentReturnHost.tsx`, its effect lifecycle/dependencies and return-parameter cleanup. Verify the duplicate trigger before changing token semantics; do not make one-use tokens reusable as a workaround.
+- [ ] **Use wallet-import wording for Millewee Flow 4 browsing.** A card visit displays “Finalisation de la commande...” even though the customer has not ordered. `PaymentReturnHost` currently dispatches its order-finalization text before distinguishing the return type. Requirement: wallet-preparation/import wording during Flow 4, then the wallet-ready success message; no implication that an order exists. User comparison: Indies shows “Votre portefeuille Innopay est prêt, vous pouvez déjà commander”, with no reported errors in its dev logs. Preserve actual order-finalization copy and behavior for the payment flows that need it.
+- [ ] **Verify the mobile development environment over HTTPS.** The Millewee report also contains `secureContext: false`, `subtle: false`, and the keystore's plaintext-degraded warning. This is an observed HTTP-development limitation, not evidence that production HTTPS has the same problem. Retest under a secure origin; do not weaken the keystore to hide the warning. Record whether the separate cross-origin fetch failure persists.
+
+Acceptance for the future handoff fix: one successful token redemption per visit, correct wallet-ready banner, no invalid state transitions, hub tab retained, MiniWallet usable on the destination, and return parameters cleaned without losing table context. Add regressions for repeated return processing, existing-wallet discovery without an order, and the protected restaurant checkout flows. Retest Millewee and Indies side by side. The previous successful checkout checks do not establish that this new browsing reproduction works.
+
+## Implemented — QR scanner and compact shop cards
+
+Current layout: 26×17px flag graphics within 36×32px buttons; a centered 70px scanner action between flags and the shops heading, sharing MiniWallet's 76px reserved space and partly underneath it on phones. Shop cards remain 88px high with 6px padding/gaps and window padding. The window retains two cards and part of a third. Up to 350px wide, use 96px cards, 64px photos, tighter text leading and badges over the photo corner for wrapped translations; other widths retain 72px photos and inline badges beside names. This narrow variant addresses observed German Farm/Zen Bar wrapping at 320px.
+
+- `hive://sign/op`: single HIVE/HBD transfers and Hive-Engine EURO/LEI `tokens.transfer` requests are supported, per the user's decision. Show sender/recipient/amount/asset/memo, resolve `__signer` and require explicit confirmation before signing. The saved wallet must match the sender and optional `s` parameter. Multi-ops, other contracts/tokens, callback/sign-only/authority options and other signing modes are explicitly rejected in this first release.
+- Web destinations: allow only hostname `innopay.lu`, `offchain.lu`, or a dot-delimited subdomain of either. Parse with the URL API, reject username/password components, nonstandard ports and other schemes/domains. Validated legacy HTTP URLs are upgraded to HTTPS; only HTTPS navigation is offered. Examples covered by allowlist regressions include `innopay.lu.example.com`, `fakeinnopay.lu`, and `https://innopay.lu@evil.example/`.
+- Approved web links navigate immediately in the scanner tab, preserving the original hub tab and adding no confirmation. Wallet credentials are not attached. Initial-host validation does not prevent an approved server from redirecting elsewhere; avoid open redirects on approved destinations.
+- Scanner uses lazily loaded `qr-scanner` 1.4.2 in a native modal: rear-camera preference, camera switching and torch where supported, close/cleanup and image-import fallback. FR/EN/DE/LB copy throughout. Browser camera access requires HTTPS (desktop localhost is an exception; an HTTP LAN IP is not). Real iPhone/Android decoding quality still needs testing, including dense Hive-operation codes.
+- A separate same-origin, secure `POST /api/wallet/qr-transfer` path revalidates the QR and signs with the user's supplied active key. It does not invoke restaurant checkout or hub-authority fallback. Duplicate confirmation clicks are latched; ambiguous network outcomes are reported without an automatic retry. Submission is pending blockchain confirmation; a Hive-Engine operation can still fail its token-contract checks. Refresh the existing displayed balance after 15 seconds.
+
+## Validation status
+
+The user reported **242 tests passed** with the complete `npm test` suite after the scanner/layout implementation. Added QR policy, asset, origin, signing-boundary, repeated-click, camera-cleanup and image-fallback coverage within the existing runner; existing restaurant payload tests remain. Browser review covered desktop, 390px phone width and 320px German wrapping. The generated approved-link QR image decoded successfully in the real scanner and displayed an explicit open action. A dev-server restart was needed to serve the final narrow-layout CSS. No build, compiler or unit-test runner was executed by the agent. No production deployment, real-device camera-quality result, live QR transfer or fresh end-to-end restaurant-payment verification is claimed here.
+
+The shop issues above remain recorded TODOs, based on the user's logs and limited read-only source inspection. They were not changed as part of the scanner work.
+
+## Historical status archive
+
+The older dated entries below are preserved as historical records. Their “current”, “production ready” and build/test statements describe those sessions, not the current verification state.
+
+---
+
 # INNOPAY REFACTORING - PROJECT STATUS
 
 **Last Updated**: 2025-12-18

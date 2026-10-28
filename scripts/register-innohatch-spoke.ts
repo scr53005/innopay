@@ -79,6 +79,7 @@ async function main() {
       service_flags: ['counter_f2f'],
       active: true,
       ready: false, // not customer-ready until the PoC field test passes
+      image_1: '/images/businesses/innopay-farm.jpg',
     };
 
     const spoke = await prisma.spoke.upsert({
