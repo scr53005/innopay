@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { Prisma } from '@prisma/client';
+import { canUpdateDebtStatus } from '../../../../lib/debt-status-rules';
 
 function checkAuth(req: NextRequest): boolean {
   const auth = req.headers.get('authorization');
@@ -36,12 +38,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const result = await prisma.outstanding_debt.updateMany({
-    where: { id: { in: debt_ids } },
-    data: { status },
-  });
-
-  console.warn(`[OUTSTANDING-DEBT] Status updated: ${debt_ids.length} debts → ${status} (${result.count} rows affected)`);
-
-  return NextResponse.json({ updated: result.count });
+  try {
+    const ids = [...new Set(debt_ids)];
+    const result = await prisma.$transaction(async (tx) => {
+      const debts = await tx.outstanding_debt.findMany({ where: { id: { in: ids } } });
+      if (debts.length !== ids.length || debts.some((debt) => !canUpdateDebtStatus(debt.status, status, !!debt.settlement_id))) {
+        throw new Error('Debt no longer permits this transition; no status changed');
+      }
+      return tx.outstanding_debt.updateMany({ where: { id: { in: ids } }, data: { status } });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    return NextResponse.json({ updated: result.count });
+  } catch (error) { return NextResponse.json({ error: String(error) }, { status: 409 }); }
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
+import { recordLegacyDebtPayments } from '../../../../lib/record-legacy-debt-payment';
+import { validateLegacyPayments } from '../../../../lib/legacy-debt-payment';
 
 function checkAuth(req: NextRequest): boolean {
   const auth = req.headers.get('authorization');
@@ -30,68 +31,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let settled = 0;
-  const errors: string[] = [];
-
-  for (const payment of payments) {
-    try {
-      const debt = await prisma.outstanding_debt.findUnique({
-        where: { id: payment.debt_id },
-      });
-
-      if (!debt) {
-        errors.push(`debt ${payment.debt_id} not found`);
-        continue;
-      }
-
-      if (debt.status !== 'withdrawal_pending') {
-        errors.push(`debt ${payment.debt_id} status is '${debt.status}', expected 'withdrawal_pending'`);
-        continue;
-      }
-
-      const currentAmount = Number(debt.amount_hbd);
-      const paymentAmount = payment.amount_hbd;
-
-      if (paymentAmount >= currentAmount) {
-        errors.push(`debt ${payment.debt_id}: payment ${paymentAmount} >= remaining ${currentAmount} — use mark-paid for full settlement`);
-        continue;
-      }
-
-      if (paymentAmount <= 0) {
-        errors.push(`debt ${payment.debt_id}: payment amount must be positive`);
-        continue;
-      }
-
-      const remaining = Math.round((currentAmount - paymentAmount) * 1000) / 1000;
-
-      // Atomic: create payment record + decrement debt + set status back to unpaid
-      await prisma.$transaction([
-        prisma.debt_payment.create({
-          data: {
-            debt_id: payment.debt_id,
-            amount_hbd: paymentAmount,
-            tx_id: payment.tx_id,
-            notes: `Partial settlement: ${paymentAmount} HBD of ${currentAmount} HBD (${remaining} HBD remaining)`,
-          },
-        }),
-        prisma.outstanding_debt.update({
-          where: { id: payment.debt_id },
-          data: {
-            amount_hbd: remaining,
-            status: 'unpaid',
-          },
-        }),
-      ]);
-
-      settled++;
-      console.warn(`[PARTIAL-SETTLE] Debt ${payment.debt_id}: ${currentAmount} → ${remaining} HBD (paid ${paymentAmount}, tx: ${payment.tx_id})`);
-    } catch (e) {
-      console.error(`[PARTIAL-SETTLE] Failed for debt ${payment.debt_id}:`, e);
-      errors.push(`debt ${payment.debt_id}: ${e}`);
-    }
+  try {
+    validateLegacyPayments(payments);
+    return NextResponse.json(await recordLegacyDebtPayments(payments));
+  } catch (error) {
+    console.error('[PARTIAL-SETTLE] Allocation rejected:', error);
+    return NextResponse.json({ error: String(error) }, { status: 409 });
   }
-
-  console.warn(`[PARTIAL-SETTLE] Settled ${settled}/${payments.length} partial payments${errors.length > 0 ? ' | errors: ' + errors.join('; ') : ''}`);
-
-  return NextResponse.json({ settled, errors: errors.length > 0 ? errors : undefined });
 }

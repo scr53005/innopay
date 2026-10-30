@@ -1,7 +1,7 @@
 # Innopay Hub — Project Status
 
 **Last updated**: 2026-10-28
-**Status**: Wallet navigation/layout and QR scanner implemented locally. User confirms the complete suite passed after the direct-navigation change and Samsung photo scanning opens the approved menu immediately. The subsequent scanner-placement/right-edge-wallet changes await a fresh suite run. Real-device camera/live-transfer checks and the deferred shop-card handoff fixes remain outstanding.
+**Status**: Wallet navigation/layout and QR scanner implemented locally and accepted by the user. The complete suite and desired scanner/MiniWallet overlap were confirmed after the final placement adjustment. Samsung photo scanning opens the approved menu immediately. The latest icon-only enlargement is visually verified and accepted, and the user confirmed the complete `npm test` suite passed after this change. Real-device camera/live-transfer checks and the deferred shop-card handoff fixes remain outstanding.
 
 ### Follow-up — scanner placement and wallet docking (2026-10-28)
 
@@ -15,8 +15,16 @@ is retained and shared with the scanner, recovering space above the recharge
 form. Dragged positions survive minimize/reopen without an extra edge shift.
 The account-page wallet position, scanner behavior and restaurant checkout
 handlers retain their existing behavior. Placement/order and drag/reopen
-regressions are included in the full `npm test` suite; this follow-up still needs
-the user's full-suite run.
+regressions are included in the full `npm test` suite. After restarting the dev
+server and being asked to run the complete suite and review the overlap, the user
+confirmed “everything just perfect”. The accepted layout keeps the top-up action
+visible and the scanner partly beneath MiniWallet.
+
+Final icon polish: increased the scanner's SVG from 23×23px to 36×36px (about 57%
+larger). The scanner remains centered and 70px tall. A browser check at 390×844px
+confirmed the actual 36px icon and 70px button height; the user accepted the
+result. Only the SVG dimensions changed. The user subsequently confirmed that
+the complete `npm test` suite passed after this icon-only change.
 
 ### Follow-up — real Indies photo decoding (2026-10-28)
 
@@ -39,8 +47,8 @@ policy, then upgraded to HTTPS with the complete path/query/table preserved.
 The modal only offers HTTPS. Added a real WASM integration regression using the
 original public sticker, helper/fallback tests, a startup-error UI check and
 legacy-link security tests. The user's personal photograph remains outside the
-repository. The prior 242-pass result predates this fix; a fresh full-suite run
-and exact-photo browser/phone recheck are required.
+repository. The prior 242-pass result predates this fix; the user subsequently
+reported the updated suite passing and rechecked the exact photo, as below.
 
 The user then reported the new suite passing, but Samsung Internet remained on
 “Lecture de l’image…”. The exact photo succeeds in the desktop browser and
@@ -60,7 +68,8 @@ destination, retaining the original wallet tab and avoiding async-popup blockers
 Hive transfers still require review and explicit confirmation before sending.
 An ephemeral cross-tab notice preserves the original wallet's delayed balance
 refresh after a QR transfer. Navigation, timeout and cross-tab regressions were
-added/updated; this follow-up needs a fresh full-suite run.
+added/updated. The user subsequently confirmed that the complete suite passed
+and the Samsung photo opens the approved destination directly.
 
 ## Current status — wallet home and account page
 
@@ -86,7 +95,7 @@ Acceptance for the future handoff fix: one successful token redemption per visit
 
 ## Implemented — QR scanner and compact shop cards
 
-Current layout: 26×17px flag graphics within 36×32px buttons; a centered 70px scanner action between flags and the shops heading, sharing MiniWallet's 76px reserved space and partly underneath it on phones. Shop cards remain 88px high with 6px padding/gaps and window padding. The window retains two cards and part of a third. Up to 350px wide, use 96px cards, 64px photos, tighter text leading and badges over the photo corner for wrapped translations; other widths retain 72px photos and inline badges beside names. This narrow variant addresses observed German Farm/Zen Bar wrapping at 320px.
+Current layout: 26×17px flag graphics within 36×32px buttons; a centered 70px scanner action with a 36×36px QR icon between flags and the shops heading, sharing MiniWallet's 76px reserved space and partly underneath it on phones. Shop cards remain 88px high with 6px padding/gaps and window padding. The window retains two cards and part of a third. Up to 350px wide, use 96px cards, 64px photos, tighter text leading and badges over the photo corner for wrapped translations; other widths retain 72px photos and inline badges beside names. This narrow variant addresses observed German Farm/Zen Bar wrapping at 320px.
 
 - `hive://sign/op`: single HIVE/HBD transfers and Hive-Engine EURO/LEI `tokens.transfer` requests are supported, per the user's decision. Show sender/recipient/amount/asset/memo, resolve `__signer` and require explicit confirmation before signing. The saved wallet must match the sender and optional `s` parameter. Multi-ops, other contracts/tokens, callback/sign-only/authority options and other signing modes are explicitly rejected in this first release.
 - Web destinations: allow only hostname `innopay.lu`, `offchain.lu`, or a dot-delimited subdomain of either. Parse with the URL API, reject username/password components, nonstandard ports and other schemes/domains. Validated legacy HTTP URLs are upgraded to HTTPS; only HTTPS navigation is offered. Examples covered by allowlist regressions include `innopay.lu.example.com`, `fakeinnopay.lu`, and `https://innopay.lu@evil.example/`.
@@ -96,7 +105,27 @@ Current layout: 26×17px flag graphics within 36×32px buttons; a centered 70px 
 
 ## Validation status
 
-The user reported **242 tests passed** with the complete `npm test` suite after the scanner/layout implementation. Added QR policy, asset, origin, signing-boundary, repeated-click, camera-cleanup and image-fallback coverage within the existing runner; existing restaurant payload tests remain. Browser review covered desktop, 390px phone width and 320px German wrapping. The generated approved-link QR image decoded successfully in the real scanner and displayed an explicit open action. A dev-server restart was needed to serve the final narrow-layout CSS. No build, compiler or unit-test runner was executed by the agent. No production deployment, real-device camera-quality result, live QR transfer or fresh end-to-end restaurant-payment verification is claimed here.
+The initial scanner/layout run passed **242 tests**, reported by the user. Later
+full-suite passes were reported after the photo decoder and direct-navigation
+changes, followed by acceptance of the final placement/overlap and test check;
+no later exact test count was supplied. Coverage within the existing runner
+includes QR policy/assets, signer/origin boundaries, repeated clicks, camera
+cleanup, image decoding/fallback, async timeouts, direct navigation, cross-tab
+balance refresh, wallet placement and drag/minimize/reopen behavior. Existing
+restaurant payload regressions remain.
+
+Browser review covered desktop, 390px phone width and 320px German wrapping.
+The exact Indies table-16 photograph decoded and navigated directly to the HTTPS
+menu in the scanner tab, retaining the original wallet tab. The user confirmed
+this behavior in Samsung Internet. Dev-server restarts were needed when the
+previous CSS persisted. The latest 36px icon and unchanged 70px scanner height
+were measured in the browser at 390×844px and accepted by the user. The user also
+confirmed that the complete suite passed after this icon-only change.
+
+No build, compiler or unit-test runner was executed by the agent. No production
+deployment, real-device camera-quality result, live QR transfer or fresh
+end-to-end restaurant-payment verification is claimed here. Updating this status
+document changes no application behavior.
 
 The shop issues above remain recorded TODOs, based on the user's logs and limited read-only source inspection. They were not changed as part of the scanner work.
 
