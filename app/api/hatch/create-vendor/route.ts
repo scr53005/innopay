@@ -24,6 +24,7 @@ import { allocateVendorMemoId } from '@/lib/vendor-memo-id';
 import { sendHatchNotification } from '@/lib/hatch-notify';
 import { sendCredentialEmail } from '@/services/credential-email';
 import { normalizePhone } from '@/lib/phone';
+import { isHatchCategoryAvailable } from '@/lib/hatch-templates';
 
 const UMBRELLA_SPOKE_ID = 'innohatch';
 
@@ -93,6 +94,10 @@ export async function POST(request: Request) {
   const steps: Record<string, string> = {};
 
   try {
+    // Catch a category archived since the form opened before creating an account.
+    if (!new_template && template_key && !(await isHatchCategoryAvailable(template_key))) {
+      return NextResponse.json({ error: 'This category is archived or unavailable. Reload and choose an active category.' }, { status: 409 });
+    }
     // ── 1. Account: create, resume-if-ours, or reject-if-someone-else's ──
     const exists = await accountExists(hive_account);
     if (exists) {

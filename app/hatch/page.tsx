@@ -10,13 +10,6 @@ import QRCode from 'qrcode';
 import { validateHiveAccountName } from '@/lib/hive-account-name';
 import LogoCropper from '@/app/components/LogoCropper';
 
-// Fallback categories if the innohatch templates list can't be fetched (dev/offline).
-const FALLBACK_CATEGORIES = [
-  { key: 'coffee_cart', name: 'Coffee cart' },
-  { key: 'food_truck', name: 'Food truck' },
-  { key: 'buvette', name: 'Buvette / fête' },
-];
-
 // Sentinel dropdown value for "Create new category".
 const NEW_CATEGORY = '__new__';
 
@@ -57,8 +50,8 @@ interface HatchResult {
 export default function HatchPage() {
   const [displayName, setDisplayName] = useState('');
   const [hiveAccount, setHiveAccount] = useState('');
-  const [templateKey, setTemplateKey] = useState('coffee_cart');
-  const [categories, setCategories] = useState<{ key: string; name: string }[]>(FALLBACK_CATEGORIES);
+  const [templateKey, setTemplateKey] = useState('');
+  const [categories, setCategories] = useState<{ key: string; name: string }[]>([]);
   // "Create new category" mini-form state.
   const [newName, setNewName] = useState('');
   const [newItems, setNewItems] = useState<NewItem[]>([{ kind: 'drink', label: '', price: '' }]);
@@ -84,14 +77,17 @@ export default function HatchPage() {
     fetch('/api/hatch/templates')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (Array.isArray(d?.templates) && d.templates.length) setCategories(d.templates);
+        if (Array.isArray(d?.templates)) {
+          setCategories(d.templates);
+          setTemplateKey(d.templates[0]?.key ?? NEW_CATEGORY);
+        } else setError('Could not load categories. Reload to retry.');
       })
-      .catch(() => {});
+      .catch(() => setError('Could not load categories. Reload to retry.'));
   }, []);
 
   const creatingCategory = templateKey === NEW_CATEGORY;
   const validNewItems = newItems.filter((i) => i.label.trim() && Number.isFinite(Number(i.price)));
-  const newCategoryReady = creatingCategory ? newName.trim().length > 0 && validNewItems.length > 0 : true;
+  const newCategoryReady = creatingCategory ? newName.trim().length > 0 && validNewItems.length > 0 : categories.some((c) => c.key === templateKey);
 
   const setItem = (idx: number, patch: Partial<NewItem>) =>
     setNewItems((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
@@ -222,6 +218,7 @@ export default function HatchPage() {
       <a href="/hatch/archive" className="mt-2 inline-block text-sm text-blue-700 underline">
         Vendor archive →
       </a>
+      <a href="/hatch/categories" className="ml-4 mt-2 inline-block text-sm text-blue-700 underline">Manage categories →</a>
       <a href="/hatch/customize" className="ml-4 mt-2 inline-block text-sm text-blue-700 underline">
         Vendor logos →
       </a>
