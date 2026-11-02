@@ -7,6 +7,7 @@ import { useDropzone } from 'react-dropzone'; // For image picker
 import confetti from 'canvas-confetti';
 import Image from 'next/image';
 import { PrivateKey } from '@hiveio/dhive';
+import { signOrderAuth } from '@/lib/order-payment-auth';
 import WalletHubHeader from '@/app/components/WalletHubHeader';
 import WalletHubFrame from '@/app/components/WalletHubFrame';
 import HubMiniWallet from '@/app/components/HubMiniWallet';
@@ -503,6 +504,22 @@ export default function HiveAccountCreationPage() {
 
           console.log('[FLOW 5 BRANCH A] Calling execute-order-payment API');
 
+        // Prove control of the wallet: sign THIS order with the active key held in this
+        // browser. The server checks it against the chain (security fix 2026-11-02).
+        const activeKeyForAuth = localStorage.getItem('innopay_activePrivate');
+        if (!activeKeyForAuth) {
+          throw new Error('Wallet key not found on this device - please re-import your wallet');
+        }
+        const authFields = {
+          accountName,
+          restaurantAccount,
+          orderAmount,
+          orderMemo: orderMemo || '',
+          ts: Date.now(),
+          nonce: crypto.randomUUID(),
+        };
+        const authSignature = signOrderAuth(authFields, activeKeyForAuth);
+
         // Call the execute-order-payment API
         const paymentResponse = await fetch('/api/execute-order-payment', {
           method: 'POST',
@@ -513,7 +530,10 @@ export default function HiveAccountCreationPage() {
             orderMemo: orderMemo || '',  // Empty string will be caught by API validation
             restaurantAccount,
             table: table || undefined,
-            returnUrl: returnUrl || undefined  // Pass return URL to preserve environment
+            returnUrl: returnUrl || undefined,  // Pass return URL to preserve environment
+            authTs: authFields.ts,
+            authNonce: authFields.nonce,
+            authSignature,
           })
         });
 

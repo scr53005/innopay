@@ -1,6 +1,8 @@
 // app/api/sign-and-broadcast/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { Client, PrivateKey, Transaction } from '@hiveio/dhive';
+import prisma from '@/lib/prisma';
+import { validateSignRequest, type PolicyContext } from '@/lib/sign-request-policy';
 
 const client = new Client([
   'https://api.hive.blog',
@@ -30,7 +32,36 @@ const client = new Client([
  *
  * Security: Private key/password transmitted over HTTPS, used immediately for signing,
  * and not stored. Used only for this one-time broadcast.
+ *
+ * Signing policy (2026-11-02 fix): every request — whatever the key source — must be a
+ * single customer `tokens.transfer` of EURO/LEI/RUBIS to innopay or a registered spoke account
+ * (lib/sign-request-policy.ts). Innopay's own key is used only when the signer is a known
+ * customer (walletuser). Before this, any anonymous caller could get arbitrary custom_json
+ * signed by @innopay — the EURO/LEI/RUBIS issuer.
  */
+
+function corsJson(body: unknown, status: number) {
+  const res = NextResponse.json(body, { status });
+  res.headers.set('Access-Control-Allow-Origin', '*');
+  res.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.headers.set('Access-Control-Allow-Headers', 'Content-Type');
+  return res;
+}
+
+async function loadPolicyContext(): Promise<PolicyContext> {
+  const spokeAccounts = await prisma.spoke_account.findMany({
+    where: { active: true },
+    select: { hive_account: true },
+  });
+  const accounts = new Set<string>(['innopay', ...spokeAccounts.map((a) => a.hive_account)]);
+  return { allowedRecipients: accounts, protectedSigners: accounts };
+}
+
+/** Innopay's account-auth may only be exercised on behalf of a hub-created customer wallet. */
+async function isKnownCustomer(account: string): Promise<boolean> {
+  const user = await prisma.walletuser.findUnique({ where: { accountName: account }, select: { id: true } });
+  return user !== null;
+}
 export async function POST(req: NextRequest) {
   try {
     const { operation, activePrivateKey, masterPassword, accountName, useInnopayAuthority } = await req.json();
@@ -60,6 +91,15 @@ export async function POST(req: NextRequest) {
       return errorResponse;
     }
 
+    const policy = validateSignRequest(operation, accountName, await loadPolicyContext());
+    if (!policy.ok) {
+      console.warn('[SIGN-API] Refused by signing policy:', policy.reason);
+      return corsJson({ error: 'Operation not allowed', reason: policy.reason }, 403);
+    }
+    const signer = policy.payment.signer;
+    // Pre-check once: whether innopay authority may be used for this signer at all.
+    const innopayMaySign = await isKnownCustomer(signer);
+
     // Get current blockchain block details for transaction validity
     const dynamicGlobalProperties = await client.database.getDynamicGlobalProperties();
     const headBlockNumber = dynamicGlobalProperties.head_block_number;
@@ -82,7 +122,12 @@ export async function POST(req: NextRequest) {
     // CASCADE APPROACH: Try user's key first, fallback to innopay authority on failure
     if (useInnopayAuthority) {
       // Explicit request to use innopay authority
-      console.log('[SIGN-API] Using innopay authority (explicit)...');
+      if (!innopayMaySign) {
+        console.warn('[SIGN-API] Refused innopay authority for non-customer signer:', signer);
+        return corsJson({ error: 'Operation not allowed', reason: 'innopay authority unavailable for this account' }, 403);
+      }
+      // warn level: we count these to decide when the no-key fallback can be retired.
+      console.warn('[SIGN-API] Using innopay authority (explicit, no local key) for', signer, policy.payment.symbol, policy.payment.quantity, '->', policy.payment.to);
       const innopayActiveKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
       if (!innopayActiveKey) {
         throw new Error('HIVE_ACTIVE_KEY_INNOPAY not configured in environment');
@@ -123,7 +168,8 @@ export async function POST(req: NextRequest) {
             errorMessage.includes('Missing required active authority') ||
             errorMessage.includes('missing authority')) {
           // Authority error - try fallback to innopay authority
-          console.log('[SIGN-API] Falling back to innopay authority...');
+          if (!innopayMaySign) throw userKeyError;
+          console.warn('[SIGN-API] Falling back to innopay authority (user key rejected) for', signer);
 
           const innopayActiveKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
           if (!innopayActiveKey) {

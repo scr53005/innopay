@@ -6,6 +6,16 @@ import { getUsdPerFiatServerSide } from '@/services/currency';
 import { resolveSpokeCurrency } from '@/lib/spoke-currency';
 import prisma from '@/lib/prisma';
 import { ArchivedFarmVendorError, assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
+import { checkCustomerLeg, fetchHeTransaction } from '@/lib/verify-customer-leg';
+import { isActiveSpokeAccount } from '@/lib/spoke-recipients';
+
+function corsJson(body: unknown, status: number) {
+  const res = NextResponse.json(body, { status });
+  res.headers.set('Access-Control-Allow-Origin', '*');
+  res.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.headers.set('Access-Control-Allow-Headers', 'Content-Type');
+  return res;
+}
 
 const client = new Client([
   'https://api.hive.blog',
@@ -90,6 +100,60 @@ export async function POST(req: NextRequest) {
     // webhook-handler pattern so Flow 6 prices in the right currency instead of always EUR.
     const currencyConfig = await resolveSpokeCurrency({ account: recipient });
     console.warn(`[WALLET PAYMENT] Currency: ${currencyConfig.fiat}/${currencyConfig.iouToken}`);
+
+    // ========================================
+    // GUARD (security fix 2026-11-02): prove leg 1 on Hive-Engine, then claim it once.
+    // Nothing below (customer HBD pull, innopay → restaurant transfer) runs without both.
+    // ========================================
+    if (!(await isActiveSpokeAccount(recipient))) {
+      console.warn('[WALLET PAYMENT] Refused: recipient is not an active spoke account:', recipient);
+      return corsJson({ error: 'Unknown recipient' }, 403);
+    }
+    const orderAmount = parseFloat(amountEuro);
+    if (!Number.isFinite(orderAmount) || orderAmount <= 0 || !/^[0-9a-f]{40}$/.test(String(customerTxId))) {
+      return corsJson({ error: 'Invalid amount or transaction id' }, 400);
+    }
+    const [legTx, props] = await Promise.all([
+      fetchHeTransaction(customerTxId),
+      client.database.getDynamicGlobalProperties(),
+    ]);
+    if (!legTx) {
+      console.warn('[WALLET PAYMENT] Leg 1 not found on Hive-Engine:', customerTxId);
+      return corsJson({ error: 'Customer payment not found on Hive-Engine yet' }, 409);
+    }
+    const leg = checkCustomerLeg(legTx, {
+      customerAccount,
+      tokenSymbol: currencyConfig.iouToken,
+      amount: orderAmount,
+      distriateSuffix,
+      headHiveBlock: props.head_block_number,
+    });
+    if (!leg.ok) {
+      console.warn('[WALLET PAYMENT] Leg 1 refused:', customerTxId, leg.reason);
+      return corsJson({ error: 'Customer payment does not match this order', reason: leg.reason }, 403);
+    }
+    // Single use: a new row, or retry of a previously FAILED claim. A concurrent or repeated
+    // call with the same tx id hits the PK / status filter and is refused.
+    try {
+      await prisma.wallet_payment_claim.create({
+        data: {
+          customer_tx_id: customerTxId,
+          customer_account: customerAccount,
+          recipient,
+          token_symbol: currencyConfig.iouToken,
+          quantity: leg.quantity,
+        },
+      });
+    } catch {
+      const retried = await prisma.wallet_payment_claim.updateMany({
+        where: { customer_tx_id: customerTxId, status: 'failed' },
+        data: { status: 'claimed', recipient },
+      });
+      if (retried.count === 0) {
+        console.warn('[WALLET PAYMENT] Replay refused, tx already claimed:', customerTxId);
+        return corsJson({ error: 'This payment has already been used' }, 409);
+      }
+    }
 
     // ========================================
     // Resolve <fiat>/USD rate (use client-provided value or fetch server-side by fiat)
@@ -246,6 +310,7 @@ export async function POST(req: NextRequest) {
     // ========================================
     // STEP 2: Transfer from innopay to restaurant
     // ========================================
+    try {
     if (hbdBalance >= requiredHbd) {
       // Transfer HBD from innopay to restaurant using utility function
       console.warn('[WALLET PAYMENT] Sufficient HBD in innopay, transferring HBD to restaurant...');
@@ -258,6 +323,15 @@ export async function POST(req: NextRequest) {
       transferTxId = await transferEuroTokens(recipient, parseFloat(amountEuro), finalMemo, currencyConfig.iouToken);
       console.warn(`[WALLET PAYMENT] ✅ ${currencyConfig.iouToken} transfer to restaurant successful! TX:`, transferTxId);
     }
+    } catch (payError) {
+      await prisma.wallet_payment_claim.update({ where: { customer_tx_id: customerTxId }, data: { status: 'failed' } })
+        .catch((e) => console.error('[WALLET PAYMENT] Could not mark claim failed:', e));
+      throw payError;
+    }
+    await prisma.wallet_payment_claim.update({
+      where: { customer_tx_id: customerTxId },
+      data: { status: 'paid', restaurant_tx_id: transferTxId },
+    }).catch((e) => console.error('[WALLET PAYMENT] Could not mark claim paid:', e));
 
     const response = NextResponse.json({
       success: true,

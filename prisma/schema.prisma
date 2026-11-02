@@ -144,6 +144,23 @@ model handoff_challenge {
   @@map("handoff_challenge")
 }
 
+// One row per customer leg-1 transaction that /api/wallet-payment has honoured (security
+// fix 2026-11-02). The PK makes a customer tx id single-use: without it, one real payment
+// could be replayed to make innopay pay the restaurant again and again. status:
+// 'claimed' (verified, restaurant transfer in progress) → 'paid' | 'failed' (a failed
+// claim may be retried with the same tx id).
+model wallet_payment_claim {
+  customer_tx_id   String   @id @db.VarChar(40)
+  customer_account String   @db.VarChar(16)
+  recipient        String   @db.VarChar(16)
+  token_symbol     String   @db.VarChar(10)
+  quantity         Decimal  @db.Decimal(12, 3)
+  status           String   @default("claimed") @db.VarChar(10)
+  restaurant_tx_id String?  @db.Char(40)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+}
+
 model outstanding_debt {
   id              String    @id @default(cuid())
   created_at      DateTime  @default(now())

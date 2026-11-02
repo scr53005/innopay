@@ -4,7 +4,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { processOrderPayment } from '@/services/payment-processor';
 import prisma from '@/lib/prisma';
-import { PrivateKey } from '@hiveio/dhive';
+import { Client, PrivateKey } from '@hiveio/dhive';
+import { isOrderAuthFresh, verifyOrderAuth } from '@/lib/order-payment-auth';
+import { isActiveSpokeAccount } from '@/lib/spoke-recipients';
+
+const hiveClient = new Client(['https://api.hive.blog', 'https://api.deathwing.me', 'https://hive-api.arcange.eu']);
 
 /**
  * POST /api/execute-order-payment
@@ -30,7 +34,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { accountName, orderAmount, orderMemo, restaurantAccount, table, returnUrl } = body;
+    const { accountName, orderAmount, orderMemo, restaurantAccount, table, returnUrl, authTs, authNonce, authSignature } = body;
 
     // Validate required parameters
     if (!accountName || !orderAmount || !orderMemo || !restaurantAccount) {
@@ -38,6 +42,38 @@ export async function POST(req: NextRequest) {
         { error: 'Missing required parameters: accountName, orderAmount, orderMemo, restaurantAccount' },
         { status: 400 }
       );
+    }
+
+    // ========================================
+    // PROOF OF CONTROL (security fix 2026-11-02). The caller must have signed THIS order
+    // with the account's active key; the signature is checked against the chain. Without
+    // it anyone could name any wallet here, spend its EURO and receive its credential token.
+    // ========================================
+    const authFields = {
+      accountName: String(accountName),
+      restaurantAccount: String(restaurantAccount),
+      orderAmount: Number(orderAmount),
+      orderMemo: String(orderMemo),
+      ts: Number(authTs),
+      nonce: String(authNonce ?? ''),
+    };
+    if (!authSignature || !authFields.nonce || !Number.isFinite(authFields.orderAmount) || !isOrderAuthFresh(authFields.ts)) {
+      return NextResponse.json({ error: 'Missing or expired payment authorization' }, { status: 401 });
+    }
+    try {
+      // Single-use nonce (shared replay-guard table with the wallet hand-off, own namespace).
+      await prisma.handoff_challenge.create({ data: { account: authFields.accountName, nonce: `order:${authFields.nonce}` } });
+    } catch {
+      return NextResponse.json({ error: 'Payment authorization already used' }, { status: 401 });
+    }
+    if (!(await isActiveSpokeAccount(authFields.restaurantAccount))) {
+      return NextResponse.json({ error: 'Unknown restaurant account' }, { status: 403 });
+    }
+    const chainAccounts = await hiveClient.database.getAccounts([authFields.accountName]);
+    const activeKeyAuths = (chainAccounts[0]?.active?.key_auths ?? []).map((ka) => String(ka[0]));
+    if (!verifyOrderAuth(authFields, String(authSignature), activeKeyAuths)) {
+      console.warn(`[EXECUTE ORDER] Refused: signature does not match active key of ${authFields.accountName}`);
+      return NextResponse.json({ error: 'Payment authorization invalid' }, { status: 401 });
     }
 
     console.log(`[EXECUTE ORDER] Processing payment:`, {

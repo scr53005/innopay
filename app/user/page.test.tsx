@@ -2,7 +2,12 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PrivateKey } from '@hiveio/dhive';
 import UserPage from './page';
+import { verifyOrderAuth } from '@/lib/order-payment-auth';
+
+// A real (test-only) WIF: the page now signs Flow 5 Branch A orders with the active key.
+const testActiveKey = PrivateKey.fromLogin('alice', 'test-only-password', 'active');
 
 vi.mock('next/image', () => ({ default: ({ fill, priority, objectFit, ...props }: Record<string, unknown>) => <img {...props} /> }));
 vi.mock('react-dropzone', () => ({ useDropzone: () => ({ getRootProps: () => ({}), getInputProps: () => ({}), isDragActive: false }) }));
@@ -21,7 +26,7 @@ const response = (body: unknown) => Promise.resolve({ ok: true, json: async () =
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   localStorage.clear(); sessionStorage.clear(); window.history.replaceState({}, '', '/user');
-  localStorage.setItem('innopay_accountName', 'alice'); localStorage.setItem('innopay_activePrivate', 'test-active');
+  localStorage.setItem('innopay_accountName', 'alice'); localStorage.setItem('innopay_activePrivate', testActiveKey.toString());
   localStorage.setItem('innopay_memoPrivate', 'test-memo'); localStorage.setItem('innopay_lastBalance', '12.50');
   localStorage.setItem('innopay_email', 'alice@example.test'); localStorage.setItem('innopay_language', 'en');
   pendingBalance = false; restaurantBalance = 40; requests = [];
@@ -53,9 +58,15 @@ describe('existing restaurant checkout continuations', () => {
   };
   it('keeps the sufficient-balance payment payload and optimistic balance update', async () => {
     visitOrder(); await render(); await clickButton('OK');
-    expect(requests.find(request => request.url === '/api/execute-order-payment')?.body).toEqual({
+    const body = requests.find(request => request.url === '/api/execute-order-payment')?.body as Record<string, unknown>;
+    expect(body).toMatchObject({
       accountName: 'alice', orderAmount: 25, orderMemo: 'Item A', restaurantAccount: 'indies.cafe', table: '12', returnUrl: 'http://localhost:3001/menu?table=12',
     });
+    // The order is signed with the wallet's active key, verifiable by the server.
+    expect(verifyOrderAuth({
+      accountName: 'alice', restaurantAccount: 'indies.cafe', orderAmount: 25, orderMemo: 'Item A',
+      ts: body.authTs as number, nonce: body.authNonce as string,
+    }, body.authSignature as string, [testActiveKey.createPublic().toString()])).toBe(true);
     expect(localStorage.getItem('innopay_lastBalance')).toBe('15.00');
     expect(requests.some(request => request.url === '/api/checkout/account')).toBe(false);
   });

@@ -79,8 +79,8 @@ describe('wallet QR scanner', () => {
     expect(host.querySelector('[role="alert"]')).not.toBeNull(); expect(host.querySelector('a.hub-qr-primary')).toBeNull(); expect(fetch).not.toHaveBeenCalled(); expect(navigate).not.toHaveBeenCalled();
   });
   it('reviews a transfer before signing, disables close during submission and prevents repeated confirmation', async () => {
-    let finish!: (response: unknown) => void;
-    vi.mocked(fetch).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    let finish!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation(() => new Promise<Response>(resolve => { finish = resolve; }));
     await open(); await decode(transfer);
     expect(host.textContent).toContain('1.250 HBD'); expect(host.textContent).toContain('merchant'); expect(host.textContent).toContain('Lunch'); expect(fetch).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
@@ -89,7 +89,7 @@ describe('wallet QR scanner', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect((host.querySelector('[aria-label="Fermer le scanner"]') as HTMLButtonElement).disabled).toBe(true);
     expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body))).toEqual({ raw: transfer, accountName: 'alice', activePrivateKey: 'fixture-active-key' });
-    await act(async () => { finish({ ok: true, json: async () => ({ status: 'submitted', txId: 'fixture-transaction' }) }); });
+    await act(async () => { finish({ ok: true, json: async () => ({ status: 'submitted', txId: 'fixture-transaction' }) } as Response); });
     expect(host.textContent).toContain('fixture-transaction'); expect(host.textContent).toContain('encore en attente');
     expect(host.querySelector('button.hub-qr-primary')).toBeNull();
   });
