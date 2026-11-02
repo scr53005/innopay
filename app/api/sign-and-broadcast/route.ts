@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Client, PrivateKey, Transaction } from '@hiveio/dhive';
 import prisma from '@/lib/prisma';
 import { validateSignRequest, type PolicyContext } from '@/lib/sign-request-policy';
+import { fetchTokenBalance } from '@/lib/leg-receipt';
 
 const client = new Client([
   'https://api.hive.blog',
@@ -48,13 +49,20 @@ function corsJson(body: unknown, status: number) {
   return res;
 }
 
+// Warm-instance cache: the account set changes only when a vendor is hatched/archived.
+let policyCache: { ctx: PolicyContext; at: number } | null = null;
+const POLICY_CACHE_MS = 60_000;
+
 async function loadPolicyContext(): Promise<PolicyContext> {
+  if (policyCache && Date.now() - policyCache.at < POLICY_CACHE_MS) return policyCache.ctx;
   const spokeAccounts = await prisma.spoke_account.findMany({
     where: { active: true },
     select: { hive_account: true },
   });
   const accounts = new Set<string>(['innopay', ...spokeAccounts.map((a) => a.hive_account)]);
-  return { allowedRecipients: accounts, protectedSigners: accounts };
+  const ctx = { allowedRecipients: accounts, protectedSigners: accounts };
+  policyCache = { ctx, at: Date.now() };
+  return ctx;
 }
 
 /** Innopay's account-auth may only be exercised on behalf of a hub-created customer wallet. */
@@ -91,17 +99,27 @@ export async function POST(req: NextRequest) {
       return errorResponse;
     }
 
+    const t0 = Date.now();
+    // Everything independent runs in parallel (latency fix 2026-11-03): block reference,
+    // policy accounts, then customer check + balance pre-check.
+    const propsPromise = client.database.getDynamicGlobalProperties();
     const policy = validateSignRequest(operation, accountName, await loadPolicyContext());
     if (!policy.ok) {
       console.warn('[SIGN-API] Refused by signing policy:', policy.reason);
       return corsJson({ error: 'Operation not allowed', reason: policy.reason }, 403);
     }
     const signer = policy.payment.signer;
-    // Pre-check once: whether innopay authority may be used for this signer at all.
-    const innopayMaySign = await isKnownCustomer(signer);
-
-    // Get current blockchain block details for transaction validity
-    const dynamicGlobalProperties = await client.database.getDynamicGlobalProperties();
+    const [innopayMaySign, balance, dynamicGlobalProperties] = await Promise.all([
+      isKnownCustomer(signer), // whether innopay authority may be used for this signer at all
+      fetchTokenBalance(signer, policy.payment.symbol),
+      propsPromise,
+    ]);
+    // Hive accepts a custom_json even when the token balance is short; Hive-Engine then
+    // rejects it AFTER the fact. Refuse up front so no order is paid on an unfunded leg 1.
+    // null = Hive-Engine API unreachable → fail open (the post-payment audit still checks).
+    if (balance !== null && balance + 0.0005 < Number(policy.payment.quantity)) {
+      return corsJson({ error: 'Insufficient balance', balance }, 409);
+    }
     const headBlockNumber = dynamicGlobalProperties.head_block_number;
     const headBlockId = dynamicGlobalProperties.head_block_id;
     const refBlockNum = headBlockNumber & 0xffff;
@@ -187,6 +205,23 @@ export async function POST(req: NextRequest) {
         }
       }
     }
+
+    // Hub receipt for Flow 6 / call-waiter leg 1 (customer → innopay): lets /api/wallet-payment
+    // trust this tx id without waiting for Hive-Engine (lib/leg-receipt.ts). Must be written
+    // before we answer, since the spoke calls wallet-payment right after.
+    if (policy.payment.to === 'innopay') {
+      await prisma.wallet_payment_claim.create({
+        data: {
+          customer_tx_id: broadcastResult.id,
+          customer_account: signer,
+          token_symbol: policy.payment.symbol,
+          quantity: Number(policy.payment.quantity),
+          memo: policy.payment.memo,
+          status: 'broadcast',
+        },
+      });
+    }
+    console.warn(`[SIGN-API] done in ${Date.now() - t0} ms (${useInnopayAuthority || usedFallback ? 'innopay authority' : 'user key'})`);
 
     // Add CORS headers for cross-origin requests from indiesmenu
     const response = NextResponse.json({

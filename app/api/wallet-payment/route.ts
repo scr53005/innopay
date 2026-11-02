@@ -1,5 +1,5 @@
 // app/api/wallet-payment/route.ts
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { Client, PrivateKey } from '@hiveio/dhive';
 import { transferHbd, transferEuroTokens } from '@/services/hive';
 import { getUsdPerFiatServerSide } from '@/services/currency';
@@ -7,6 +7,7 @@ import { resolveSpokeCurrency } from '@/lib/spoke-currency';
 import prisma from '@/lib/prisma';
 import { ArchivedFarmVendorError, assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
 import { checkCustomerLeg, fetchHeTransaction } from '@/lib/verify-customer-leg';
+import { checkReceipt } from '@/lib/leg-receipt';
 import { isActiveSpokeAccount } from '@/lib/spoke-recipients';
 
 function corsJson(body: unknown, status: number) {
@@ -23,352 +24,186 @@ const client = new Client([
   'https://hive-api.arcange.eu'
 ]);
 
+const INNOPAY = 'innopay';
+
 /**
- * POST /api/wallet-payment
- * Handles payment from returning customer with EURO tokens
+ * POST /api/wallet-payment — Flow 6 leg 2 (and indies call-waiter): innopay pays the restaurant.
  *
- * Flow:
- * 1. Customer transfers EURO tokens to innopay (done client-side before calling this)
- * 2. This API receives payment details
- * 3. Transfers HBD (if available) or EURO tokens from innopay to restaurant
- * 4. Uses the SAME distriateSuffix for linking transactions
+ * Critical path (what the customer waits for), latency-tuned 2026-11-03 (was ~33 s):
+ *   1. in parallel: recipient is an active spoke account, archived-farm guard, spoke currency,
+ *      and the HUB RECEIPT of leg 1 (written by /api/sign-and-broadcast — no chain lookup);
+ *   2. claim the receipt atomically (single use);
+ *   3. in parallel: rate + innopay's HBD balance;
+ *   4. innopay → restaurant transfer (HBD, else IOU token) → respond.
+ * After the response (next/server `after`): mark the claim paid, pull the customer's HBD
+ * share via innopay authority (+ debt on shortfall), and audit on Hive-Engine that leg 1 really
+ * executed (status 'unbacked' + error log if not).
  *
- * Body:
- * - customerAccount: Customer's Hive account name
- * - customerTxId: Customer's EURO transfer transaction ID
- * - recipient: Restaurant's Hive account (e.g., 'indies.cafe')
- * - amountEuro: Order amount in EUR
- * - eurUsdRate: (optional) EUR/USD conversion rate. If omitted, fetched server-side from ECB/DB.
- *              Indiesmenu passes it (historical); newer spokes like croque-bedaine omit it.
- * - orderMemo: Full order details
- * - distriateSuffix: The distriate suffix for linking
+ * Body: customerAccount, customerTxId, recipient, amountEuro, eurUsdRate? (indies passes it;
+ * otherwise resolved server-side per fiat), orderMemo, distriateSuffix.
  */
 export async function POST(req: NextRequest) {
+  const t0 = Date.now();
+  const lap = (label: string) => console.warn(`[WALLET PAYMENT] ${label} +${Date.now() - t0} ms`);
   try {
     const { customerAccount, customerTxId, recipient, amountEuro, eurUsdRate, orderMemo, distriateSuffix } = await req.json();
 
-    console.log('[WALLET PAYMENT] Received payment request:', {
-      customerAccount,
-      customerTxId,
-      recipient,
-      amountEuro,
-      eurUsdRate,
-      orderMemo,
-      distriateSuffix
-    });
-
-    // Validate required fields (eurUsdRate is optional — resolved server-side if omitted)
     if (!customerAccount || !customerTxId || !recipient || !amountEuro || !orderMemo || !distriateSuffix) {
-      const errorResponse = NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      );
-      errorResponse.headers.set('Access-Control-Allow-Origin', '*');
-      errorResponse.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-      errorResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type');
-      return errorResponse;
+      return corsJson({ error: 'Missing required fields' }, 400);
+    }
+    const orderAmount = parseFloat(amountEuro);
+    if (!Number.isFinite(orderAmount) || orderAmount <= 0) {
+      return corsJson({ error: 'Invalid amount' }, 400);
     }
 
-    try {
-      await assertFarmOrderRecipientActive(recipient, orderMemo);
-    } catch (error) {
-      if (!(error instanceof ArchivedFarmVendorError)) throw error;
-      const blocked = NextResponse.json({ error: 'Farm vendor archived; payment disabled' }, { status: 410 });
-      blocked.headers.set('Access-Control-Allow-Origin', '*');
-      return blocked;
+    // ── 1. Guards, all in parallel ──
+    const [recipientOk, farmGuard, currencyConfig, receipt] = await Promise.all([
+      isActiveSpokeAccount(recipient),
+      assertFarmOrderRecipientActive(recipient, orderMemo).then(() => null, (e: unknown) => e),
+      resolveSpokeCurrency({ account: recipient }),
+      prisma.wallet_payment_claim.findUnique({ where: { customer_tx_id: String(customerTxId) } }),
+    ]);
+    if (farmGuard) {
+      if (farmGuard instanceof ArchivedFarmVendorError) return corsJson({ error: 'Farm vendor archived; payment disabled' }, 410);
+      throw farmGuard;
     }
-
-    // Get innopay account name from environment?
-    const innopayAccount = 'innopay'; // or process.env.HIVE_ACCOUNT to be more generic but I don't see the point;
-
-    /* if (!innopayAccount) {
-      console.error('[WALLET PAYMENT] Missing HIVE_ACCOUNT in environment');
-      return NextResponse.json(
-        { error: 'Server configuration error' },
-        { status: 500 }
-      );
-    } */
-
-    // Construct final memo: orderMemo + distriateSuffix
-    const finalMemo = `${orderMemo} ${distriateSuffix}`;
-
-    console.warn('[WALLET PAYMENT] Final memo:', finalMemo);
-
-    // Resolve the spoke's currency from the recipient restaurant account. EUR/EURO for the
-    // Luxembourg spokes, RON/LEI for Zenbar; unknown recipients default to EUR. Everything
-    // downstream (rate pair, IOU fallback token, debt columns) keys off this — mirrors the
-    // webhook-handler pattern so Flow 6 prices in the right currency instead of always EUR.
-    const currencyConfig = await resolveSpokeCurrency({ account: recipient });
-    console.warn(`[WALLET PAYMENT] Currency: ${currencyConfig.fiat}/${currencyConfig.iouToken}`);
-
-    // ========================================
-    // GUARD (security fix 2026-11-02): prove leg 1 on Hive-Engine, then claim it once.
-    // Nothing below (customer HBD pull, innopay → restaurant transfer) runs without both.
-    // ========================================
-    if (!(await isActiveSpokeAccount(recipient))) {
+    if (!recipientOk) {
       console.warn('[WALLET PAYMENT] Refused: recipient is not an active spoke account:', recipient);
       return corsJson({ error: 'Unknown recipient' }, 403);
     }
-    const orderAmount = parseFloat(amountEuro);
-    if (!Number.isFinite(orderAmount) || orderAmount <= 0 || !/^[0-9a-f]{40}$/.test(String(customerTxId))) {
-      return corsJson({ error: 'Invalid amount or transaction id' }, 400);
-    }
-    const [legTx, props] = await Promise.all([
-      fetchHeTransaction(customerTxId),
-      client.database.getDynamicGlobalProperties(),
-    ]);
-    if (!legTx) {
-      console.warn('[WALLET PAYMENT] Leg 1 not found on Hive-Engine:', customerTxId);
-      return corsJson({ error: 'Customer payment not found on Hive-Engine yet' }, 409);
-    }
-    const leg = checkCustomerLeg(legTx, {
-      customerAccount,
-      tokenSymbol: currencyConfig.iouToken,
-      amount: orderAmount,
-      distriateSuffix,
-      headHiveBlock: props.head_block_number,
-    });
+    const leg = checkReceipt(receipt, { customerAccount, tokenSymbol: currencyConfig.iouToken, amount: orderAmount, distriateSuffix });
     if (!leg.ok) {
       console.warn('[WALLET PAYMENT] Leg 1 refused:', customerTxId, leg.reason);
       return corsJson({ error: 'Customer payment does not match this order', reason: leg.reason }, 403);
     }
-    // Single use: a new row, or retry of a previously FAILED claim. A concurrent or repeated
-    // call with the same tx id hits the PK / status filter and is refused.
-    try {
-      await prisma.wallet_payment_claim.create({
-        data: {
-          customer_tx_id: customerTxId,
-          customer_account: customerAccount,
-          recipient,
-          token_symbol: currencyConfig.iouToken,
-          quantity: leg.quantity,
-        },
-      });
-    } catch {
-      const retried = await prisma.wallet_payment_claim.updateMany({
-        where: { customer_tx_id: customerTxId, status: 'failed' },
-        data: { status: 'claimed', recipient },
-      });
-      if (retried.count === 0) {
-        console.warn('[WALLET PAYMENT] Replay refused, tx already claimed:', customerTxId);
-        return corsJson({ error: 'This payment has already been used' }, 409);
-      }
+
+    // ── 2. Claim (single use): only one caller can move broadcast|failed → claimed ──
+    const claimed = await prisma.wallet_payment_claim.updateMany({
+      where: { customer_tx_id: customerTxId, customer_account: customerAccount, status: { in: ['broadcast', 'failed'] } },
+      data: { status: 'claimed', recipient },
+    });
+    if (claimed.count === 0) {
+      console.warn('[WALLET PAYMENT] Replay refused, tx already claimed:', customerTxId);
+      return corsJson({ error: 'This payment has already been used' }, 409);
     }
+    lap('guards+claim');
 
-    // ========================================
-    // Resolve <fiat>/USD rate (use client-provided value or fetch server-side by fiat)
-    // ========================================
-    let resolvedUsdPerFiat: number;
-    if (eurUsdRate) {
-      // Legacy: indiesmenu passes an explicit rate (always EUR). Newer spokes omit it.
-      resolvedUsdPerFiat = parseFloat(eurUsdRate);
-      console.warn(`[WALLET PAYMENT] Using client-provided ${currencyConfig.fiat}/USD rate: ${resolvedUsdPerFiat}`);
-    } else {
-      const rateData = await getUsdPerFiatServerSide(currencyConfig.fiat);
-      resolvedUsdPerFiat = rateData.conversion_rate;
-      console.warn(`[WALLET PAYMENT] Fetched ${currencyConfig.fiat}/USD rate server-side: ${resolvedUsdPerFiat} (date: ${rateData.date}, fresh: ${rateData.isFresh})`);
-    }
+    // ── 3. Rate + innopay HBD balance, in parallel ──
+    const [usdPerFiat, innopayAccounts] = await Promise.all([
+      eurUsdRate
+        ? Promise.resolve(parseFloat(eurUsdRate)) // legacy: indiesmenu passes the EUR rate
+        : getUsdPerFiatServerSide(currencyConfig.fiat).then((r) => r.conversion_rate),
+      client.database.getAccounts([INNOPAY]),
+    ]);
+    const requiredHbd = orderAmount * usdPerFiat;
+    const hbdBalance = parseFloat(String(innopayAccounts[0]?.hbd_balance ?? '0').split(' ')[0]);
+    lap('rate+balance');
 
-    // ========================================
-    // STEP 1: Transfer HBD from customer to innopay
-    // ========================================
-    let customerHbdTransferred = 0;
-    let customerHbdTxId: string | undefined;
-    let requiredHbd = 0;
-
-    try {
-      requiredHbd = parseFloat(amountEuro) * resolvedUsdPerFiat;
-      console.warn(`[WALLET PAYMENT] Customer should transfer ${requiredHbd} HBD to innopay`);
-    } catch (calcError: any) {
-      console.error('[WALLET PAYMENT] ❌ Error calculating required HBD:', calcError.message);
-      requiredHbd = 0; // Continue without HBD transfer
-    }
-
-    // Wrap ENTIRE customer HBD transfer logic to prevent blocking main flow
-    try {
-      try {
-        // Check customer's liquid HBD balance
-        const customerAccounts = await client.database.getAccounts([customerAccount]);
-        if (!customerAccounts || customerAccounts.length === 0) {
-          console.error(`[WALLET PAYMENT] ❌ Customer account ${customerAccount} not found`);
-          throw new Error(`Customer account ${customerAccount} not found`);
-        }
-
-        const customerHbdStr = typeof customerAccounts[0].hbd_balance === 'string'
-          ? customerAccounts[0].hbd_balance
-          : customerAccounts[0].hbd_balance.toString();
-        const customerLiquidHbd = parseFloat(customerHbdStr.split(' ')[0]);
-
-        console.warn(`[WALLET PAYMENT] Customer ${customerAccount} has ${customerLiquidHbd} liquid HBD, needs ${requiredHbd} HBD`);
-
-        if (customerLiquidHbd > 0) {
-          // Transfer whatever HBD is available (up to required amount)
-          const hbdToTransfer = Math.min(customerLiquidHbd, requiredHbd);
-          console.warn(`[WALLET PAYMENT] Attempting to transfer ${hbdToTransfer} HBD from ${customerAccount} to innopay`);
-
-          // Get innopay's active authority key to sign on behalf of customer
-          const innopayActiveKey = process.env.HIVE_ACTIVE_KEY_INNOPAY;
-          if (!innopayActiveKey) {
-            throw new Error('HIVE_ACTIVE_KEY_INNOPAY not configured');
-          }
-
-          const privateKey = PrivateKey.fromString(innopayActiveKey);
-
-          // Create transfer operation from customer to innopay
-          const transferOp: ['transfer', {
-            from: string;
-            to: string;
-            amount: string;
-            memo: string;
-          }] = [
-            'transfer',
-            {
-              from: customerAccount,
-              to: innopayAccount,
-              amount: `${hbdToTransfer.toFixed(3)} HBD`,
-              memo: `Order payment: ${amountEuro} ${currencyConfig.fiat}`
-            }
-          ];
-
-          // Broadcast transaction
-          const result = await client.broadcast.sendOperations([transferOp as any], privateKey);
-          customerHbdTxId = result.id;
-          customerHbdTransferred = hbdToTransfer;
-
-          console.warn(`[WALLET PAYMENT] ✅ Customer HBD transfer successful: ${customerHbdTxId}`);
-          console.warn(`[WALLET PAYMENT] Transferred ${customerHbdTransferred} HBD of ${requiredHbd} HBD required`);
-
-        } else {
-          console.warn(`[WALLET PAYMENT] ⚠️ Customer has 0 liquid HBD - cannot transfer any HBD`);
-        }
-
-      } catch (hbdError: any) {
-        console.error(`[WALLET PAYMENT] ❌ Failed to transfer HBD from customer to innopay:`, hbdError.message);
-        console.error(`[WALLET PAYMENT] This could be due to: insufficient balance, authority revoked, HBD in savings, or network error`);
-        // Continue with EURO-only payment, will record debt below
-      }
-
-      // Record outstanding debt if customer couldn't transfer full HBD amount
-      const hbdShortfall = requiredHbd - customerHbdTransferred;
-      if (hbdShortfall > 0.001) { // Allow tiny rounding errors
-        console.error(`[WALLET PAYMENT] ⚠️ Customer HBD shortfall: ${hbdShortfall} HBD`);
-        console.warn(`[WALLET PAYMENT] Recording outstanding debt from ${customerAccount} to innopay`);
-
-        try {
-          await prisma.outstanding_debt.create({
-            data: {
-              creditor: innopayAccount,
-              debtor: customerAccount,
-              amount_hbd: hbdShortfall,
-              original_amount: hbdShortfall,
-              amount_euro: Math.round((hbdShortfall / resolvedUsdPerFiat) * 100) / 100, // generic fiat amount
-              fiat_currency: currencyConfig.fiat,
-              token_symbol: currencyConfig.iouToken,
-              euro_tx_id: customerTxId,
-              eur_usd_rate: resolvedUsdPerFiat, // generic <fiat>/USD rate
-              reason: 'customer_order_payment',
-              notes: `Customer ${customerAccount} could not transfer ${hbdShortfall} HBD for order. Transferred ${customerHbdTransferred} HBD, shortfall ${hbdShortfall} HBD. EURO transfer: ${customerTxId}`
-            }
-          });
-          console.warn(`[WALLET PAYMENT] 📝 Recorded ${hbdShortfall} HBD debt from ${customerAccount} to innopay`);
-        } catch (debtError) {
-          console.error('[WALLET PAYMENT] ❌ WARNING: Failed to record customer debt:', debtError);
-          // Don't block payment, but log the issue
-        }
-      } else {
-        console.warn(`[WALLET PAYMENT] ✅ Customer transferred full HBD amount (${customerHbdTransferred} HBD)`);
-      }
-
-    } catch (customerFlowError: any) {
-      // CRITICAL: Catch ANY error in customer → innopay flow to ensure we continue to innopay → restaurant
-      console.error('[WALLET PAYMENT] ❌ CRITICAL ERROR in customer → innopay flow:', customerFlowError.message);
-      console.error('[WALLET PAYMENT] Stack:', customerFlowError.stack);
-      console.error('[WALLET PAYMENT] Continuing to innopay → restaurant transfer despite error...');
-      // customerHbdTransferred will remain 0, requiredHbd already set
-    }
-
-    console.warn('[WALLET PAYMENT] ========================================');
-    console.warn('[WALLET PAYMENT] Proceeding to STEP 2: innopay → restaurant');
-    console.warn('[WALLET PAYMENT] ========================================');
-
-    // Check innopay HBD balance
-    const accounts = await client.database.getAccounts([innopayAccount]);
-    if (!accounts || accounts.length === 0) {
-      throw new Error('Innopay account not found');
-    }
-
-    // Handle hbd_balance which can be either string or Asset type
-    const hbdBalanceStr = typeof accounts[0].hbd_balance === 'string'
-      ? accounts[0].hbd_balance
-      : accounts[0].hbd_balance.toString();
-    const hbdBalance = parseFloat(hbdBalanceStr.split(' ')[0]);
-
-    console.warn('[WALLET PAYMENT] Innopay HBD balance:', hbdBalance, 'Required:', requiredHbd);
-
+    // ── 4. innopay → restaurant ──
+    const finalMemo = `${orderMemo} ${distriateSuffix}`;
+    const paidInHbd = hbdBalance >= requiredHbd;
     let transferTxId: string;
-
-    // ========================================
-    // STEP 2: Transfer from innopay to restaurant
-    // ========================================
     try {
-    if (hbdBalance >= requiredHbd) {
-      // Transfer HBD from innopay to restaurant using utility function
-      console.warn('[WALLET PAYMENT] Sufficient HBD in innopay, transferring HBD to restaurant...');
-      transferTxId = await transferHbd(recipient, requiredHbd, finalMemo);
-      console.warn('[WALLET PAYMENT] ✅ HBD transfer to restaurant successful! TX:', transferTxId);
-
-    } else {
-      // Transfer IOU tokens (EURO / LEI) from innopay to restaurant using utility function
-      console.error(`[WALLET PAYMENT] ⚠️ Insufficient HBD in innopay, transferring ${currencyConfig.iouToken} tokens to restaurant...`);
-      transferTxId = await transferEuroTokens(recipient, parseFloat(amountEuro), finalMemo, currencyConfig.iouToken);
-      console.warn(`[WALLET PAYMENT] ✅ ${currencyConfig.iouToken} transfer to restaurant successful! TX:`, transferTxId);
-    }
+      transferTxId = paidInHbd
+        ? await transferHbd(recipient, requiredHbd, finalMemo)
+        : await transferEuroTokens(recipient, orderAmount, finalMemo, currencyConfig.iouToken);
     } catch (payError) {
       await prisma.wallet_payment_claim.update({ where: { customer_tx_id: customerTxId }, data: { status: 'failed' } })
         .catch((e) => console.error('[WALLET PAYMENT] Could not mark claim failed:', e));
       throw payError;
     }
-    await prisma.wallet_payment_claim.update({
-      where: { customer_tx_id: customerTxId },
-      data: { status: 'paid', restaurant_tx_id: transferTxId },
-    }).catch((e) => console.error('[WALLET PAYMENT] Could not mark claim paid:', e));
+    lap(`restaurant paid in ${paidInHbd ? 'HBD' : currencyConfig.iouToken}`);
 
-    const response = NextResponse.json({
+    // ── After the response: bookkeeping, customer HBD share, on-chain audit ──
+    after(async () => {
+      await prisma.wallet_payment_claim.update({
+        where: { customer_tx_id: customerTxId },
+        data: { status: 'paid', restaurant_tx_id: transferTxId },
+      }).catch((e) => console.error('[WALLET PAYMENT] Could not mark claim paid:', e));
+      await collectCustomerHbd(customerAccount, requiredHbd, orderAmount, usdPerFiat, currencyConfig, customerTxId);
+      await auditCustomerLeg(customerTxId, customerAccount, currencyConfig.iouToken, orderAmount, distriateSuffix);
+    });
+
+    return corsJson({
       success: true,
       customerEuroTxId: customerTxId,
-      customerHbdTxId: customerHbdTxId,
-      customerHbdTransferred: customerHbdTransferred,
-      customerHbdRequired: requiredHbd,
-      customerHbdShortfall: requiredHbd - customerHbdTransferred,
       innopayTxId: transferTxId,
       recipient,
       distriateSuffix,
-      innopayTransferType: hbdBalance >= requiredHbd ? 'HBD' : currencyConfig.iouToken
-    }, { status: 200 });
-
-    // Add CORS headers
-    response.headers.set('Access-Control-Allow-Origin', '*');
-    response.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    response.headers.set('Access-Control-Allow-Headers', 'Content-Type');
-
-    return response;
-
+      innopayTransferType: paidInHbd ? 'HBD' : currencyConfig.iouToken,
+    }, 200);
   } catch (error: any) {
     console.error('[WALLET PAYMENT] Error:', error);
-    const errorResponse = NextResponse.json(
-      {
-        error: 'Payment processing failed',
-        message: process.env.NODE_ENV === 'development' ? error.message : undefined
+    return corsJson({
+      error: 'Payment processing failed',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    }, 500);
+  }
+}
+
+/**
+ * The customer's HBD share of the order, pulled with innopay's authority (unchanged logic,
+ * moved off the critical path 2026-11-03). Shortfall → outstanding_debt customer → innopay.
+ */
+async function collectCustomerHbd(
+  customerAccount: string,
+  requiredHbd: number,
+  orderAmount: number,
+  usdPerFiat: number,
+  currencyConfig: { fiat: string; iouToken: string },
+  customerTxId: string,
+) {
+  let transferred = 0;
+  try {
+    const accounts = await client.database.getAccounts([customerAccount]);
+    if (!accounts.length) throw new Error(`Customer account ${customerAccount} not found`);
+    const liquid = parseFloat(String(accounts[0].hbd_balance).split(' ')[0]);
+    if (liquid > 0) {
+      const key = process.env.HIVE_ACTIVE_KEY_INNOPAY;
+      if (!key) throw new Error('HIVE_ACTIVE_KEY_INNOPAY not configured');
+      const amount = Math.min(liquid, requiredHbd);
+      await client.broadcast.sendOperations([[
+        'transfer',
+        { from: customerAccount, to: INNOPAY, amount: `${amount.toFixed(3)} HBD`, memo: `Order payment: ${orderAmount} ${currencyConfig.fiat}` },
+      ] as any], PrivateKey.fromString(key));
+      transferred = amount;
+    }
+  } catch (e: any) {
+    console.error('[WALLET PAYMENT] Customer HBD pull failed:', e?.message);
+  }
+  const shortfall = requiredHbd - transferred;
+  if (shortfall > 0.001) {
+    await prisma.outstanding_debt.create({
+      data: {
+        creditor: INNOPAY,
+        debtor: customerAccount,
+        amount_hbd: shortfall,
+        original_amount: shortfall,
+        amount_euro: Math.round((shortfall / usdPerFiat) * 100) / 100,
+        fiat_currency: currencyConfig.fiat,
+        token_symbol: currencyConfig.iouToken,
+        euro_tx_id: customerTxId,
+        eur_usd_rate: usdPerFiat,
+        reason: 'customer_order_payment',
+        notes: `Customer ${customerAccount} could not transfer ${shortfall} HBD for order. Transferred ${transferred} HBD. ${currencyConfig.iouToken} transfer: ${customerTxId}`,
       },
-      { status: 500 }
-    );
+    }).catch((e) => console.error('[WALLET PAYMENT] Failed to record customer debt:', e));
+  }
+}
 
-    // Add CORS headers to error response too
-    errorResponse.headers.set('Access-Control-Allow-Origin', '*');
-    errorResponse.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    errorResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type');
-
-    return errorResponse;
+/** Post-response proof that Hive-Engine executed leg 1 (the balance pre-check can race). */
+async function auditCustomerLeg(customerTxId: string, customerAccount: string, tokenSymbol: string, amount: number, distriateSuffix: string) {
+  try {
+    const [tx, props] = await Promise.all([fetchHeTransaction(customerTxId, 15, 3000), client.database.getDynamicGlobalProperties()]);
+    const check = tx
+      ? checkCustomerLeg(tx, { customerAccount, tokenSymbol, amount, distriateSuffix, headHiveBlock: props.head_block_number })
+      : { ok: false as const, reason: 'not found on Hive-Engine after ~45 s' };
+    if (!check.ok) {
+      console.error(`[WALLET PAYMENT] 🚨 UNBACKED leg 1 ${customerTxId} (${customerAccount}): ${check.reason} — restaurant was paid`);
+      await prisma.wallet_payment_claim.update({ where: { customer_tx_id: customerTxId }, data: { status: 'unbacked' } });
+    }
+  } catch (e) {
+    console.error('[WALLET PAYMENT] Leg 1 audit failed to run:', e);
   }
 }
 
@@ -376,9 +211,5 @@ export async function POST(req: NextRequest) {
  * OPTIONS handler for CORS preflight
  */
 export async function OPTIONS() {
-  const response = NextResponse.json({}, { status: 200 });
-  response.headers.set('Access-Control-Allow-Origin', '*');
-  response.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  response.headers.set('Access-Control-Allow-Headers', 'Content-Type');
-  return response;
+  return corsJson({}, 200);
 }
