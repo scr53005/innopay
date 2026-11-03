@@ -1,9 +1,10 @@
 // app/api/sign-and-broadcast/route.ts
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { Client, PrivateKey, Transaction } from '@hiveio/dhive';
 import prisma from '@/lib/prisma';
 import { validateSignRequest, type PolicyContext } from '@/lib/sign-request-policy';
 import { fetchTokenBalance } from '@/lib/leg-receipt';
+import { recordAuthoritySigning } from '@/lib/authority-signing';
 
 const client = new Client([
   'https://api.hive.blog',
@@ -222,6 +223,14 @@ export async function POST(req: NextRequest) {
       });
     }
     console.warn(`[SIGN-API] done in ${Date.now() - t0} ms (${useInnopayAuthority || usedFallback ? 'innopay authority' : 'user key'})`);
+    if (useInnopayAuthority || usedFallback) {
+      // Counted in Liman (Books → innopay-authority signings); written after the response.
+      const payment = policy.payment;
+      after(() => recordAuthoritySigning({
+        signer, mode: useInnopayAuthority ? 'explicit' : 'fallback', symbol: payment.symbol,
+        quantity: payment.quantity, toAccount: payment.to, txId: broadcastResult.id,
+      }));
+    }
 
     // Add CORS headers for cross-origin requests from indiesmenu
     const response = NextResponse.json({

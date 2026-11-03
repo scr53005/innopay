@@ -197,6 +197,23 @@ model rubis_reward {
   @@index([status])
 }
 
+/// One row per customer payment that /api/sign-and-broadcast signed with @innopay's own active
+/// key instead of the customer's. Liman counts these to decide when the no-key fallback can be
+/// retired. Written only after a successful broadcast, so tx_id is always the real Hive tx id.
+model innopay_authority_signing {
+  id         String   @id @default(cuid())
+  signer     String   @db.VarChar(16)
+  mode       String   @db.VarChar(10) // explicit (no local key sent) | fallback (customer key rejected)
+  symbol     String   @db.VarChar(10)
+  quantity   Decimal  @db.Decimal(18, 8)
+  to_account String   @db.VarChar(16)
+  tx_id      String   @db.Char(40)
+  created_at DateTime @default(now())
+
+  @@index([created_at])
+  @@index([signer])
+}
+
 model outstanding_debt {
   id              String    @id @default(cuid())
   created_at      DateTime  @default(now())
