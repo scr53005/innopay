@@ -100,6 +100,7 @@ export async function POST(req: NextRequest) {
       const credentialSession = await prisma.accountCredentialSession.findFirst({
         where: {
           accountName: walletUser.accountName,
+          postingPrivate: { not: null }, // full-set sessions only (Branch A ones carry active+memo)
           expiresAt: {
             gt: new Date(), // Not expired
           }
@@ -109,7 +110,9 @@ export async function POST(req: NextRequest) {
         }
       });
 
-      if (credentialSession) {
+      // The query already filters on postingPrivate not null; re-checking it here is what lets
+      // TypeScript treat it as a string (Prisma's where clause doesn't narrow the result type).
+      if (credentialSession && credentialSession.postingPrivate) {
         console.log(`[ACCOUNT RETRIEVE] Found credential session for: ${walletUser.accountName}`);
         response.keys = {
           active: credentialSession.activePrivate,

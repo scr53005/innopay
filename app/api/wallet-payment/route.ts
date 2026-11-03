@@ -10,6 +10,8 @@ import { checkCustomerLeg, fetchHeTransaction } from '@/lib/verify-customer-leg'
 import { checkReceipt } from '@/lib/leg-receipt';
 import { activeSpokeIdForAccount } from '@/lib/spoke-recipients';
 import { notifyFarmOrderPaid } from '@/lib/notify-farm-paid';
+import { rewardOrder } from '@/lib/rubis-distribute';
+import { rubisOrderKey } from '@/lib/rubis';
 
 function corsJson(body: unknown, status: number) {
   const res = NextResponse.json(body, { status });
@@ -125,6 +127,10 @@ export async function POST(req: NextRequest) {
         where: { customer_tx_id: customerTxId },
         data: { status: 'paid', restaurant_tx_id: transferTxId },
       }).catch((e) => console.error('[WALLET PAYMENT] Could not mark claim paid:', e));
+      await rewardOrder({
+        orderKey: rubisOrderKey(recipient, finalMemo, `wallet:${customerTxId}`),
+        customerAccount, recipient, orderTotal: orderAmount, memo: finalMemo,
+      });
       await collectCustomerHbd(customerAccount, requiredHbd, orderAmount, usdPerFiat, currencyConfig, customerTxId);
       await auditCustomerLeg(customerTxId, customerAccount, currencyConfig.iouToken, orderAmount, distriateSuffix);
     });

@@ -1,12 +1,14 @@
 // app/api/execute-order-payment/route.ts
 // Flow 5 Branch A: Execute order payment for existing account with sufficient balance
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { processOrderPayment } from '@/services/payment-processor';
 import prisma from '@/lib/prisma';
 import { Client, PrivateKey } from '@hiveio/dhive';
 import { isOrderAuthFresh, verifyOrderAuth } from '@/lib/order-payment-auth';
 import { isActiveSpokeAccount } from '@/lib/spoke-recipients';
+import { rewardOrder } from '@/lib/rubis-distribute';
+import { rubisOrderKey } from '@/lib/rubis';
 
 const hiveClient = new Client(['https://api.hive.blog', 'https://api.deathwing.me', 'https://hive-api.arcange.eu']);
 
@@ -122,32 +124,32 @@ export async function POST(req: NextRequest) {
       eurUsdRate: paymentResult.eurUsdRate
     });
 
+    // RUBIS for the customer, after the response (RUBIS-PLAN.md) — never delays the order.
+    after(() => rewardOrder({
+      orderKey: rubisOrderKey(restaurantAccount, orderMemo, `direct:${paymentResult.customerEuroTxId ?? authFields.nonce}`),
+      customerAccount: accountName, recipient: restaurantAccount, orderTotal: Number(orderAmount), memo: orderMemo,
+    }));
+
     // STEP 4: Calculate new balance (current balance - order amount)
     // Note: We don't have exact balance here, client will update after transfer
     // For credential session, we'll use 0 as placeholder since balance is unknown
     const newBalance = 0; // Client will fetch real balance after redirect
 
-    // STEP 4.5: Derive keys from masterPassword for credential injection
+    // STEP 4.5: Derive ONLY active + memo for the spoke hand-over (spokes store exactly these
+    // two — SPOKE-KEY-SECURITY.md §4). Security fix 2026-11-03: the master password, owner and
+    // posting keys are no longer put in this session; the caller only proved the ACTIVE key,
+    // so returning the owner-deriving secret would escalate a stolen active key to takeover.
     const masterPassword = walletUser.masterPassword || '';
-    const ownerPrivate = PrivateKey.fromLogin(accountName, masterPassword, 'owner');
     const activePrivate = PrivateKey.fromLogin(accountName, masterPassword, 'active');
-    const postingPrivate = PrivateKey.fromLogin(accountName, masterPassword, 'posting');
     const memoPrivate = PrivateKey.fromLogin(accountName, masterPassword, 'memo');
-
-    console.log(`[EXECUTE ORDER] Derived keys for credential injection`);
 
     // STEP 5: Create credential session for return to indiesmenu
     const credentialSession = await prisma.accountCredentialSession.create({
       data: {
         accountName,
         stripeSessionId: `direct_payment_${Date.now()}`, // No Stripe session for direct payment
-        masterPassword,
-        ownerPrivate: ownerPrivate.toString(),
-        ownerPublic: ownerPrivate.createPublic().toString(),
         activePrivate: activePrivate.toString(),
         activePublic: activePrivate.createPublic().toString(),
-        postingPrivate: postingPrivate.toString(),
-        postingPublic: postingPrivate.createPublic().toString(),
         memoPrivate: memoPrivate.toString(),
         memoPublic: memoPrivate.createPublic().toString(),
         euroBalance: newBalance,

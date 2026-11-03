@@ -41,7 +41,9 @@ export async function getAccountCredentials(accountName: string): Promise<Creden
   try {
     // STEP 1: Try accountCredentialSession first (most complete)
     const credentialSession = await prisma.accountCredentialSession.findFirst({
-      where: { accountName },
+      // Skip active+memo-only sessions (Flow 5 Branch A, 2026-11-03): this legacy path
+      // expects the full set; it falls back to the walletuser derivation below.
+      where: { accountName, masterPassword: { not: null } },
       orderBy: { createdAt: 'desc' }, // Get most recent, even if expired
     });
 

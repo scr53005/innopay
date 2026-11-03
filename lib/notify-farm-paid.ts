@@ -1,4 +1,5 @@
 import { farmRequest } from './hatch-vendors';
+import { activeSpokeIdForAccount } from './spoke-recipients';
 
 // Fast confirmation for Farm (innohatch) orders, 2026-11-03. After the hub has paid a vendor,
 // the customer's screen used to wait for the CHAIN path: Hive block → HAF → merchant-hub poll
@@ -11,7 +12,7 @@ export async function notifyFarmOrderPaid(p: {
   memo: string; // the memo innopay sent to the vendor (contains the order's -inno- suffix)
   amountEur: number;
   innopayTxId: string;
-  customerAccount: string;
+  customerAccount?: string; // absent for guest checkout (Flow 3)
 }): Promise<void> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 3000);
@@ -26,5 +27,24 @@ export async function notifyFarmOrderPaid(p: {
     console.warn('[FARM NOTIFY] innohatch unreachable, chain path will confirm:', e instanceof Error ? e.message : e);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * For callers that don't already know the recipient's spoke (the Stripe webhook: Flow 3 guest,
+ * Flow 5, Flow 7): notify innohatch only when the recipient is a Farm vendor. Never throws.
+ */
+export async function notifyIfFarmVendor(p: {
+  recipient: string;
+  memo: string;
+  amountEur: number;
+  innopayTxId: string;
+  customerAccount?: string; // absent for guest checkout
+}): Promise<void> {
+  try {
+    if ((await activeSpokeIdForAccount(p.recipient)) !== 'innohatch') return;
+    await notifyFarmOrderPaid(p);
+  } catch (e) {
+    console.warn('[FARM NOTIFY] skipped:', e instanceof Error ? e.message : e);
   }
 }

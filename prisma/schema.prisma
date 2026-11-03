@@ -109,17 +109,22 @@ model currencyConversion {
   @@map("currency_conversion")
 }
 
+// masterPassword / owner* / posting* are optional (2026-11-03): sessions for an EXISTING wallet
+// (Flow 5 Branch A, /api/execute-order-payment) carry only active + memo — handing the
+// owner-deriving master password to anyone who merely proves the active key would turn a
+// stolen active key into an account takeover. New-account sessions still carry the full set
+// (one-time credential display).
 model accountCredentialSession {
   id              String   @id @default(cuid())
   accountName     String
   stripeSessionId String   @unique
-  masterPassword  String   @db.VarChar(64)
-  ownerPrivate    String   @db.Text
-  ownerPublic     String   @db.Text
+  masterPassword  String?  @db.VarChar(64)
+  ownerPrivate    String?  @db.Text
+  ownerPublic     String?  @db.Text
   activePrivate   String   @db.Text
   activePublic    String   @db.Text
-  postingPrivate  String   @db.Text
-  postingPublic   String   @db.Text
+  postingPrivate  String?  @db.Text
+  postingPublic   String?  @db.Text
   memoPrivate     String   @db.Text
   memoPublic      String   @db.Text
   euroBalance     Decimal  @db.Decimal(10, 2) @default(0.00)
@@ -164,6 +169,32 @@ model wallet_payment_claim {
   restaurant_tx_id String?  @db.Char(40)
   created_at       DateTime @default(now())
   updated_at       DateTime @updatedAt
+}
+
+// One row per order rewarded with RUBIS (RUBIS-PLAN.md §2). order_key is unique per order and
+// per payment path ('wallet:<customer leg-1 tx>', 'stripe:<session id>', 'direct:<customer
+// EURO tx>'), so a retried Stripe webhook or a repeated call can never pay twice: the row is
+// written BEFORE the broadcast. status: pending → sent | failed (failed = retry candidate).
+model rubis_reward {
+  id               String   @id @default(cuid())
+  order_key        String   @unique @db.VarChar(80)
+  customer_account String   @db.VarChar(16)
+  spoke_id         String   @db.VarChar(50)
+  recipient        String   @db.VarChar(16)
+  order_total      Decimal  @db.Decimal(10, 2)
+  tip              Decimal  @default(0) @db.Decimal(10, 2)
+  rubis_spent      Decimal  @default(0) @db.Decimal(12, 2) // RUBIS used to pay part of the order: earns nothing
+  rate             Decimal  @db.Decimal(6, 4)
+  tip_multiplier   Decimal  @db.Decimal(4, 2)
+  rubis_amount     Decimal  @db.Decimal(12, 2)
+  status           String   @default("pending") @db.VarChar(10)
+  rubis_tx_id      String?  @db.Char(40)
+  error            String?  @db.Text
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@index([customer_account])
+  @@index([status])
 }
 
 model outstanding_debt {
@@ -279,6 +310,16 @@ model spoke {
   // consume cadence/push policy, TABLE-vs-Q: memo semantics, till UI.
   service_model String   @default("table_remote") @db.VarChar(30)
   service_flags String[] @default([])
+
+  // RUBIS "contract" (RUBIS-PLAN.md, 2026-11-03): RUBIS the HUB sends the paying customer per
+  // fiat unit spent at this spoke. null = this spoke does not distribute (balance still shown).
+  // Tips earn rate × rubis_tip_multiplier (tip capped at 50 % of the subtotal, lib/rubis.ts).
+  rubis_rate           Decimal? @db.Decimal(6, 4)
+  rubis_tip_multiplier Decimal  @default(2) @db.Decimal(4, 2)
+  // Max share of a bill's FOOD subtotal the spoke accepts in RUBIS (tips are never payable in
+  // RUBIS). RUBIS are spent automatically first, up to this cap (lib/rubis-redemption.ts).
+  // Default 25 %; adjustable from the admin back-end. 0 = RUBIS not accepted.
+  rubis_max_redeem_fraction Decimal @default(0.25) @db.Decimal(4, 3)
 
   // Status
   active  Boolean @default(true)

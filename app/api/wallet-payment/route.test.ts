@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const m = vi.hoisted(() => ({
   findUnique: vi.fn(), updateMany: vi.fn(), update: vi.fn(), debtCreate: vi.fn(),
   transferHbd: vi.fn(), transferEuro: vi.fn(), getAccounts: vi.fn(), after: vi.fn(),
-  spokeOk: vi.fn(), notify: vi.fn(),
+  spokeOk: vi.fn(), notify: vi.fn(), reward: vi.fn(),
 }));
 vi.mock('next/server', async (orig) => ({ ...(await orig<typeof import('next/server')>()), after: m.after }));
 vi.mock('@/lib/prisma', () => ({ default: {
@@ -19,6 +19,7 @@ vi.mock('@/lib/spoke-currency', () => ({ resolveSpokeCurrency: vi.fn(async () =>
 vi.mock('@/lib/farm-payment-guard', () => ({ ArchivedFarmVendorError: class extends Error {}, assertFarmOrderRecipientActive: vi.fn(async () => {}) }));
 vi.mock('@/lib/spoke-recipients', () => ({ activeSpokeIdForAccount: m.spokeOk }));
 vi.mock('@/lib/notify-farm-paid', () => ({ notifyFarmOrderPaid: m.notify }));
+vi.mock('@/lib/rubis-distribute', () => ({ rewardOrder: m.reward }));
 // The post-response Hive-Engine audit must not hit the network in tests.
 vi.mock('@/lib/verify-customer-leg', () => ({ fetchHeTransaction: vi.fn(async () => null), checkCustomerLeg: vi.fn() }));
 vi.mock('@hiveio/dhive', () => ({
@@ -92,6 +93,15 @@ describe('POST /api/wallet-payment', () => {
     expect((await call(body())).status).toBe(200);
     await m.after.mock.calls[0][0]();
     expect(m.notify).not.toHaveBeenCalled();
+  });
+  it('rewards the customer with RUBIS after the response, keyed on the order', async () => {
+    expect((await call(body())).status).toBe(200);
+    expect(m.reward).not.toHaveBeenCalled(); // not on the critical path
+    await m.after.mock.calls[0][0]();
+    expect(m.reward).toHaveBeenCalledWith({
+      orderKey: 'order:millewee:kcs-inno-ab12-cd34', customerAccount: 'alice', recipient: 'millewee',
+      orderTotal: 3.9, memo: 'Bud TABLE 4 kcs-inno-ab12-cd34',
+    });
   });
   it('falls back to the IOU token when innopay is short of HBD', async () => {
     m.getAccounts.mockResolvedValue([{ hbd_balance: '0.500 HBD' }]);

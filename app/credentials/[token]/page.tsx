@@ -22,6 +22,14 @@ export default async function CredentialPage({ params }: PageProps) {
     return notFound();
   }
 
+  // Only full-set sessions (account creation / credential email) are viewable here. Active+memo
+  // sessions for an existing wallet (Flow 5 Branch A, 2026-11-03) are a spoke hand-over, not a
+  // credential display — and their token travels in a redirect URL.
+  if (!session.masterPassword || !session.ownerPrivate || !session.ownerPublic ||
+      !session.postingPrivate || !session.postingPublic) {
+    return notFound();
+  }
+
   // 2. Check if already used
   if (session.retrieved) {
     return <ExpiredOrUsedMessage reason="already_used" />;

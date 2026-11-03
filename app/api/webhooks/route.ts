@@ -1,5 +1,5 @@
 // app/api/webhooks/route.ts - Updated to support systematic flow management
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import Stripe from 'stripe';
 
 // Import flow management system
@@ -50,6 +50,9 @@ import { getCurrencyConfig, convertFiatToHbd, type CurrencyConfig } from '@/lib/
 // Import Prisma
 import prisma from '@/lib/prisma';
 import { assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
+import { notifyIfFarmVendor } from '@/lib/notify-farm-paid';
+import { rewardOrder } from '@/lib/rubis-distribute';
+import { rubisOrderKey } from '@/lib/rubis';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -299,6 +302,8 @@ async function handleGuestCheckout(session: Stripe.Checkout.Session) {
     console.log(`[GUEST] Transferring ${hbdAmountNum} HBD to ${recipient}`);
     const hiveTxId = await transferHbd(recipient, hbdAmountNum, memo);
     console.log(`[GUEST] HBD transfer successful: ${hiveTxId}`);
+    // Farm orders confirm at once on the customer's screen (no chain round-trip).
+    await notifyIfFarmVendor({ recipient, memo, amountEur: amountEuro, innopayTxId: hiveTxId });
 
     // Try to update DB, but don't fail if it errors
     try {
@@ -325,6 +330,7 @@ async function handleGuestCheckout(session: Stripe.Checkout.Session) {
         // Use the original EUR amount from Stripe (EURO tokens represent EUR 1:1)
         const euroTxId = await transferEuroTokens(recipient, amountEuro, memo, currencyConfig.iouToken);
         console.log(`[GUEST] ${currencyConfig.iouToken} tokens transferred successfully: ${euroTxId}`);
+        await notifyIfFarmVendor({ recipient, memo, amountEur: amountEuro, innopayTxId: euroTxId });
 
         // Try to record debt - innopay owes HBD to restaurant (non-blocking)
         try {
@@ -556,6 +562,15 @@ async function handleFlow7UnifiedApproach(
   } catch (orderError: any) {
     console.error(`[FLOW 7] ❌ Restaurant payment to ${restaurantAccount} failed:`, orderError);
     throw new Error(`Flow 7 order payment failed: ${orderError.message}`);
+  }
+  const flow7VendorTxId = restaurantHbdTxId ?? restaurantEuroTxId;
+  if (flow7VendorTxId) {
+    await notifyIfFarmVendor({ recipient: restaurantAccount, memo: orderMemo, amountEur: orderCost, innopayTxId: flow7VendorTxId, customerAccount: accountName });
+    // RUBIS for the customer (RUBIS-PLAN.md); keyed on the order, so a retried webhook pays once.
+    after(() => rewardOrder({
+      orderKey: rubisOrderKey(restaurantAccount, orderMemo, `stripe:${session.id}`),
+      customerAccount: accountName, recipient: restaurantAccount, orderTotal: orderCost, memo: orderMemo,
+    }));
   }
 
   console.warn(`[FLOW 7] Payment complete: HBD=${restaurantHbdTxId || 'none'}, EURO=${restaurantEuroTxId || 'none'} → ${restaurantAccount}`);
@@ -973,6 +988,10 @@ async function processRestaurantPayment(
     console.error(`[${timestamp}] [RESTAURANT PAYMENT] ❌ Restaurant payment failed:`, transferError);
     // Don't throw - let calling code decide how to handle
   }
+  const vendorTxId = restaurantHbdTxId ?? restaurantEuroTxId;
+  if (vendorTxId && orderMemo) {
+    await notifyIfFarmVendor({ recipient: restaurantAccount, memo: orderMemo, amountEur: orderCost, innopayTxId: vendorTxId });
+  }
 
   return { hbdTxId: restaurantHbdTxId, euroTxId: restaurantEuroTxId };
 }
@@ -1272,6 +1291,14 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
 
   // Restaurant payment was already processed early (see line ~900)
   // This ensures paid orders are broadcasted even if account creation fails
+
+  // RUBIS for the brand-new wallet's first order — only now that the account exists.
+  if (restaurantHbdTxId || restaurantEuroTxId) {
+    after(() => rewardOrder({
+      orderKey: rubisOrderKey(targetRestaurant, orderMemo, `stripe:${session.id}`),
+      customerAccount: accountName, recipient: targetRestaurant, orderTotal: orderCost, memo: orderMemo,
+    }));
+  }
 
   return NextResponse.json({
     message: 'Account created successfully',
