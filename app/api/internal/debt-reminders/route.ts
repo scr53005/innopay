@@ -99,6 +99,27 @@ function buildEmail(params: {
   return { subject, text, html };
 }
 
+// Innopay's own treasury has no customer wallet or linked email: when it is the debtor, the
+// reminder is an operator notice and goes to the Innopay team.
+const TREASURY_ACCOUNTS = new Set(['innopay']);
+// Not exported: a Next.js route file may only export its HTTP handlers and route config.
+const DEFAULT_TREASURY_REMINDER_EMAIL = 'contact@innopay.lu';
+
+async function reminderRecipient(normalizedAccount: string, rawAccount: string): Promise<string | undefined> {
+  if (TREASURY_ACCOUNTS.has(normalizedAccount)) {
+    return process.env.INNOPAY_TREASURY_EMAIL || DEFAULT_TREASURY_REMINDER_EMAIL;
+  }
+  const accountCandidates = [...new Set([rawAccount.trim(), normalizedAccount, '@' + normalizedAccount])];
+  const wallet = await prisma.walletuser.findFirst({
+    where: {
+      accountName: { in: accountCandidates },
+      userId: { not: null },
+    },
+    include: { innouser: true },
+  });
+  return wallet?.innouser?.email ?? undefined;
+}
+
 export async function POST(req: NextRequest) {
   if (!checkAuth(req)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -122,17 +143,7 @@ export async function POST(req: NextRequest) {
   }
 
   const normalizedAccount = normalizeAccountName(body.account_name);
-  const accountCandidates = [...new Set([body.account_name.trim(), normalizedAccount, '@' + normalizedAccount])];
-
-  const wallet = await prisma.walletuser.findFirst({
-    where: {
-      accountName: { in: accountCandidates },
-      userId: { not: null },
-    },
-    include: { innouser: true },
-  });
-
-  const email = wallet?.innouser?.email;
+  const email = await reminderRecipient(normalizedAccount, body.account_name);
   if (!email) {
     console.warn('[DEBT-REMINDER] No linked email for @' + normalizedAccount);
     return NextResponse.json({ sent: false, reason: 'no_linked_email', account_name: normalizedAccount });
