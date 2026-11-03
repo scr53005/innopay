@@ -8,7 +8,8 @@ import prisma from '@/lib/prisma';
 import { ArchivedFarmVendorError, assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
 import { checkCustomerLeg, fetchHeTransaction } from '@/lib/verify-customer-leg';
 import { checkReceipt } from '@/lib/leg-receipt';
-import { isActiveSpokeAccount } from '@/lib/spoke-recipients';
+import { activeSpokeIdForAccount } from '@/lib/spoke-recipients';
+import { notifyFarmOrderPaid } from '@/lib/notify-farm-paid';
 
 function corsJson(body: unknown, status: number) {
   const res = NextResponse.json(body, { status });
@@ -57,8 +58,8 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 1. Guards, all in parallel ──
-    const [recipientOk, farmGuard, currencyConfig, receipt] = await Promise.all([
-      isActiveSpokeAccount(recipient),
+    const [recipientSpoke, farmGuard, currencyConfig, receipt] = await Promise.all([
+      activeSpokeIdForAccount(recipient),
       assertFarmOrderRecipientActive(recipient, orderMemo).then(() => null, (e: unknown) => e),
       resolveSpokeCurrency({ account: recipient }),
       prisma.wallet_payment_claim.findUnique({ where: { customer_tx_id: String(customerTxId) } }),
@@ -67,7 +68,7 @@ export async function POST(req: NextRequest) {
       if (farmGuard instanceof ArchivedFarmVendorError) return corsJson({ error: 'Farm vendor archived; payment disabled' }, 410);
       throw farmGuard;
     }
-    if (!recipientOk) {
+    if (!recipientSpoke) {
       console.warn('[WALLET PAYMENT] Refused: recipient is not an active spoke account:', recipient);
       return corsJson({ error: 'Unknown recipient' }, 403);
     }
@@ -116,6 +117,10 @@ export async function POST(req: NextRequest) {
 
     // ── After the response: bookkeeping, customer HBD share, on-chain audit ──
     after(async () => {
+      // First: Farm orders confirm on the customer's screen now, not after the chain round-trip.
+      if (recipientSpoke === 'innohatch') {
+        await notifyFarmOrderPaid({ recipient, memo: finalMemo, amountEur: orderAmount, innopayTxId: transferTxId, customerAccount });
+      }
       await prisma.wallet_payment_claim.update({
         where: { customer_tx_id: customerTxId },
         data: { status: 'paid', restaurant_tx_id: transferTxId },
