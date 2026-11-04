@@ -34,6 +34,4 @@
   <!-- outline -->
   <path d="M16 8 H48 L60 22 L32 60 L4 22 Z" fill="none" stroke="#5c0a12" stroke-width="1.8" stroke-linejoin="round"/>
   </g>
-  <!-- glint -->
-  <path d="M52 3 l1.3 3.6 3.6 1.3 -3.6 1.3 -1.3 3.6 -1.3 -3.6 -3.6 -1.3 3.6 -1.3 z" fill="#fff"/>
 </svg>
