@@ -50,3 +50,14 @@ describe('checkCustomerLeg', () => {
     expect(checkCustomerLeg(tx({ logs: 'not json' }), expected).ok).toBe(false);
   });
 });
+
+describe('heExecution', () => {
+  it('reads executed, rejected and unknown transactions', async () => {
+    const { heExecution } = await import('./verify-customer-leg');
+    expect(heExecution(null)).toEqual({ status: 'unknown' });
+    expect(heExecution({ logs: 'not json' })).toEqual({ status: 'unknown' });
+    expect(heExecution({ logs: JSON.stringify({ events: [] }) })).toEqual({ status: 'executed' });
+    expect(heExecution({ logs: JSON.stringify({ errors: ['symbol precision mismatch'] }) }))
+      .toEqual({ status: 'rejected', reason: 'rejected by Hive-Engine: symbol precision mismatch' });
+  });
+});

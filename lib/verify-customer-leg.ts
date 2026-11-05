@@ -79,6 +79,26 @@ export function checkCustomerLeg(tx: HeTransactionInfo, expected: ExpectedCustom
   return { ok: true, quantity };
 }
 
+export type HeExecution =
+  | { status: 'executed' }
+  | { status: 'rejected'; reason: string }
+  | { status: 'unknown' }; // not processed (yet), or logs unreadable
+
+/**
+ * Did Hive-Engine actually execute a transaction we broadcast? A custom_json accepted by Hive
+ * can still be rejected by the sidechain: found 2026-11-05 when RUBIS had precision 0 and every
+ * fractional reward (e.g. 0.61) was rejected while the hub logged "Successfully broadcasted".
+ */
+export function heExecution(tx: HeTransactionInfo | null): HeExecution {
+  if (!tx) return { status: 'unknown' };
+  const logs = parseJson(tx.logs) as { errors?: unknown[] } | undefined;
+  if (!logs) return { status: 'unknown' };
+  if (Array.isArray(logs.errors) && logs.errors.length > 0) {
+    return { status: 'rejected', reason: `rejected by Hive-Engine: ${logs.errors.map(String).join('; ')}` };
+  }
+  return { status: 'executed' };
+}
+
 const HE_BLOCKCHAIN_ENDPOINTS = [
   'https://api.hive-engine.com/rpc/blockchain',
   'https://engine.rishipanthee.com/blockchain',

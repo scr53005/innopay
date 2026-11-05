@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const m = vi.hoisted(() => ({ findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), transfer: vi.fn() }));
+const m = vi.hoisted(() => ({ findFirst: vi.fn(), create: vi.fn(), update: vi.fn(), transfer: vi.fn(), heTx: vi.fn() }));
 vi.mock('./prisma', () => ({ default: {
   spoke_account: { findFirst: m.findFirst },
   rubis_reward: { create: m.create, update: m.update },
 } }));
 vi.mock('../services/hive', () => ({ transferEuroTokens: m.transfer }));
+// Real heExecution, fake network lookup.
+vi.mock('./verify-customer-leg', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./verify-customer-leg')>()),
+  fetchHeTransaction: m.heTx,
+}));
+const executed = { logs: JSON.stringify({ events: [{ contract: 'tokens', event: 'transfer' }] }) };
 
 import { rewardOrder } from './rubis-distribute';
 
@@ -21,6 +27,7 @@ beforeEach(() => {
   m.create.mockResolvedValue({});
   m.update.mockResolvedValue({});
   m.transfer.mockResolvedValue('c'.repeat(40));
+  m.heTx.mockResolvedValue(executed);
 });
 
 describe('rewardOrder', () => {
@@ -54,5 +61,19 @@ describe('rewardOrder', () => {
     m.transfer.mockRejectedValue(new Error('node down'));
     expect(await rewardOrder(order)).toEqual({ status: 'failed', reason: 'node down' });
     expect(m.update).toHaveBeenCalledWith({ where: { order_key: order.orderKey }, data: { status: 'failed', error: 'node down' } });
+  });
+  // Regression 2026-11-05: RUBIS had precision 0, Hive-Engine rejected 0.61, the hub said "sent".
+  it('records a broadcast rejected by Hive-Engine as failed, keeping its tx id', async () => {
+    m.heTx.mockResolvedValue({ logs: JSON.stringify({ errors: ['symbol precision mismatch'] }) });
+    const r = await rewardOrder(order);
+    expect(r).toEqual({ status: 'failed', reason: 'rejected by Hive-Engine: symbol precision mismatch' });
+    expect(m.update).toHaveBeenCalledWith({ where: { order_key: order.orderKey }, data: {
+      status: 'failed', rubis_tx_id: 'c'.repeat(40), error: 'rejected by Hive-Engine: symbol precision mismatch',
+    } });
+  });
+  it('marks a transfer not yet visible on Hive-Engine as unverified, never as sent', async () => {
+    m.heTx.mockResolvedValue(null);
+    expect(await rewardOrder(order)).toEqual({ status: 'unverified', amount: 2.4, txId: 'c'.repeat(40) });
+    expect(m.update).toHaveBeenCalledWith({ where: { order_key: order.orderKey }, data: { status: 'unverified', rubis_tx_id: 'c'.repeat(40) } });
   });
 });
