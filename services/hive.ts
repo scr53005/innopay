@@ -16,17 +16,24 @@ const hiveClient = new Client(['https://api.hive.blog', 'https://api.syncad.com'
  * @param {string} recipient - The original recipient
  * @returns {string} The recipient to use (overridden if in dev)
  */
-export function getRecipientForEnvironment(recipient: string): string {
+export function getRecipientForEnvironment(
+  recipient: string,
+  env: Record<string, string | undefined> = process.env, // injectable for tests
+): string {
   // Priority 1: Explicit recipient override for testing (e.g., acceptance environment)
-  const recipientOverride = process.env.RECIPIENT_OVERRIDE;
+  const recipientOverride = env.RECIPIENT_OVERRIDE;
   if (recipientOverride && recipient === 'indies.cafe') {
     console.log(`[OVERRIDE] Redirecting 'indies.cafe' to '${recipientOverride}' (RECIPIENT_OVERRIDE env var)`);
     return recipientOverride;
   }
 
-  // Priority 2: Check if we're in dev environment by checking DATABASE_URL
-  const databaseUrl = process.env.DATABASE_URL || '';
-  const isDev = databaseUrl.includes('innopaydb');
+  // Priority 2: local dev = the local `innopaydb` database. This used to read DATABASE_URL;
+  // once the hub moved to POSTGRES_URL only (CLAUDE.md), DATABASE_URL was unset locally and
+  // dev payments silently went to the PROD account indies.cafe (found 2026-11-05).
+  // The NODE_ENV guard makes sure a deployed build (always 'production' on Vercel) can never
+  // be redirected to the test account, whatever its database is called.
+  const databaseUrl = env.POSTGRES_URL || '';
+  const isDev = env.NODE_ENV !== 'production' && databaseUrl.includes('innopaydb');
 
   // In dev, override indies.cafe with indies-test
   if (isDev && recipient === 'indies.cafe') {

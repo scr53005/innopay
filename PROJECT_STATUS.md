@@ -449,7 +449,7 @@ export function invalidateMenuCache(): void {
 **Environment Variables**:
 - **RECIPIENT_OVERRIDE** strategy confirmed for innopay:
   - Priority 1: Explicit `RECIPIENT_OVERRIDE` env var (for testing)
-  - Priority 2: Dev detection via `DATABASE_URL` containing 'innopaydb'
+  - Priority 2: Dev detection via `POSTGRES_URL` containing 'innopaydb' and `NODE_ENV` ≠ production (was DATABASE_URL until 2026-11-05)
   - Hub-and-spoke architecture verified: ALL transfers controlled by innopay
 
 **Benefits**:
@@ -2233,7 +2233,7 @@ app/menu/page.tsx                             - Line 795-798: Added order_amount
 - This simplifies conversions and aligns with HBD's stablecoin peg
 
 ### Development vs Production Recipients
-- **Dev Environment** (DATABASE_URL contains "innopaydb"):
+- **Dev Environment** (POSTGRES_URL contains "innopaydb", NODE_ENV not production):
   - Transfers go to `indies-test` account
   - Automatically overrides `indies.cafe` → `indies-test`
 - **Production Environment**:

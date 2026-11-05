@@ -1,5 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { maskSecret } from './hive';
+import { getRecipientForEnvironment, maskSecret } from './hive';
+
+// Regression guard (2026-11-05): dev detection read DATABASE_URL, which no longer exists
+// locally, so a Flow 7 order from dev indies paid the PROD account indies.cafe.
+describe('getRecipientForEnvironment', () => {
+  const localDb = 'postgresql://u:p@localhost:5432/innopaydb';
+  it('sends indies.cafe payments to indies-test against the local innopaydb', () => {
+    expect(getRecipientForEnvironment('indies.cafe', { NODE_ENV: 'development', POSTGRES_URL: localDb })).toBe('indies-test');
+  });
+  it('never redirects a production build, whatever the database name', () => {
+    expect(getRecipientForEnvironment('indies.cafe', { NODE_ENV: 'production', POSTGRES_URL: localDb })).toBe('indies.cafe');
+  });
+  it('keeps the real account against any other database', () => {
+    expect(getRecipientForEnvironment('indies.cafe', { NODE_ENV: 'development', POSTGRES_URL: 'postgres://x@db.example/verceldb' })).toBe('indies.cafe');
+  });
+  it('ignores the legacy DATABASE_URL', () => {
+    expect(getRecipientForEnvironment('indies.cafe', { NODE_ENV: 'development', DATABASE_URL: localDb })).toBe('indies.cafe');
+  });
+  it('only rewrites indies.cafe, never other spokes', () => {
+    expect(getRecipientForEnvironment('millewee', { NODE_ENV: 'development', POSTGRES_URL: localDb })).toBe('millewee');
+  });
+  it('RECIPIENT_OVERRIDE wins', () => {
+    expect(getRecipientForEnvironment('indies.cafe', { NODE_ENV: 'production', RECIPIENT_OVERRIDE: 'indies-acc' })).toBe('indies-acc');
+  });
+});
 
 // Regression guard: secrets (seed, master password, private keys) must NEVER be
 // logged in cleartext. maskSecret is the choke point every log line now uses —
