@@ -23,6 +23,16 @@ export interface OrderAuthFields {
   nonce: string;
 }
 
+/**
+ * Single-use nonce: 128 random bits, hex. Not crypto.randomUUID(): browsers expose it only in a
+ * secure context (HTTPS / localhost), so it is undefined on a phone testing the dev hub over
+ * http://192.168.x.x, and on iOS < 15.4. getRandomValues() works everywhere.
+ */
+export function newOrderAuthNonce(): string {
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 export function orderAuthMessage(f: OrderAuthFields): string {
   const memoHash = cryptoUtils.sha256(f.orderMemo).toString('hex');
   return `${PREFIX}:${f.accountName}:${f.restaurantAccount}:${f.orderAmount.toFixed(2)}:${memoHash}:${f.ts}:${f.nonce}`;

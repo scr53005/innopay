@@ -3,6 +3,7 @@
 import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { getRestaurantUrl, detectRestaurant } from '@/services/utils';
+import { newAccountBalance, seedTrustedBalance } from '@/lib/balance-trust';
 
 interface AccountCredentials {
   accountName: string;
@@ -93,13 +94,7 @@ function AccountSuccessContent() {
       const cachedPre = localStorage.getItem('innopay_lastBalance');
       const pre = cachedPre ? parseFloat(cachedPre) : NaN;
       if (!isNaN(pre)) {
-        const optimistic = Math.max(0, pre + topup);
-        localStorage.setItem('innopay_lastBalance', optimistic.toFixed(2));
-        localStorage.setItem('innopay_lastBalance_timestamp', Date.now().toString());
-        localStorage.setItem(
-          'innopay_balance_trustUntil',
-          (Date.now() + 60 * 1000).toString(),
-        );
+        seedTrustedBalance(localStorage, Math.max(0, pre + topup));
       }
     }
 
@@ -166,8 +161,9 @@ function AccountSuccessContent() {
       localStorage.setItem('innopay_activePrivate', credentials.keys.active.privateKey);
       localStorage.setItem('innopay_postingPrivate', credentials.keys.posting.privateKey);
       localStorage.setItem('innopay_memoPrivate', credentials.keys.memo.privateKey);
-      localStorage.setItem('innopay_lastBalance', credentials.euroBalance.toString());
-      localStorage.setItem('innopay_lastBalance_timestamp', Date.now().toString());
+      // The hub knows what was just loaded; /user must show it at once, not the chain's stale 0.
+      const knownBalance = newAccountBalance(credentials.euroBalance, searchParams.get('amount'));
+      if (knownBalance !== null) seedTrustedBalance(localStorage, knownBalance);
 
       // Store email if available
       if (credentials.email) {

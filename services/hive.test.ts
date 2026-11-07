@@ -1,24 +1,30 @@
 import { describe, it, expect } from 'vitest';
 import { getRecipientForEnvironment, maskSecret } from './hive';
 
-// Regression guard (2026-11-05): dev detection read DATABASE_URL, which no longer exists
-// locally, so a Flow 7 order from dev indies paid the PROD account indies.cafe.
+// Regression guards: dev payments reached PROD restaurant accounts twice while dev detection
+// relied on the database (2026-11-05 DATABASE_URL gone; 2026-11-07 dev hub on the PROD database).
+// Now Stripe test mode decides: test money in → test account out.
 describe('getRecipientForEnvironment', () => {
-  const localDb = 'postgresql://u:p@localhost:5432/innopaydb';
-  it('sends indies.cafe payments to indies-test against the local innopaydb', () => {
-    expect(getRecipientForEnvironment('indies.cafe', { NODE_ENV: 'development', POSTGRES_URL: localDb })).toBe('indies-test');
+  const dev = { NODE_ENV: 'development', STRIPE_SECRET_KEY: 'sk_test_x' };
+  const prodDb = 'postgres://u:p@db.prisma.io:5432/postgres';
+  it('Stripe test mode pays every restaurant\'s test account', () => {
+    expect(getRecipientForEnvironment('indies.cafe', dev)).toBe('indies-test');
+    expect(getRecipientForEnvironment('millewee', dev)).toBe('innodemo');
+    expect(getRecipientForEnvironment('croque.bedaine', dev)).toBe('croque-test');
   });
-  it('never redirects a production build, whatever the database name', () => {
-    expect(getRecipientForEnvironment('indies.cafe', { NODE_ENV: 'production', POSTGRES_URL: localDb })).toBe('indies.cafe');
+  it('still redirects when the dev hub is connected to the PROD database (2026-11-07)', () => {
+    expect(getRecipientForEnvironment('indies.cafe', { ...dev, POSTGRES_URL: prodDb })).toBe('indies-test');
   });
-  it('keeps the real account against any other database', () => {
-    expect(getRecipientForEnvironment('indies.cafe', { NODE_ENV: 'development', POSTGRES_URL: 'postgres://x@db.example/verceldb' })).toBe('indies.cafe');
+  it('a live Stripe key or a missing key pays the real account', () => {
+    expect(getRecipientForEnvironment('indies.cafe', { NODE_ENV: 'development', STRIPE_SECRET_KEY: 'sk_live_x' })).toBe('indies.cafe');
+    expect(getRecipientForEnvironment('indies.cafe', { NODE_ENV: 'development' })).toBe('indies.cafe');
   });
-  it('ignores the legacy DATABASE_URL', () => {
-    expect(getRecipientForEnvironment('indies.cafe', { NODE_ENV: 'development', DATABASE_URL: localDb })).toBe('indies.cafe');
+  it('never redirects a production build, even with a test key', () => {
+    expect(getRecipientForEnvironment('indies.cafe', { NODE_ENV: 'production', STRIPE_SECRET_KEY: 'sk_test_x' })).toBe('indies.cafe');
   });
-  it('only rewrites indies.cafe, never other spokes', () => {
-    expect(getRecipientForEnvironment('millewee', { NODE_ENV: 'development', POSTGRES_URL: localDb })).toBe('millewee');
+  it('leaves customers and unknown accounts alone', () => {
+    expect(getRecipientForEnvironment('inno000-000-002', dev)).toBe('inno000-000-002');
+    expect(getRecipientForEnvironment('indies-test', dev)).toBe('indies-test');
   });
   it('RECIPIENT_OVERRIDE wins', () => {
     expect(getRecipientForEnvironment('indies.cafe', { NODE_ENV: 'production', RECIPIENT_OVERRIDE: 'indies-acc' })).toBe('indies-acc');

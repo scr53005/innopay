@@ -11,7 +11,10 @@ import WalletQrScanner from '@/app/components/WalletQrScanner';
 import { canBrowsePartner, hasRestaurantContext, partnerImage, partnerLocation, walletNavigationMessages } from '@/lib/wallet-navigation';
 import { getAccountCredentials } from '@/app/actions/get-credentials';
 import { useBalance } from '@/hooks/useBalance';
+import { useRubisBalance } from '@/hooks/useRubisBalance';
+import { useIsDevHost } from '@/hooks/useIsDevHost';
 import { clearSavedWallet, walletImportMessages } from '@/lib/wallet-import';
+import { minimumFlow7Topup, suggestedFlow7Topup } from '@/lib/flow7-topup';
 
 import ForgetWalletButton from '@/app/components/ForgetWalletButton';
 
@@ -111,6 +114,8 @@ const translations = {
     topUpWallet: "Recharger Votre Portefeuille",
     minAmount: "Montant minimum: 15€",
     maxAmount: "Montant maximum: 999€",
+    flow7Minimum: (min: number) => `Minimum pour cette commande: ${min}€`,
+    flow7TooSmall: (min: number) => `Pas assez pour payer la commande: rechargez au moins ${min}€`,
     nearbyBusinesses: "Commerces acceptant Innopay",
     browseDirectory: "Explorer les commerces",
     viewMenu: "Voir le menu",
@@ -127,6 +132,8 @@ const translations = {
     topUpWallet: "Top Up Your Wallet",
     minAmount: "Minimum amount: 15€",
     maxAmount: "Maximum amount: 999€",
+    flow7Minimum: (min: number) => `Minimum for this order: ${min}€`,
+    flow7TooSmall: (min: number) => `Not enough to pay the order: top up at least ${min}€`,
     nearbyBusinesses: "Businesses accepting Innopay",
     browseDirectory: "Browse businesses",
     viewMenu: "View menu",
@@ -143,6 +150,8 @@ const translations = {
     topUpWallet: "Brieftasche Aufladen",
     minAmount: "Mindestbetrag: 15€",
     maxAmount: "Höchstbetrag: 999€",
+    flow7Minimum: (min: number) => `Mindestbetrag für diese Bestellung: ${min}€`,
+    flow7TooSmall: (min: number) => `Reicht nicht für die Bestellung: mindestens ${min}€ aufladen`,
     nearbyBusinesses: "Geschäfte, die Innopay akzeptieren",
     browseDirectory: "Geschäfte entdecken",
     viewMenu: "Speisekarte ansehen",
@@ -159,6 +168,8 @@ const translations = {
     topUpWallet: "Äre Portemonnaie Oplueden",
     minAmount: "Mindestbetrag: 15€",
     maxAmount: "Maximal Betrag: 999€",
+    flow7Minimum: (min: number) => `Minimum fir dës Bestellung: ${min}€`,
+    flow7TooSmall: (min: number) => `Duergeet net fir d'Bestellung: lued mindestens ${min}€ op`,
     nearbyBusinesses: "Geschäfter déi Innopay akzeptéieren",
     browseDirectory: "Geschäfter entdecken",
     viewMenu: "Menü kucken",
@@ -220,6 +231,9 @@ function TopUpContent() {
     orderMemo: string;
     returnUrl: string;
   } | null>(null);
+  // Flow 7: smallest top-up that still pays the order (null outside Flow 7).
+  const [flow7MinTopup, setFlow7MinTopup] = useState<number | null>(null);
+  const topupBelowFlow7Min = flow7MinTopup !== null && amount < flow7MinTopup;
 
   const t = translations[language];
 
@@ -245,6 +259,8 @@ function TopUpContent() {
   const { balance, isLoading: balanceLoading, refetch: refetchBalance, source: balanceSource } = useBalance(accountName, {
     enabled: !!accountName && !accountName.startsWith('mockaccount'),
   });
+  const rubisBalance = useRubisBalance(accountName && !accountName.startsWith('mockaccount') ? accountName : null);
+  const isDevHost = useIsDevHost();
 
   // Sync React Query balance to walletBalance state
   useEffect(() => {
@@ -407,23 +423,16 @@ function TopUpContent() {
         console.log(`[FLOW 7] Credentials already present in localStorage`);
       }
 
-      // STEP 3: Calculate suggested topup amount - Round UP to nearest 5€
+      // STEP 3: Suggested top-up (deficit rounded up to 5 €, at least 15 €) and the smallest one
+      // accepted (must cover the deficit, lib/flow7-topup.ts).
       const deficitNum = parseFloat(deficit);
-
-      // Round deficit UP to nearest euro first
-      const deficitRoundedUp = Math.ceil(deficitNum);
-
-      // Then round UP to nearest 5€ increment
-      const suggestedTopup = Math.max(
-        Math.ceil(deficitRoundedUp / 5) * 5, // Round up to nearest 5€
-        15 // Minimum 15€
-      );
+      const suggestedTopup = suggestedFlow7Topup(deficitNum, 15);
+      setFlow7MinTopup(Number.isFinite(deficitNum) ? minimumFlow7Topup(deficitNum, 15) : null);
 
       console.log('[FLOW 7] Calculated suggested topup:', {
         deficitRaw: deficitNum,
-        deficitRoundedUp: deficitRoundedUp,
         suggestedTopup: suggestedTopup,
-        minimum: 15
+        minimum: Number.isFinite(deficitNum) ? minimumFlow7Topup(deficitNum, 15) : 15
       });
 
       // STEP 4: Pre-fill amount (already rounded to 5€ increment)
@@ -648,6 +657,10 @@ function TopUpContent() {
       setError(t.minAmount + ' / ' + t.maxAmount);
       return;
     }
+    if (topupBelowFlow7Min) {
+      setError(t.flow7TooSmall(flow7MinTopup!));
+      return;
+    }
 
     setLoading(true);
     setError('');
@@ -847,7 +860,7 @@ function TopUpContent() {
       <main className="hub-home-panel">
         <WalletHubHeader language={language} onLanguageChange={setLanguage} avatarUrl={avatarUrl} search={navigationSearch} />
         <div className={!hasRestaurantContext(navigationSearch) ? 'hub-home-tools' : undefined}>
-          {hasAccount && accountName && <HubMiniWallet accountName={accountName} balance={walletBalance?.euroBalance ?? null}
+          {hasAccount && accountName && <HubMiniWallet accountName={accountName} balance={walletBalance?.euroBalance ?? null} rubis={rubisBalance}
             language={language} visible={showWalletBalance} onVisibilityChange={setShowWalletBalance}
             balanceSource={balanceSource || undefined} search={navigationSearch} overlap={!hasRestaurantContext(navigationSearch)} />}
           {!hasRestaurantContext(navigationSearch) && <WalletQrScanner language={language} accountName={accountName} onTransferSubmitted={refetchBalance} />}
@@ -970,16 +983,17 @@ function TopUpContent() {
             <input
               id="wallet-top-up-amount"
               type="number"
-              min="15"
+              min={flow7MinTopup ?? 15}
               max="999"
               step="1"
               value={amount}
-              onChange={(e) => setAmount(Number(e.target.value))}
-              className={`w-full px-4 ${orderContext ? 'py-2' : 'py-1.5'} border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-3xl font-bold text-center text-gray-900 bg-white`}
+              onChange={(e) => { setAmount(Number(e.target.value)); setError(''); }}
+              aria-invalid={topupBelowFlow7Min}
+              className={`w-full px-4 ${orderContext ? 'py-2' : 'py-1.5'} border-2 ${topupBelowFlow7Min ? 'border-red-400 bg-red-50' : 'border-gray-300 bg-white'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-3xl font-bold text-center text-gray-900`}
               disabled={loading}
             />
-            <p className="mt-1 text-xs text-gray-500">
-              {t.minAmount} / {t.maxAmount}
+            <p className={`mt-1 text-xs ${topupBelowFlow7Min ? 'text-red-700 font-medium' : 'text-gray-500'}`}>
+              {topupBelowFlow7Min ? t.flow7TooSmall(flow7MinTopup!) : flow7MinTopup !== null ? `${t.flow7Minimum(flow7MinTopup)} / ${t.maxAmount}` : `${t.minAmount} / ${t.maxAmount}`}
             </p>
           </div>
 
@@ -993,7 +1007,7 @@ function TopUpContent() {
           {/* Submit Button */}
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || topupBelowFlow7Min}
             className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 rounded-lg font-semibold text-lg hover:from-blue-700 hover:to-indigo-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
           >
             {loading ? (
@@ -1094,9 +1108,7 @@ function TopUpContent() {
       )}
 
       {/* DEV ONLY: Clear localStorage button */}
-      {(typeof window !== 'undefined') && (window.location.hostname === 'localhost' ||
-        window.location.hostname.includes('127.0.0.1') ||
-        window.location.hostname.startsWith('192.168.')) && (
+      {isDevHost && (
         <div className="fixed top-2 right-2 z-[10001]">
           <button
             onClick={() => {

@@ -136,7 +136,9 @@ describe('existing wallet on /user', () => {
     localStorage.setItem('innopay_lastBalance', '45.75');
     await render();
     expect(host.querySelector('.mw-amount')?.textContent).toBe('45.75 €');
-    expect(requests.some(request => request.url.includes('api.hive-engine.com'))).toBe(false);
+    // No EURO read may overwrite the trusted balance. The RUBIS read (display only) is allowed.
+    const symbolOf = (body: unknown) => (body as { params?: { query?: { symbol?: unknown } } } | undefined)?.params?.query?.symbol;
+    expect(requests.some(request => request.url.includes('api.hive-engine.com') && symbolOf(request.body) !== 'RUBIS')).toBe(false);
   });
   it('does not add the standalone recharge route to restaurant handoffs', async () => {
     window.history.replaceState({}, '', '/user?flow=pay_with_topup&restaurant=indies&table=12');

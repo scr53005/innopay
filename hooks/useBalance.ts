@@ -144,6 +144,14 @@ export function useBalance(
         throw new Error('No account name provided');
       }
 
+      // Just after a Stripe payment the chain still shows the old balance; /user/success seeds
+      // the known one with a trust window (lib/balance-trust.ts). Same rule as /user and indies.
+      const trustUntil = parseInt(localStorage.getItem('innopay_balance_trustUntil') || '0', 10);
+      const cached = parseFloat(localStorage.getItem('innopay_lastBalance') || '');
+      if (trustUntil > Date.now() && !isNaN(cached)) {
+        return { balance: cached, source: 'localStorage-cache', timestamp: Date.now() };
+      }
+
       return await fetchEuroBalance(accountName);
     },
     enabled: enabled && !!accountName,

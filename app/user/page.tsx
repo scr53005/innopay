@@ -7,10 +7,12 @@ import { useDropzone } from 'react-dropzone'; // For image picker
 import confetti from 'canvas-confetti';
 import Image from 'next/image';
 import { PrivateKey } from '@hiveio/dhive';
-import { signOrderAuth } from '@/lib/order-payment-auth';
+import { newOrderAuthNonce, signOrderAuth } from '@/lib/order-payment-auth';
 import WalletHubHeader from '@/app/components/WalletHubHeader';
 import WalletHubFrame from '@/app/components/WalletHubFrame';
 import HubMiniWallet from '@/app/components/HubMiniWallet';
+import { useRubisBalance } from '@/hooks/useRubisBalance';
+import { useIsDevHost } from '@/hooks/useIsDevHost';
 import { hasRestaurantContext, standaloneTopUpHref, walletNavigationMessages } from '@/lib/wallet-navigation';
 import { getCurrencyConfig, type CurrencyConfig } from '@/lib/currency-config';
 import { clearSavedWallet, walletImportMessages, type WalletImportChoice } from '@/lib/wallet-import';
@@ -347,6 +349,8 @@ export default function HiveAccountCreationPage() {
 
   // State for account balance (for MiniWallet)
   const [accountBalance, setAccountBalance] = useState<number | null>(null);
+  const rubisBalance = useRubisBalance(existingAccount?.accountName);
+  const isDevHost = useIsDevHost();
   const [showWalletBalance, setShowWalletBalance] = useState(true); // Show wallet by default when account exists
 
   // State for Flow 5→7 modals
@@ -516,7 +520,7 @@ export default function HiveAccountCreationPage() {
           orderAmount,
           orderMemo: orderMemo || '',
           ts: Date.now(),
-          nonce: crypto.randomUUID(),
+          nonce: newOrderAuthNonce(), // not crypto.randomUUID(): undefined over http on a LAN phone
         };
         const authSignature = signOrderAuth(authFields, activeKeyForAuth);
 
@@ -2307,7 +2311,7 @@ export default function HiveAccountCreationPage() {
           <div className="hub-account-panel">
             <WalletHubHeader language={language} onLanguageChange={setLanguage} avatarUrl={metadata.avatarUri || defaultAvatarUrl}
               onAvatarClick={() => setShowUpdateForm(!showUpdateForm)} search={navigationSearch} />
-            <HubMiniWallet accountName={existingAccount?.accountName || ''} balance={accountBalance}
+            <HubMiniWallet accountName={existingAccount?.accountName || ''} balance={accountBalance} rubis={rubisBalance}
               language={language} visible={showWalletBalance} onVisibilityChange={setShowWalletBalance} search={navigationSearch} />
             {standaloneTopUpHref(navigationSearch) && <a className="hub-recharge-action" href={standaloneTopUpHref(navigationSearch)!}>
               {walletNavigationMessages[language].recharge}
@@ -2671,9 +2675,7 @@ export default function HiveAccountCreationPage() {
       )}
 
       {/* DEV ONLY: Clear localStorage button */}
-      {(typeof window !== 'undefined') && (window.location.hostname === 'localhost' ||
-        window.location.hostname.includes('127.0.0.1') ||
-        window.location.hostname.startsWith('192.168.')) && (
+      {isDevHost && (
         <div className="fixed top-2 right-2 z-[10001]">
           <button
             onClick={() => {

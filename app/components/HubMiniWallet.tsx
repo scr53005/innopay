@@ -6,9 +6,11 @@ import { useHubFooterHeight } from './WalletHubFrame';
 import { initialHubWalletPosition, readSavedDisplayBalance, type WalletLanguage } from '../../lib/wallet-navigation';
 
 /** Positions the branded wallet; never changes the balance used by checkout. */
-export default function HubMiniWallet({ accountName, balance, language, visible, onVisibilityChange, balanceSource, search = '', overlap = false }: {
+export default function HubMiniWallet({ accountName, balance, rubis = null, language, visible, onVisibilityChange, balanceSource, search = '', overlap = false }: {
   accountName: string;
   balance: number | null;
+  /** RUBIS held (useRubisBalance); null = unknown, no strip. */
+  rubis?: number | null;
   language: WalletLanguage;
   visible: boolean;
   onVisibilityChange: (visible: boolean) => void;
@@ -38,7 +40,7 @@ export default function HubMiniWallet({ accountName, balance, language, visible,
   };
   return <div ref={anchor} className={`hub-wallet-slot${overlap ? ' hub-wallet-slot-overlap' : ''}${visible ? '' : ' hub-wallet-slot-minimized'}`}
     style={{ '--hub-wallet-edge-shift': `${edgeShift}px` } as React.CSSProperties}>
-    {position && <MiniWallet balance={{ accountName, euroBalance: displayBalance }} language={language}
+    {position && <MiniWallet balance={{ accountName, euroBalance: displayBalance }} rubisBalance={rubis} language={language}
       visible={visible} onClose={minimize} initialPosition={{ x: position.x - edgeShift, y: position.y }} bottomInset={footerHeight + 12} zIndex={40}
       accountSearch={search} balanceSource={balance === null && savedBalance !== null ? 'localStorage-cache' : balanceSource} />}
     <WalletReopenButton language={language} visible={!visible} onClick={() => onVisibilityChange(true)}

@@ -9,6 +9,8 @@ import { isOrderAuthFresh, verifyOrderAuth } from '@/lib/order-payment-auth';
 import { isActiveSpokeAccount } from '@/lib/spoke-recipients';
 import { rewardOrder } from '@/lib/rubis-distribute';
 import { rubisOrderKey } from '@/lib/rubis';
+import { fetchTokenBalance } from '@/lib/leg-receipt';
+import { balanceAfterOrder } from '@/lib/order-balance';
 
 const hiveClient = new Client(['https://api.hive.blog', 'https://api.deathwing.me', 'https://hive-api.arcange.eu']);
 
@@ -107,6 +109,9 @@ export async function POST(req: NextRequest) {
     // The blockchain will reject if insufficient
     console.log(`[EXECUTE ORDER] Proceeding with payment (balance verification done client-side)`);
 
+    // Read before paying: Hive-Engine shows the payment only seconds later (see order-balance.ts).
+    const balanceBefore = await fetchTokenBalance(accountName, 'EURO');
+
     // STEP 3: Execute payment flow using shared payment processor
     const paymentResult = await processOrderPayment({
       customerAccount: accountName,
@@ -130,10 +135,9 @@ export async function POST(req: NextRequest) {
       customerAccount: accountName, recipient: restaurantAccount, orderTotal: Number(orderAmount), memo: orderMemo,
     }));
 
-    // STEP 4: Calculate new balance (current balance - order amount)
-    // Note: We don't have exact balance here, client will update after transfer
-    // For credential session, we'll use 0 as placeholder since balance is unknown
-    const newBalance = 0; // Client will fetch real balance after redirect
+    // STEP 4: Balance after the order. null = Hive-Engine was unreachable before paying: no
+    // optimistic_balance in the redirect, and the spoke reads the chain instead.
+    const newBalance = balanceAfterOrder(balanceBefore, Number(orderAmount), !!paymentResult.customerEuroTxId);
 
     // STEP 4.5: Derive ONLY active + memo for the spoke hand-over (spokes store exactly these
     // two — SPOKE-KEY-SECURITY.md §4). Security fix 2026-11-03: the master password, owner and
@@ -152,7 +156,9 @@ export async function POST(req: NextRequest) {
         activePublic: activePrivate.createPublic().toString(),
         memoPrivate: memoPrivate.toString(),
         memoPublic: memoPrivate.createPublic().toString(),
-        euroBalance: newBalance,
+        // The column cannot be empty; when the balance is unknown the 0 here is never shown,
+        // because spokes read the optimistic_balance URL param for this return (indies, 2026-11-07).
+        euroBalance: newBalance ?? 0,
         email: null,
         expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
       },
@@ -177,6 +183,7 @@ export async function POST(req: NextRequest) {
     redirectUrl.searchParams.set('existing_account', 'true'); // Trigger Flow 5 existing account handling
     redirectUrl.searchParams.set('credential_token', credentialSession.id);
     redirectUrl.searchParams.set('flow', '6'); // Indicate this was Flow 6 (pay with existing account)
+    if (newBalance !== null) redirectUrl.searchParams.set('optimistic_balance', newBalance.toFixed(2));
     if (table) redirectUrl.searchParams.set('table', table);
 
     console.log(`[EXECUTE ORDER] ✅ Complete - redirect to: ${redirectUrl.toString()}`);

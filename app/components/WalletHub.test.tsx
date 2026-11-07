@@ -64,6 +64,15 @@ describe('MiniWallet and bottom banner share their space', () => {
     await act(async () => root.render(<WalletHubFrame language="fr"><HubMiniWallet accountName="alice" balance={null} language="fr" visible onVisibilityChange={vi.fn()} /></WalletHubFrame>));
     expect(host.querySelector('.mw-amount')?.textContent).toBe('… €');
   });
+  // 2026-11-07: the hub never passed RUBIS, so the same customer saw RUBIS on indies but not here.
+  it('draws the RUBIS strip when RUBIS are known (even 0), none while unknown', async () => {
+    await act(async () => root.render(<WalletHubFrame language="fr"><HubMiniWallet accountName="alice" balance={5} rubis={3} language="fr" visible onVisibilityChange={vi.fn()} /></WalletHubFrame>));
+    expect(host.querySelector('.mw-rubis-strip')?.textContent).toContain('RUBIS');
+    await act(async () => root.render(<WalletHubFrame language="fr"><HubMiniWallet accountName="alice" balance={5} rubis={0} language="fr" visible onVisibilityChange={vi.fn()} /></WalletHubFrame>));
+    expect(host.querySelector('.mw-rubis-strip')).not.toBeNull();
+    await act(async () => root.render(<WalletHubFrame language="fr"><HubMiniWallet accountName="alice" balance={5} language="fr" visible onVisibilityChange={vi.fn()} /></WalletHubFrame>));
+    expect(host.querySelector('.mw-rubis-strip')).toBeNull();
+  });
   it('reopens a dragged home wallet without adding the edge shift again', async () => {
     function Wallet() {
       const [visible, setVisible] = useState(true);

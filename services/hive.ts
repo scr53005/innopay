@@ -10,11 +10,27 @@ const hiveClient = new Client(['https://api.hive.blog', 'https://api.syncad.com'
 // const hiveClient = new Client('https://api.deathwing.me');
 
 /**
- * Override recipient for testing in dev environment
- * Convention: 1 HBD = 1 USD (never fetch from external APIs)
- * Dev environment uses 'indies-test' instead of 'indies.cafe'
- * @param {string} recipient - The original recipient
- * @returns {string} The recipient to use (overridden if in dev)
+ * PROD restaurant account → its test account. Exported for testing.
+ * croque: 'croque-test' is the account croque-bedaine's own dev config pays (src/lib/environment.ts).
+ */
+export const TEST_ACCOUNT_OF: Readonly<Record<string, string>> = {
+  'indies.cafe': 'indies-test',
+  millewee: 'innodemo',
+  'croque.bedaine': 'croque-test',
+};
+
+/**
+ * Which account a restaurant payment really goes to.
+ *
+ * The danger on a dev hub: Stripe takes TEST money from the customer, but innopay pays the
+ * restaurant with REAL HBD/EURO. So whenever the hub's Stripe key is a test key, a PROD
+ * restaurant account is swapped for its test account.
+ *
+ * History: this used to look at the database name (`innopaydb` = dev). It failed twice: once when
+ * DATABASE_URL disappeared (2026-11-05), and again when the dev hub was temporarily pointed at
+ * the PROD database (2026-11-07: a dev guest checkout paid indies.cafe). The Stripe key says
+ * directly whether the money coming in is real, whatever database is connected.
+ * The NODE_ENV guard means a deployed build (always 'production' on Vercel) is never redirected.
  */
 export function getRecipientForEnvironment(
   recipient: string,
@@ -27,18 +43,11 @@ export function getRecipientForEnvironment(
     return recipientOverride;
   }
 
-  // Priority 2: local dev = the local `innopaydb` database. This used to read DATABASE_URL;
-  // once the hub moved to POSTGRES_URL only (CLAUDE.md), DATABASE_URL was unset locally and
-  // dev payments silently went to the PROD account indies.cafe (found 2026-11-05).
-  // The NODE_ENV guard makes sure a deployed build (always 'production' on Vercel) can never
-  // be redirected to the test account, whatever its database is called.
-  const databaseUrl = env.POSTGRES_URL || '';
-  const isDev = env.NODE_ENV !== 'production' && databaseUrl.includes('innopaydb');
-
-  // In dev, override indies.cafe with indies-test
-  if (isDev && recipient === 'indies.cafe') {
-    console.log(`[DEV] Overriding recipient from 'indies.cafe' to 'indies-test'`);
-    return 'indies-test';
+  const stripeTestMode = (env.STRIPE_SECRET_KEY || '').startsWith('sk_test_');
+  const testAccount = TEST_ACCOUNT_OF[recipient];
+  if (env.NODE_ENV !== 'production' && stripeTestMode && testAccount) {
+    console.warn(`[DEV] Stripe test mode: paying '${testAccount}' instead of the PROD account '${recipient}'`);
+    return testAccount;
   }
 
   return recipient;

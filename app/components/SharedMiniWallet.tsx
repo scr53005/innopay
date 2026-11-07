@@ -21,6 +21,8 @@ interface Props {
   balanceSource?: string;
   pulseState?: PulseState;
   onPulseReset?: () => void;
+  /** RUBIS held: the package draws the gold strip (even at 0). null/undefined = unknown, no strip. */
+  rubisBalance?: number | null;
 }
 
 /** App adapter: currency, hub navigation and local removal stay here. */

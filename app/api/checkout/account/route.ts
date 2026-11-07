@@ -5,6 +5,8 @@ import { PrismaClient } from '@prisma/client';
 import { detectFlow, getRedirectUrl, FLOW_METADATA, type FlowContext } from '@/lib/flows';
 import { resolveSpokeCurrency } from '@/lib/spoke-currency';
 import { ArchivedFarmVendorError, assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
+import { fetchTokenBalance } from '@/lib/leg-receipt';
+import { flow7Deficit, flow7Shortfall, minimumFlow7Topup } from '@/lib/flow7-topup';
 
 const prisma = new PrismaClient();
 
@@ -180,6 +182,26 @@ export async function POST(req: NextRequest) {
         { error: `Minimum amount is ${minAmount} ${currencyConfig.fiat} for ${flowMetadata.category === 'internal' && detectedFlow === 'topup' ? 'top-up' : 'account creation'}` },
         { status: 400, headers: corsHeaders }
       );
+    }
+
+    // Flow 7: the top-up must cover the order (lib/flow7-topup.ts). The page checks it too, but this
+    // is the gate: a short top-up would leave an order innopay pays without being paid.
+    // The live balance wins over the one the page sent; if neither is known, let it through (UX
+    // first; the webhook records any gap as a debt).
+    if (detectedFlow === 'pay_with_topup' && finalOrderAmountEuro) {
+      const liveBalance = await fetchTokenBalance(accountName, currencyConfig.iouToken);
+      const balance = liveBalance ?? (typeof accountBalance === 'number' && Number.isFinite(accountBalance) ? accountBalance : null);
+      if (balance !== null) {
+        const shortfall = flow7Shortfall(amount, balance, Number(finalOrderAmountEuro));
+        if (shortfall > 0) {
+          const minimum = minimumFlow7Topup(flow7Deficit(balance, Number(finalOrderAmountEuro)), currencyConfig.minTopup);
+          console.warn(`[CHECKOUT API] Flow 7 top-up too small for ${accountName}: ${amount} + ${balance} < ${finalOrderAmountEuro} (minimum ${minimum})`);
+          return NextResponse.json(
+            { error: `Top-up too small: ${shortfall.toFixed(2)} ${currencyConfig.fiat} short for this order. Minimum top-up: ${minimum} ${currencyConfig.fiat}.`, code: 'topup_too_small', minimum },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+      }
     }
 
     const amountCents = Math.round(amount * 100); // Convert to cents for Stripe

@@ -35,7 +35,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    // suppressHydrationWarning: Chrome on iOS adds its own attributes to <html> (__gcrremoteframetoken)
+    // before React starts. Only this element's attributes are exempt; its children are still checked.
+    <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
