@@ -12,13 +12,16 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { verifyWalletHandoff } from '@/app/actions/verify-handoff';
 import { getCurrencyConfig } from '@/lib/currency-config';
+import { flow7Deficit, suggestedFlow7Topup } from '@/lib/flow7-topup';
 
 // Suggested top-up: cover the deficit, round UP to the currency's increment, floor
 // at its minimum (EUR 5/15, RON 30/90 — matches the hub's existing Flow-7 sizing).
+// Same rule as /api/checkout/account's Flow 7 check (lib/flow7-topup.ts), computed in cents: the
+// raw `orderAmount - balance` carries float noise (12.50 − 3.20 = 9.300000000000001), which could
+// round a deficit up by a whole increment.
 function computeTopup(orderAmount: number, balance: number, fiat: string | null): number {
   const cfg = getCurrencyConfig(fiat ?? undefined);
-  const deficit = Math.max(0, orderAmount - balance);
-  return Math.max(Math.ceil(Math.ceil(deficit) / cfg.roundIncrement) * cfg.roundIncrement, cfg.minTopup);
+  return suggestedFlow7Topup(flow7Deficit(balance, orderAmount), cfg.minTopup, cfg.roundIncrement);
 }
 
 // Fetch the account's live EURO balance from Hive-Engine — used when the spoke

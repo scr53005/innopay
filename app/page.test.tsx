@@ -7,7 +7,6 @@ import LandingPage from './page';
 const state = vi.hoisted(() => ({ params: new URLSearchParams(), balance: 0, refetch: vi.fn(), router: { push: vi.fn() }, handoff: vi.fn(async () => '#mock-partner') }));
 vi.mock('next/navigation', () => ({ useSearchParams: () => state.params, useRouter: () => state.router }));
 vi.mock('@/hooks/useBalance', () => ({ useBalance: () => ({ balance: state.balance, isLoading: false, refetch: state.refetch, source: 'hive-engine' }) }));
-vi.mock('@/app/actions/get-credentials', () => ({ getAccountCredentials: vi.fn() }));
 vi.mock('next/image', () => ({ default: ({ fill, priority, unoptimized, ...props }: Record<string, unknown>) => <img {...props} /> }));
 vi.mock('@/lib/forget-wallet', () => ({ forgetLocalWallet: vi.fn() }));
 vi.mock('@/lib/credential-session', () => ({ prepareUrlWithCredentials: state.handoff }));
@@ -118,18 +117,14 @@ describe('wallet home', () => {
       amount: 100, accountName: 'alice', email: 'alice@example.test', hasLocalStorageAccount: true, accountBalance: 0, redirectParams: null,
     });
   });
-  it('preserves Flow 7 order details, table and return URL at the checkout boundary', async () => {
-    state.balance = 4;
-    state.params = new URLSearchParams({ topup_for: 'order', source: 'indiesmenu', account: 'alice', balance: '4', deficit: '7.5', table: '12', order_amount: '11.50', order_memo: 'Order at table 12', return_url: 'http://localhost:3001/menu?table=12' });
+  // Security regression guard (2026-11-08, indies R4d): the old Flow 7 landing link took the account
+  // NAME from the URL, switched the hub to it and fetched its keys by name, with no proof. Flow 7 now
+  // goes through /wallet-handoff (signed proof); such a link must change nothing.
+  it('the old Flow 7 landing link neither switches the account nor fetches anyone’s keys', async () => {
+    state.params = new URLSearchParams({ topup_for: 'order', source: 'indiesmenu', account: 'victim', balance: '4', deficit: '7.5', table: '12', order_amount: '11.50', order_memo: 'Order at table 12', return_url: 'http://localhost:3001/menu?table=12' });
     await render();
-    expect(host.querySelector('.hub-shops')).toBeNull();
-    expect(host.querySelector('.hub-scanner-row')).toBeNull();
-    expect(requests.some(request => request.url === '/api/fetch-hive-metadata')).toBe(false);
-    await act(async () => { host.querySelector('#top-up')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); });
-    expect(requests.find(request => request.url === '/api/checkout/account')?.body).toMatchObject({
-      accountName: 'alice', accountBalance: 4, hasLocalStorageAccount: true,
-      redirectParams: { table: '12', orderAmount: '11.50', orderMemo: 'Order at table 12' },
-      returnUrl: 'http://localhost:3001/menu?table=12',
-    });
+    expect(localStorage.getItem('innopay_accountName')).toBe('alice');
+    expect(localStorage.getItem('innopay_activePrivate')).toBe('test-active');
+    expect(requests.some(request => request.url.includes('credentials'))).toBe(false);
   });
 });

@@ -9,12 +9,10 @@ import WalletHubFrame from '@/app/components/WalletHubFrame';
 import HubMiniWallet from '@/app/components/HubMiniWallet';
 import WalletQrScanner from '@/app/components/WalletQrScanner';
 import { canBrowsePartner, hasRestaurantContext, partnerImage, partnerLocation, walletNavigationMessages } from '@/lib/wallet-navigation';
-import { getAccountCredentials } from '@/app/actions/get-credentials';
 import { useBalance } from '@/hooks/useBalance';
 import { useRubisBalance } from '@/hooks/useRubisBalance';
 import { useIsDevHost } from '@/hooks/useIsDevHost';
 import { clearSavedWallet, walletImportMessages } from '@/lib/wallet-import';
-import { minimumFlow7Topup, suggestedFlow7Topup } from '@/lib/flow7-topup';
 
 import ForgetWalletButton from '@/app/components/ForgetWalletButton';
 
@@ -114,12 +112,6 @@ const translations = {
     topUpWallet: "Recharger Votre Portefeuille",
     minAmount: "Montant minimum: 15€",
     maxAmount: "Montant maximum: 999€",
-    flow7Minimum: (min: number) => `Minimum pour cette commande: ${min}€`,
-    flow7TooSmall: (min: number) => `Pas assez pour payer la commande: rechargez au moins ${min}€`,
-    orderCardTitle: "Recharge pour votre commande",
-    orderCardTable: "Table",
-    orderCardTotal: "Total de la commande",
-    orderCardAfter: "Après le paiement, vous reviendrez au restaurant où votre commande sera envoyée",
     nearbyBusinesses: "Commerces acceptant Innopay",
     browseDirectory: "Explorer les commerces",
     viewMenu: "Voir le menu",
@@ -136,12 +128,6 @@ const translations = {
     topUpWallet: "Top Up Your Wallet",
     minAmount: "Minimum amount: 15€",
     maxAmount: "Maximum amount: 999€",
-    flow7Minimum: (min: number) => `Minimum for this order: ${min}€`,
-    flow7TooSmall: (min: number) => `Not enough to pay the order: top up at least ${min}€`,
-    orderCardTitle: "Top-up for your order",
-    orderCardTable: "Table",
-    orderCardTotal: "Order total",
-    orderCardAfter: "After payment you'll go back to the restaurant, where your order will be sent",
     nearbyBusinesses: "Businesses accepting Innopay",
     browseDirectory: "Browse businesses",
     viewMenu: "View menu",
@@ -158,12 +144,6 @@ const translations = {
     topUpWallet: "Brieftasche Aufladen",
     minAmount: "Mindestbetrag: 15€",
     maxAmount: "Höchstbetrag: 999€",
-    flow7Minimum: (min: number) => `Mindestbetrag für diese Bestellung: ${min}€`,
-    flow7TooSmall: (min: number) => `Reicht nicht für die Bestellung: mindestens ${min}€ aufladen`,
-    orderCardTitle: "Aufladung für Ihre Bestellung",
-    orderCardTable: "Tisch",
-    orderCardTotal: "Bestellsumme",
-    orderCardAfter: "Nach der Zahlung kehren Sie zum Restaurant zurück, wo Ihre Bestellung gesendet wird",
     nearbyBusinesses: "Geschäfte, die Innopay akzeptieren",
     browseDirectory: "Geschäfte entdecken",
     viewMenu: "Speisekarte ansehen",
@@ -180,12 +160,6 @@ const translations = {
     topUpWallet: "Äre Portemonnaie Oplueden",
     minAmount: "Mindestbetrag: 15€",
     maxAmount: "Maximal Betrag: 999€",
-    flow7Minimum: (min: number) => `Minimum fir dës Bestellung: ${min}€`,
-    flow7TooSmall: (min: number) => `Duergeet net fir d'Bestellung: lued mindestens ${min}€ op`,
-    orderCardTitle: "Oplueden fir Är Bestellung",
-    orderCardTable: "Dësch",
-    orderCardTotal: "Total vun der Bestellung",
-    orderCardAfter: "No der Bezuelung gitt Dir zréck an de Restaurant, wou Är Bestellung geschéckt gëtt",
     nearbyBusinesses: "Geschäfter déi Innopay akzeptéieren",
     browseDirectory: "Geschäfter entdecken",
     viewMenu: "Menü kucken",
@@ -203,10 +177,9 @@ function TopUpContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const navigationSearch = searchParams.toString() ? `?${searchParams.toString()}` : '';
-  // Flow 7: a spoke sent the customer here to top up for an order. Known from the URL at the first
-  // render, unlike orderContext (set by an effect): the businesses directory is irrelevant then,
-  // and the account check must not mistake the account being imported for a broken wallet.
-  const flow7Incoming = searchParams.get('topup_for') === 'order';
+  // Flow 7 no longer lands here: spokes go through /wallet-handoff (signed proof) or /user. The
+  // old `?topup_for=order&source=indiesmenu&account=` import, which fetched any named account's
+  // keys with no proof, was removed on 2026-11-08 (indies R4d, SPOKE-DOCUMENTATION.md).
 
   const [amount, setAmount] = useState(100);
   const [language, setLanguageState] = useState<Language>('fr');
@@ -243,17 +216,6 @@ function TopUpContent() {
   // State for spokes (fetched from database)
   const [spokes, setSpokes] = useState<Spoke[]>([]);
   const [spokesLoading, setSpokesLoading] = useState(true);
-
-  // State for order context from indiesmenu (Flow 7: pay_with_topup)
-  const [orderContext, setOrderContext] = useState<{
-    table: string;
-    orderAmount: string;
-    orderMemo: string;
-    returnUrl: string;
-  } | null>(null);
-  // Flow 7: smallest top-up that still pays the order (null outside Flow 7).
-  const [flow7MinTopup, setFlow7MinTopup] = useState<number | null>(null);
-  const topupBelowFlow7Min = flow7MinTopup !== null && amount < flow7MinTopup;
 
   const t = translations[language];
 
@@ -327,12 +289,8 @@ function TopUpContent() {
     }
   }, [searchParams]);
 
-  // Fetch active spokes from database (not during a Flow 7 top-up: the directory is hidden then)
+  // Fetch active spokes from database
   useEffect(() => {
-    if (flow7Incoming) {
-      setSpokesLoading(false);
-      return;
-    }
     const fetchSpokes = async () => {
       try {
         setSpokesLoading(true);
@@ -351,134 +309,7 @@ function TopUpContent() {
     };
 
     fetchSpokes();
-  }, [flow7Incoming]);
-
-  // FLOW 7: Handle incoming context from indiesmenu (pay_with_topup)
-  // This must run EARLY to overwrite localStorage before account detection
-  useEffect(() => {
-    const topupFor = searchParams.get('topup_for');
-    const source = searchParams.get('source');
-
-    if (topupFor === 'order' && source === 'indiesmenu') {
-      console.log('[FLOW 7] Detected incoming order context from indiesmenu');
-
-      // Extract all context parameters
-      const account = searchParams.get('account');
-      const balance = searchParams.get('balance');
-      const deficit = searchParams.get('deficit');
-      const table = searchParams.get('table');
-      const orderAmount = searchParams.get('order_amount');
-      const orderMemo = decodeURIComponent(searchParams.get('order_memo') || '');
-      const returnUrl = decodeURIComponent(searchParams.get('return_url') || '');
-
-      console.log('[FLOW 7] Extracted context:', {
-        account,
-        balance,
-        deficit,
-        table,
-        orderAmount,
-        orderMemo: orderMemo.substring(0, 50) + '...',
-        returnUrl
-      });
-
-      // Validate required params
-      if (!account || !deficit || !table || !orderAmount) {
-        console.error('[FLOW 7] Missing required parameters');
-        return;
-      }
-
-      // STEP 1: Ensure MiniWallet shows the correct account
-      // Override localStorage accountName to match the account from indiesmenu
-      const currentAccount = localStorage.getItem('innopay_accountName');
-      if (currentAccount !== account) {
-        console.log(`[FLOW 7] Account mismatch detected - overriding '${currentAccount}' with '${account}'`);
-        localStorage.setItem('innopay_accountName', account);
-
-        // Set balance if available
-        if (balance) {
-          const balanceNum = parseFloat(balance);
-          if (!isNaN(balanceNum)) {
-            localStorage.setItem('innopay_lastBalance', balanceNum.toFixed(2));
-          }
-        }
-      } else {
-        console.log(`[FLOW 7] Account already matches: ${account}`);
-      }
-
-      // STEP 2: Auto-import credentials from database if not in localStorage
-      const activePrivate = localStorage.getItem('innopay_activePrivate');
-      const masterPassword = localStorage.getItem('innopay_masterPassword');
-
-      if (!activePrivate || !masterPassword) {
-        console.log(`[FLOW 7] Missing credentials in localStorage, fetching from database for account: ${account}`);
-
-        // Use IIFE to handle async call in useEffect
-        (async () => {
-          try {
-            // Call Server Action (secure, server-side only)
-            const result = await getAccountCredentials(account);
-
-            if (result.success && result.accountName) {
-              console.log(`[FLOW 7] Successfully fetched credentials from ${result.source}`);
-
-              // Import all credentials to localStorage
-              localStorage.setItem('innopay_accountName', result.accountName);
-              localStorage.setItem('innopay_masterPassword', result.masterPassword || '');
-              localStorage.setItem('innopay_activePrivate', result.activePrivate || '');
-              localStorage.setItem('innopay_activePublic', result.activePublic || '');
-              localStorage.setItem('innopay_postingPrivate', result.postingPrivate || '');
-              localStorage.setItem('innopay_postingPublic', result.postingPublic || '');
-              localStorage.setItem('innopay_memoPrivate', result.memoPrivate || '');
-              localStorage.setItem('innopay_memoPublic', result.memoPublic || '');
-
-              if (result.euroBalance && result.euroBalance > 0) {
-                localStorage.setItem('innopay_lastBalance', result.euroBalance.toFixed(2));
-              }
-
-              console.log(`[FLOW 7] ✅ Credentials auto-imported successfully`);
-            } else {
-              console.warn(`[FLOW 7] Could not fetch credentials from database: ${result.error}`);
-            }
-          } catch (error) {
-            console.error(`[FLOW 7] Error auto-importing credentials:`, error);
-          }
-        })();
-      } else {
-        console.log(`[FLOW 7] Credentials already present in localStorage`);
-      }
-
-      // STEP 3: Suggested top-up (deficit rounded up to 5 €, at least 15 €) and the smallest one
-      // accepted (must cover the deficit, lib/flow7-topup.ts).
-      const deficitNum = parseFloat(deficit);
-      const suggestedTopup = suggestedFlow7Topup(deficitNum, 15);
-      setFlow7MinTopup(Number.isFinite(deficitNum) ? minimumFlow7Topup(deficitNum, 15) : null);
-
-      console.log('[FLOW 7] Calculated suggested topup:', {
-        deficitRaw: deficitNum,
-        suggestedTopup: suggestedTopup,
-        minimum: Number.isFinite(deficitNum) ? minimumFlow7Topup(deficitNum, 15) : 15
-      });
-
-      // STEP 4: Pre-fill amount (already rounded to 5€ increment)
-      const clampedAmount = Math.max(15, Math.min(999, suggestedTopup));
-      setAmount(clampedAmount);
-      console.log('[FLOW 7] Pre-filled amount:', clampedAmount);
-
-      // STEP 5: Store order context for UI display
-      if (table && orderAmount && returnUrl) {
-        setOrderContext({
-          table,
-          orderAmount,
-          orderMemo,
-          returnUrl
-        });
-        console.log('[FLOW 7] Stored order context for UI display');
-      }
-
-      // STEP 6: Trigger account detection (will happen in main useEffect)
-      setHasAccount(true);
-    }
-  }, [searchParams]);
+  }, []);
 
   // Get redirect parameters from URL (for returning from indiesmenu)
   const getRedirectParams = () => {
@@ -624,7 +455,7 @@ function TopUpContent() {
     // Flow 7 is the exception: its own effect has just written the spoke's account name and is
     // fetching the keys for it, so a missing key there is expected, not a broken wallet (it used to
     // pop the "Importer un compte" banner over a wallet that then loaded fine).
-    if (accountName && (!activePrivate || !memoPrivate) && !flow7Incoming) {
+    if (accountName && (!activePrivate || !memoPrivate)) {
       console.warn('[LANDING] Incomplete wallet in localStorage (active/memo pair broken) - showing import modal');
       // Clear the broken remnant
       localStorage.removeItem('innopay_accountName');
@@ -650,7 +481,7 @@ function TopUpContent() {
     }
 
     // Flow 7 sets hasAccount itself once the keys are in; don't hide its MiniWallet meanwhile.
-    if (!flow7Incoming) setHasAccount(!!accountName && !!activePrivate && !!memoPrivate);
+    setHasAccount(!!accountName && !!activePrivate && !!memoPrivate);
 
     // Note: Balance fetching removed - React Query useBalance hook automatically handles this
     // The hook fetches fresh balance on mount and whenever accountName changes
@@ -685,11 +516,6 @@ function TopUpContent() {
       setError(t.minAmount + ' / ' + t.maxAmount);
       return;
     }
-    if (topupBelowFlow7Min) {
-      setError(t.flow7TooSmall(flow7MinTopup!));
-      return;
-    }
-
     setLoading(true);
     setError('');
 
@@ -714,29 +540,13 @@ function TopUpContent() {
         }
       }
 
-      // Get redirect parameters if coming from indiesmenu
-      // Use orderContext if available (Flow 7), otherwise read from URL
-      const redirectParams = orderContext
-        ? {
-            table: orderContext.table,
-            orderAmount: orderContext.orderAmount,
-            orderMemo: orderContext.orderMemo
-          }
-        : getRedirectParams();
-
-      // Extract return_url from URL params as fallback if orderContext doesn't have it
-      const returnUrlFromParams = searchParams.get('return_url')
+      // Order parameters, if the URL carries any (read from the URL)
+      const redirectParams = getRedirectParams();
+      const finalReturnUrl = searchParams.get('return_url')
         ? decodeURIComponent(searchParams.get('return_url')!)
         : undefined;
-      const finalReturnUrl = orderContext?.returnUrl || returnUrlFromParams;
 
-      console.log('[LANDING] Redirect params:', redirectParams);
-      console.log('[LANDING] Order context:', orderContext);
-      console.log('[LANDING] Return URL:', {
-        fromContext: orderContext?.returnUrl,
-        fromParams: returnUrlFromParams,
-        final: finalReturnUrl
-      });
+      console.log('[LANDING] Redirect params:', redirectParams, 'return URL:', finalReturnUrl);
 
       // Build flow context for systematic flow detection
       const requestBody = {
@@ -894,29 +704,7 @@ function TopUpContent() {
           {!hasRestaurantContext(navigationSearch) && <WalletQrScanner language={language} accountName={accountName} onTransferSubmitted={refetchBalance} />}
         </div>
 
-        {/* Order Context Banner - Show when topping up for restaurant order (Flow 7) */}
-        {orderContext && (
-          <div className="mb-6 border-2 border-orange-400 rounded-lg p-4 bg-gradient-to-r from-orange-50 to-amber-50 shadow-md">
-            <div className="flex items-start gap-3">
-              <div className="text-2xl">🍽️</div>
-              <div className="flex-1">
-                <h3 className="font-bold text-gray-800 mb-1">
-                  {t.orderCardTitle}
-                </h3>
-                <div className="text-sm text-gray-700 space-y-1">
-                  <p>📍 {t.orderCardTable} {orderContext.table}</p>
-                  <p>💰 {t.orderCardTotal}: {orderContext.orderAmount}€</p>
-                  <p className="text-xs text-gray-600 mt-2 italic">
-                    {t.orderCardAfter}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Discovery stays accessible at any balance; the order checkout banner keeps its existing role. */}
-        {!orderContext && !flow7Incoming && (
+        {/* Discovery stays accessible at any balance. */}
           <section className="hub-shops" aria-labelledby="hub-shops-heading">
             <h2 id="hub-shops-heading" className="hub-shops-title text-lg sm:text-xl font-bold text-gray-800 mb-2 text-center">
               {t.nearbyBusinesses}
@@ -999,10 +787,9 @@ function TopUpContent() {
               )}
             </div>
           </section>
-        )}
 
         {/* Form */}
-        <form id="top-up" onSubmit={handleSubmit} className={`hub-top-up ${orderContext ? 'space-y-4' : 'space-y-2.5'}`}>
+        <form id="top-up" onSubmit={handleSubmit} className="hub-top-up space-y-2.5">
           {/* Amount Input */}
           <div>
             <label htmlFor="wallet-top-up-amount" className="block text-sm font-medium text-gray-700 mb-2">
@@ -1011,17 +798,16 @@ function TopUpContent() {
             <input
               id="wallet-top-up-amount"
               type="number"
-              min={flow7MinTopup ?? 15}
+              min="15"
               max="999"
               step="1"
               value={amount}
               onChange={(e) => { setAmount(Number(e.target.value)); setError(''); }}
-              aria-invalid={topupBelowFlow7Min}
-              className={`w-full px-4 ${orderContext ? 'py-2' : 'py-1.5'} border-2 ${topupBelowFlow7Min ? 'border-red-400 bg-red-50' : 'border-gray-300 bg-white'} rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-3xl font-bold text-center text-gray-900`}
+              className={`w-full px-4 py-1.5 border-2 border-gray-300 bg-white rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-3xl font-bold text-center text-gray-900`}
               disabled={loading}
             />
-            <p className={`mt-1 text-xs ${topupBelowFlow7Min ? 'text-red-700 font-medium' : 'text-gray-500'}`}>
-              {topupBelowFlow7Min ? t.flow7TooSmall(flow7MinTopup!) : flow7MinTopup !== null ? `${t.flow7Minimum(flow7MinTopup)} / ${t.maxAmount}` : `${t.minAmount} / ${t.maxAmount}`}
+            <p className="mt-1 text-xs text-gray-500">
+              {t.minAmount} / {t.maxAmount}
             </p>
           </div>
 
@@ -1035,7 +821,7 @@ function TopUpContent() {
           {/* Submit Button */}
           <button
             type="submit"
-            disabled={loading || topupBelowFlow7Min}
+            disabled={loading}
             className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 rounded-lg font-semibold text-lg hover:from-blue-700 hover:to-indigo-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
           >
             {loading ? (
