@@ -2,9 +2,9 @@
 // GET /api/spokes - Returns all active spokes for display on hub
 
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+// The shared client: this route used to build its own PrismaClient and $disconnect after every
+// request, so each page load opened a fresh database connection (slow, worst on a cold dev server).
+import prisma from '@/lib/prisma';
 
 export async function GET() {
   try {
@@ -47,7 +47,5 @@ export async function GET() {
       { error: 'Failed to fetch spokes', details: error.message },
       { status: 500 }
     );
-  } finally {
-    await prisma.$disconnect();
   }
 }

@@ -1,8 +1,7 @@
-import { PrismaClient } from '@prisma/client';
 import 'dotenv/config';
+import prisma from '../lib/prisma';
 import { formatAccountName } from './utils';
 
-const prisma = new PrismaClient();
 
 // Define the DbMetadata type to match the structure used in the database
 export type DbMetadata = {

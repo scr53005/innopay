@@ -116,6 +116,10 @@ const translations = {
     maxAmount: "Montant maximum: 999€",
     flow7Minimum: (min: number) => `Minimum pour cette commande: ${min}€`,
     flow7TooSmall: (min: number) => `Pas assez pour payer la commande: rechargez au moins ${min}€`,
+    orderCardTitle: "Recharge pour votre commande",
+    orderCardTable: "Table",
+    orderCardTotal: "Total de la commande",
+    orderCardAfter: "Après le paiement, vous reviendrez au restaurant où votre commande sera envoyée",
     nearbyBusinesses: "Commerces acceptant Innopay",
     browseDirectory: "Explorer les commerces",
     viewMenu: "Voir le menu",
@@ -134,6 +138,10 @@ const translations = {
     maxAmount: "Maximum amount: 999€",
     flow7Minimum: (min: number) => `Minimum for this order: ${min}€`,
     flow7TooSmall: (min: number) => `Not enough to pay the order: top up at least ${min}€`,
+    orderCardTitle: "Top-up for your order",
+    orderCardTable: "Table",
+    orderCardTotal: "Order total",
+    orderCardAfter: "After payment you'll go back to the restaurant, where your order will be sent",
     nearbyBusinesses: "Businesses accepting Innopay",
     browseDirectory: "Browse businesses",
     viewMenu: "View menu",
@@ -152,6 +160,10 @@ const translations = {
     maxAmount: "Höchstbetrag: 999€",
     flow7Minimum: (min: number) => `Mindestbetrag für diese Bestellung: ${min}€`,
     flow7TooSmall: (min: number) => `Reicht nicht für die Bestellung: mindestens ${min}€ aufladen`,
+    orderCardTitle: "Aufladung für Ihre Bestellung",
+    orderCardTable: "Tisch",
+    orderCardTotal: "Bestellsumme",
+    orderCardAfter: "Nach der Zahlung kehren Sie zum Restaurant zurück, wo Ihre Bestellung gesendet wird",
     nearbyBusinesses: "Geschäfte, die Innopay akzeptieren",
     browseDirectory: "Geschäfte entdecken",
     viewMenu: "Speisekarte ansehen",
@@ -170,6 +182,10 @@ const translations = {
     maxAmount: "Maximal Betrag: 999€",
     flow7Minimum: (min: number) => `Minimum fir dës Bestellung: ${min}€`,
     flow7TooSmall: (min: number) => `Duergeet net fir d'Bestellung: lued mindestens ${min}€ op`,
+    orderCardTitle: "Oplueden fir Är Bestellung",
+    orderCardTable: "Dësch",
+    orderCardTotal: "Total vun der Bestellung",
+    orderCardAfter: "No der Bezuelung gitt Dir zréck an de Restaurant, wou Är Bestellung geschéckt gëtt",
     nearbyBusinesses: "Geschäfter déi Innopay akzeptéieren",
     browseDirectory: "Geschäfter entdecken",
     viewMenu: "Menü kucken",
@@ -187,6 +203,10 @@ function TopUpContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const navigationSearch = searchParams.toString() ? `?${searchParams.toString()}` : '';
+  // Flow 7: a spoke sent the customer here to top up for an order. Known from the URL at the first
+  // render, unlike orderContext (set by an effect): the businesses directory is irrelevant then,
+  // and the account check must not mistake the account being imported for a broken wallet.
+  const flow7Incoming = searchParams.get('topup_for') === 'order';
 
   const [amount, setAmount] = useState(100);
   const [language, setLanguageState] = useState<Language>('fr');
@@ -307,8 +327,12 @@ function TopUpContent() {
     }
   }, [searchParams]);
 
-  // Fetch active spokes from database
+  // Fetch active spokes from database (not during a Flow 7 top-up: the directory is hidden then)
   useEffect(() => {
+    if (flow7Incoming) {
+      setSpokesLoading(false);
+      return;
+    }
     const fetchSpokes = async () => {
       try {
         setSpokesLoading(true);
@@ -327,7 +351,7 @@ function TopUpContent() {
     };
 
     fetchSpokes();
-  }, []);
+  }, [flow7Incoming]);
 
   // FLOW 7: Handle incoming context from indiesmenu (pay_with_topup)
   // This must run EARLY to overwrite localStorage before account detection
@@ -597,7 +621,10 @@ function TopUpContent() {
     // INCOMPLETE active/memo pair (a partial browser wipe — one present, the other
     // gone), NOT the absence of a master password. (The old guard required the
     // master password and thus force-re-imported every lean wallet.)
-    if (accountName && (!activePrivate || !memoPrivate)) {
+    // Flow 7 is the exception: its own effect has just written the spoke's account name and is
+    // fetching the keys for it, so a missing key there is expected, not a broken wallet (it used to
+    // pop the "Importer un compte" banner over a wallet that then loaded fine).
+    if (accountName && (!activePrivate || !memoPrivate) && !flow7Incoming) {
       console.warn('[LANDING] Incomplete wallet in localStorage (active/memo pair broken) - showing import modal');
       // Clear the broken remnant
       localStorage.removeItem('innopay_accountName');
@@ -622,7 +649,8 @@ function TopUpContent() {
       return;
     }
 
-    setHasAccount(!!accountName && !!activePrivate && !!memoPrivate);
+    // Flow 7 sets hasAccount itself once the keys are in; don't hide its MiniWallet meanwhile.
+    if (!flow7Incoming) setHasAccount(!!accountName && !!activePrivate && !!memoPrivate);
 
     // Note: Balance fetching removed - React Query useBalance hook automatically handles this
     // The hook fetches fresh balance on mount and whenever accountName changes
@@ -873,13 +901,13 @@ function TopUpContent() {
               <div className="text-2xl">🍽️</div>
               <div className="flex-1">
                 <h3 className="font-bold text-gray-800 mb-1">
-                  Top-up for Restaurant Order
+                  {t.orderCardTitle}
                 </h3>
                 <div className="text-sm text-gray-700 space-y-1">
-                  <p>📍 Table {orderContext.table}</p>
-                  <p>💰 Order Total: {orderContext.orderAmount}€</p>
+                  <p>📍 {t.orderCardTable} {orderContext.table}</p>
+                  <p>💰 {t.orderCardTotal}: {orderContext.orderAmount}€</p>
                   <p className="text-xs text-gray-600 mt-2 italic">
-                    After payment, you'll be redirected back to complete your order
+                    {t.orderCardAfter}
                   </p>
                 </div>
               </div>
@@ -888,7 +916,7 @@ function TopUpContent() {
         )}
 
         {/* Discovery stays accessible at any balance; the order checkout banner keeps its existing role. */}
-        {!orderContext && (
+        {!orderContext && !flow7Incoming && (
           <section className="hub-shops" aria-labelledby="hub-shops-heading">
             <h2 id="hub-shops-heading" className="hub-shops-title text-lg sm:text-xl font-bold text-gray-800 mb-2 text-center">
               {t.nearbyBusinesses}

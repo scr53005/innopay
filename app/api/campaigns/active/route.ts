@@ -1,8 +1,7 @@
 // app/api/campaigns/active/route.ts
 import { NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
+import prisma from '@/lib/prisma';
 
-const prisma = new PrismaClient();
 
 /**
  * GET /api/campaigns/active
@@ -83,7 +82,5 @@ export async function GET() {
       },
       { status: 500 }
     );
-  } finally {
-    await prisma.$disconnect();
   }
 }

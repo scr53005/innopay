@@ -1,14 +1,13 @@
 // app/api/checkout/account/route.ts
 import { NextRequest, NextResponse } from 'next/server';
+import prisma from '@/lib/prisma';
 import Stripe from 'stripe';
-import { PrismaClient } from '@prisma/client';
 import { detectFlow, getRedirectUrl, FLOW_METADATA, type FlowContext } from '@/lib/flows';
 import { resolveSpokeCurrency } from '@/lib/spoke-currency';
 import { ArchivedFarmVendorError, assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
 import { fetchTokenBalance } from '@/lib/leg-receipt';
 import { flow7Deficit, flow7Shortfall, minimumFlow7Topup } from '@/lib/flow7-topup';
 
-const prisma = new PrismaClient();
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-06-30.basil',
