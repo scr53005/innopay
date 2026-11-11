@@ -67,6 +67,11 @@ export async function GET(req: NextRequest) {
         euroTxId: checkout.hiveTxId || null, // Using hiveTxId as fallback - adjust if you have separate euroTxId field
         amount: checkout.amountEuro,
         recipient: checkout.recipient,
+        // For the spoke's customer photos (DISH-PHOTOS-PLAN.md §4): a guest who creates an account
+        // right after paying claims this order with its session id, which only the paying browser
+        // knows. The memo says what was ordered, completedAt starts the one-hour window.
+        memo: checkout.memo,
+        completedAt: checkout.completedAt ? checkout.completedAt.toISOString() : null,
       },
       {
         headers: { 'Access-Control-Allow-Origin': origin },

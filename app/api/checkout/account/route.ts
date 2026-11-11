@@ -10,7 +10,7 @@ import { flow7Deficit, flow7Shortfall, minimumFlow7Topup } from '@/lib/flow7-top
 
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-06-30.basil',
+  apiVersion: '2026-10-28.endive',
 });
 
 // CORS headers for cross-origin requests from indiesmenu
@@ -421,7 +421,7 @@ export async function POST(req: NextRequest) {
 
     // Create Stripe checkout session with custom amount enabled
     const sessionConfig: Stripe.Checkout.SessionCreateParams = {
-      payment_method_types: ['card'],
+      allowed_payment_method_types: ['card'], // endive: payment_method_types was removed; card only (Link, Apple/Google Pay are cards) because the webhook handles only synchronous payments
       line_items: [
         {
           price_data: {

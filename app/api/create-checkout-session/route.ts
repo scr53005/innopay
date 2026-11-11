@@ -8,7 +8,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   // This is set to resolve a specific TypeScript error in your environment.
   // In a standard Stripe integration, you would typically use the latest stable API version
   // found in Stripe's documentation (e.g., '2024-06-20').
-  apiVersion: '2025-06-30.basil',
+  apiVersion: '2026-10-28.endive',
 });
 
 export async function POST(req: NextRequest) {
@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
+      allowed_payment_method_types: ['card'], // endive: payment_method_types was removed; card only (Link, Apple/Google Pay are cards) because the webhook handles only synchronous payments
       line_items: [
         {
           price_data: {

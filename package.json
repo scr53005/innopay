@@ -42,7 +42,7 @@
     "react-dropzone": "^14.3.8",
     "react-toastify": "^11.0.5",
     "resend": "^6.5.2",
-    "stripe": "^18.3.0",
+    "stripe": "^23.1.0",
     "xml2js": "^0.6.2",
     "zxing-wasm": "3.1.6"
   },

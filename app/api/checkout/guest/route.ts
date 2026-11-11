@@ -8,7 +8,7 @@ import { createGuestCheckout } from '@/services/database';
 import { ArchivedFarmVendorError, assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-06-30.basil',
+  apiVersion: '2026-10-28.endive',
 });
 
 function isLocalOrLanHost(host: string | null): boolean {
@@ -153,7 +153,7 @@ export async function POST(req: NextRequest) {
 
     // Create Stripe checkout session
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
+      allowed_payment_method_types: ['card'], // endive: payment_method_types was removed; card only (Link, Apple/Google Pay are cards) because the webhook handles only synchronous payments
       line_items: [
         {
           price_data: {
