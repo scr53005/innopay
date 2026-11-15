@@ -53,6 +53,7 @@ import { assertFarmOrderRecipientActive } from '@/lib/farm-payment-guard';
 import { notifyIfFarmVendor } from '@/lib/notify-farm-paid';
 import { rewardOrder } from '@/lib/rubis-distribute';
 import { rubisOrderKey } from '@/lib/rubis';
+import { recordOrderPayer } from '@/lib/order-payer';
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -566,6 +567,11 @@ async function handleFlow7UnifiedApproach(
   const flow7VendorTxId = restaurantHbdTxId ?? restaurantEuroTxId;
   if (flow7VendorTxId) {
     await notifyIfFarmVendor({ recipient: restaurantAccount, memo: orderMemo, amountEur: orderCost, innopayTxId: flow7VendorTxId, customerAccount: accountName });
+    // Who paid this order, for the spoke's customer photos (lib/order-payer.ts).
+    after(() => recordOrderPayer({
+      recipient: restaurantAccount, memo: orderMemo, customerAccount: accountName, path: 'stripe',
+      orderTotal: orderCost, fiat: currencyConfig.fiat,
+    }));
     // RUBIS for the customer (RUBIS-PLAN.md); keyed on the order, so a retried webhook pays once.
     after(() => rewardOrder({
       orderKey: rubisOrderKey(restaurantAccount, orderMemo, `stripe:${session.id}`),
@@ -1294,6 +1300,10 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
 
   // RUBIS for the brand-new wallet's first order — only now that the account exists.
   if (restaurantHbdTxId || restaurantEuroTxId) {
+    after(() => recordOrderPayer({
+      recipient: targetRestaurant, memo: orderMemo, customerAccount: accountName, path: 'stripe',
+      orderTotal: orderCost, fiat: currencyConfig.fiat,
+    }));
     after(() => rewardOrder({
       orderKey: rubisOrderKey(targetRestaurant, orderMemo, `stripe:${session.id}`),
       customerAccount: accountName, recipient: targetRestaurant, orderTotal: orderCost, memo: orderMemo,

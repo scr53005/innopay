@@ -12,6 +12,7 @@ import { activeSpokeIdForAccount } from '@/lib/spoke-recipients';
 import { notifyFarmOrderPaid } from '@/lib/notify-farm-paid';
 import { rewardOrder } from '@/lib/rubis-distribute';
 import { rubisOrderKey } from '@/lib/rubis';
+import { recordOrderPayer } from '@/lib/order-payer';
 
 function corsJson(body: unknown, status: number) {
   const res = NextResponse.json(body, { status });
@@ -123,6 +124,10 @@ export async function POST(req: NextRequest) {
       if (recipientSpoke === 'innohatch') {
         await notifyFarmOrderPaid({ recipient, memo: finalMemo, amountEur: orderAmount, innopayTxId: transferTxId, customerAccount });
       }
+      // Who paid this order, for the spoke's customer photos (lib/order-payer.ts).
+      await recordOrderPayer({
+        recipient, memo: finalMemo, customerAccount, path: 'wallet', orderTotal: orderAmount, fiat: currencyConfig.fiat,
+      });
       await prisma.wallet_payment_claim.update({
         where: { customer_tx_id: customerTxId },
         data: { status: 'paid', restaurant_tx_id: transferTxId },

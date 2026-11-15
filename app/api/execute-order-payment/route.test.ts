@@ -11,10 +11,11 @@ const active = PrivateKey.fromLogin('alice', MASTER, 'active');
 
 const m = vi.hoisted(() => ({
   walletuser: vi.fn(), challenge: vi.fn(), sessionCreate: vi.fn(), pay: vi.fn(), getAccounts: vi.fn(), spokeOk: vi.fn(),
-  after: vi.fn(), reward: vi.fn(),
+  after: vi.fn(), reward: vi.fn(), payer: vi.fn(),
 }));
 vi.mock('next/server', async (orig) => ({ ...(await orig<typeof import('next/server')>()), after: m.after }));
 vi.mock('@/lib/rubis-distribute', () => ({ rewardOrder: m.reward }));
+vi.mock('@/lib/order-payer', () => ({ recordOrderPayer: m.payer }));
 vi.mock('@/lib/prisma', () => ({ default: {
   walletuser: { findUnique: m.walletuser },
   handoff_challenge: { create: m.challenge },
@@ -64,6 +65,10 @@ describe('POST /api/execute-order-payment', () => {
     await m.after.mock.calls[0][0]();
     expect(m.reward).toHaveBeenCalledWith(expect.objectContaining({
       orderKey: 'order:millewee:kcs-inno-ab12-cd34', customerAccount: 'alice', recipient: 'millewee', orderTotal: 3.9,
+    }));
+    // The spoke's customer photos need to know who paid (2026-11-14: wallet orders arrive from @innopay).
+    expect(m.payer).toHaveBeenCalledWith(expect.objectContaining({
+      recipient: 'millewee', customerAccount: 'alice', path: 'direct', orderTotal: 3.9, fiat: 'EUR',
     }));
   });
   it('refuses an unsigned request naming a victim account', async () => {

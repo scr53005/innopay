@@ -371,3 +371,24 @@ model spoke_account {
   @@index([hive_account])
   @@index([environment])
 }
+
+// Who paid which order (DISH-PHOTOS-PLAN.md §4). A wallet order (Flows 5, 6, 7, direct) reaches
+// the restaurant from @innopay, so the spoke cannot tell the paying customer from its own
+// transfers; it asks GET /api/orders/payer. order_key = 'order:<recipient>:<reference>', the
+// reference being the order's unique suffix ({tag}-inno-{r4}-{r4}). path: wallet | stripe | direct.
+// Also the CRM's record of who ordered what, when, for how much (CRM-PLAN.md §8): for Flows 5 and 7
+// (card) no customer transfer carries the reference on the chain, so this is the only link.
+// order_total / fiat / memo are null only for the rows written before 2026-11-14's second migration.
+model order_payer {
+  order_key        String   @id @db.VarChar(80)
+  reference        String   @db.VarChar(40)
+  customer_account String   @db.VarChar(16)
+  recipient        String   @db.VarChar(16)
+  path             String   @db.VarChar(10)
+  order_total      Decimal? @db.Decimal(10, 2) // fiat charged, tip included
+  fiat             String?  @db.VarChar(3)     // EUR, RON…
+  memo             String?  @db.Text           // the full order memo: items, table, tip
+  created_at       DateTime @default(now())
+
+  @@index([customer_account, recipient, created_at])
+}

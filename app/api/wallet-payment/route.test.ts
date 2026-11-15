@@ -6,8 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const m = vi.hoisted(() => ({
   findUnique: vi.fn(), updateMany: vi.fn(), update: vi.fn(), debtCreate: vi.fn(),
   transferHbd: vi.fn(), transferEuro: vi.fn(), getAccounts: vi.fn(), after: vi.fn(),
-  spokeOk: vi.fn(), notify: vi.fn(), reward: vi.fn(),
+  spokeOk: vi.fn(), notify: vi.fn(), reward: vi.fn(), payer: vi.fn(),
 }));
+vi.mock('@/lib/order-payer', () => ({ recordOrderPayer: m.payer }));
 vi.mock('next/server', async (orig) => ({ ...(await orig<typeof import('next/server')>()), after: m.after }));
 vi.mock('@/lib/prisma', () => ({ default: {
   wallet_payment_claim: { findUnique: m.findUnique, updateMany: m.updateMany, update: m.update },
@@ -101,6 +102,15 @@ describe('POST /api/wallet-payment', () => {
     expect(m.reward).toHaveBeenCalledWith({
       orderKey: 'order:millewee:kcs-inno-ab12-cd34', customerAccount: 'alice', recipient: 'millewee',
       orderTotal: 3.9, memo: 'Bud TABLE 4 kcs-inno-ab12-cd34',
+    });
+  });
+  it('records who paid the order, for the spoke\'s customer photos (the restaurant only sees @innopay)', async () => {
+    expect((await call(body())).status).toBe(200);
+    expect(m.payer).not.toHaveBeenCalled(); // after the response
+    await m.after.mock.calls[0][0]();
+    expect(m.payer).toHaveBeenCalledWith({
+      recipient: 'millewee', memo: 'Bud TABLE 4 kcs-inno-ab12-cd34', customerAccount: 'alice', path: 'wallet',
+      orderTotal: 3.9, fiat: 'EUR', // the CRM's "how much"
     });
   });
   it('falls back to the IOU token when innopay is short of HBD', async () => {

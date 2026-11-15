@@ -9,6 +9,7 @@ import { isOrderAuthFresh, verifyOrderAuth } from '@/lib/order-payment-auth';
 import { isActiveSpokeAccount } from '@/lib/spoke-recipients';
 import { rewardOrder } from '@/lib/rubis-distribute';
 import { rubisOrderKey } from '@/lib/rubis';
+import { recordOrderPayer } from '@/lib/order-payer';
 import { fetchTokenBalance } from '@/lib/leg-receipt';
 import { balanceAfterOrder } from '@/lib/order-balance';
 
@@ -129,11 +130,19 @@ export async function POST(req: NextRequest) {
       eurUsdRate: paymentResult.eurUsdRate
     });
 
-    // RUBIS for the customer, after the response (RUBIS-PLAN.md) — never delays the order.
-    after(() => rewardOrder({
-      orderKey: rubisOrderKey(restaurantAccount, orderMemo, `direct:${paymentResult.customerEuroTxId ?? authFields.nonce}`),
-      customerAccount: accountName, recipient: restaurantAccount, orderTotal: Number(orderAmount), memo: orderMemo,
-    }));
+    // After the response, never delaying the order: who paid it (the spoke's customer photos,
+    // lib/order-payer.ts), then RUBIS for the customer (RUBIS-PLAN.md).
+    after(async () => {
+      // This path is EUR-only (processOrderPayment moves EURO).
+      await recordOrderPayer({
+        recipient: restaurantAccount, memo: orderMemo, customerAccount: accountName, path: 'direct',
+        orderTotal: Number(orderAmount), fiat: 'EUR',
+      });
+      await rewardOrder({
+        orderKey: rubisOrderKey(restaurantAccount, orderMemo, `direct:${paymentResult.customerEuroTxId ?? authFields.nonce}`),
+        customerAccount: accountName, recipient: restaurantAccount, orderTotal: Number(orderAmount), memo: orderMemo,
+      });
+    });
 
     // STEP 4: Balance after the order. null = Hive-Engine was unreachable before paying: no
     // optimistic_balance in the redirect, and the spoke reads the chain instead.
