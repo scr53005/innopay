@@ -2,7 +2,11 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PrivateKey } from '@hiveio/dhive';
 import LandingPage from './page';
+
+// A real (test-only) WIF: the email pre-fill lookup is now signed with the active key.
+const testActiveKey = PrivateKey.fromLogin('alice', 'test-only-password', 'active');
 
 const state = vi.hoisted(() => ({ params: new URLSearchParams(), balance: 0, refetch: vi.fn(), router: { push: vi.fn() }, handoff: vi.fn(async () => '#mock-partner') }));
 vi.mock('next/navigation', () => ({ useSearchParams: () => state.params, useRouter: () => state.router }));
@@ -19,7 +23,7 @@ const response = (body: unknown, ok = true) => Promise.resolve({ ok, json: async
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   localStorage.clear(); window.history.replaceState({}, '', '/');
-  localStorage.setItem('innopay_accountName', 'alice'); localStorage.setItem('innopay_activePrivate', 'test-active');
+  localStorage.setItem('innopay_accountName', 'alice'); localStorage.setItem('innopay_activePrivate', testActiveKey.toString());
   localStorage.setItem('innopay_memoPrivate', 'test-memo'); localStorage.setItem('innopay_masterPassword', 'test-master');
   state.params = new URLSearchParams(); state.balance = 0; requests = [];
   state.handoff.mockClear();
@@ -28,7 +32,7 @@ beforeEach(() => {
     const url = String(input); requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (url === '/api/spokes') return response({ spokes: directory });
     if (url === '/api/fetch-hive-metadata') return response({ metadata: { avatarUri: '/alice.png' } });
-    if (url.startsWith('/api/account/email?')) return response({ found: true, email: 'alice@example.test' });
+    if (url === '/api/account/email') return response({ found: true, email: 'alice@example.test' });
     if (url === '/api/checkout/account') return response({ error: 'Checkout stopped by test before Stripe' }, false);
     throw new Error(`Unexpected request: ${url}`);
   }));
@@ -124,7 +128,7 @@ describe('wallet home', () => {
     state.params = new URLSearchParams({ topup_for: 'order', source: 'indiesmenu', account: 'victim', balance: '4', deficit: '7.5', table: '12', order_amount: '11.50', order_memo: 'Order at table 12', return_url: 'http://localhost:3001/menu?table=12' });
     await render();
     expect(localStorage.getItem('innopay_accountName')).toBe('alice');
-    expect(localStorage.getItem('innopay_activePrivate')).toBe('test-active');
+    expect(localStorage.getItem('innopay_activePrivate')).toBe(testActiveKey.toString());
     expect(requests.some(request => request.url.includes('credentials'))).toBe(false);
   });
 });

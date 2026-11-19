@@ -75,3 +75,15 @@ it('rejects malformed target account names before lookup', async () => {
   expect(mocks.db.walletuser.findFirst).not.toHaveBeenCalled();
   expect(mocks.send).not.toHaveBeenCalled();
 });
+
+it('does not send a recovery code to a revoked address (moved to another email)', async () => {
+  mocks.db.innouser.findUnique.mockResolvedValue(null); // not anybody's current email
+  mocks.db.email_verification.findFirst.mockResolvedValue(null); // history lookup ignores revoked rows
+  const response = await POST(new NextRequest('https://wallet.innopay.lu/api/verify/request-code', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'dead@old-provider.com' }),
+  }));
+  expect(await response.json()).toEqual({ found: false, manualImport: true });
+  expect(mocks.db.email_verification.findFirst.mock.calls[0][0].where).toEqual({ email: 'dead@old-provider.com', verified: true, revoked_at: null });
+  expect(mocks.send).not.toHaveBeenCalled();
+});

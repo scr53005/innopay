@@ -64,9 +64,12 @@ export async function POST(req: NextRequest) {
     trace('check_started');
 
     // STEP 1: Find most recent pending verification for this email
+    // Recovery codes only: an /api/email-change code for the same address must never be
+    // consumed (or have its attempts burned) here.
     const verification = await prisma.email_verification.findFirst({
       where: {
         email: sanitizedEmail,
+        purpose: 'recovery',
         verified: false,
         expires_at: { gt: new Date() } // Not expired
       },
@@ -160,6 +163,7 @@ export async function POST(req: NextRequest) {
         where: {
           email: sanitizedEmail,
           verified: true,
+          revoked_at: null, // a revoked address recovers nothing (HUB-USER-FEATURES-PLAN §2)
           id: { not: verification.id } // Exclude current verification
         },
         orderBy: { verified_at: 'desc' }

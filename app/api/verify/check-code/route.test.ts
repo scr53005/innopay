@@ -115,3 +115,18 @@ it('offers manual keys if the requested account has no recoverable key material'
   expect(await response.json()).toMatchObject({ success: false, manualImport: true });
   expect(db.email_verification.update).not.toHaveBeenCalled();
 });
+
+describe('recovery-email change (HUB-USER-FEATURES-PLAN §2)', () => {
+  it('only ever consumes RECOVERY codes, never a pending email-change code', async () => {
+    await POST(request());
+    expect(db.email_verification.findFirst.mock.calls[0][0].where).toMatchObject({ email: 'user@example.com', purpose: 'recovery', verified: false });
+  });
+  it('ignores revoked addresses on the verification-history path', async () => {
+    db.innouser.findUnique.mockResolvedValue(null); // not the current email: history path
+    db.email_verification.findFirst.mockResolvedValueOnce(fresh).mockResolvedValueOnce(null);
+    const response = await POST(request());
+    expect(response.status).toBe(404);
+    expect(db.email_verification.findFirst.mock.calls[1][0].where).toMatchObject({ verified: true, revoked_at: null });
+    expect(db.walletuser.findMany).not.toHaveBeenCalled();
+  });
+});

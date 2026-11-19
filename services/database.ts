@@ -74,9 +74,12 @@ export function nextAccountName(lastAccount: { accountName: string } | null): st
 }
 
 // Finds a user by email, including their associated seed and account data.
+// Case-insensitive: callers now pass lowercased addresses (lib/email-normalize.ts), but rows
+// written before 2026-11-19 may hold capitals. An exact match would miss them and the webhook
+// would then create a SECOND innouser for the same person.
 export async function findInnoUserByEmail(email: string) {
-  return prisma.innouser.findUnique({
-    where: { email: email },
+  return prisma.innouser.findFirst({
+    where: { email: { equals: email, mode: 'insensitive' } },
     include: { bip39seedandaccount: true }
   });
 }
@@ -210,13 +213,13 @@ export async function bookTopupToWalletOwner(
   }
   if (!customerEmail) return null;
 
-  let user = await prisma.innouser.findFirst({ where: { email: customerEmail } });
+  let user = await prisma.innouser.findFirst({ where: { email: { equals: customerEmail, mode: 'insensitive' } } });
   if (!user) {
     try {
       user = await prisma.innouser.create({ data: { email: customerEmail } });
     } catch {
       // Unique-race / drifted dupe — re-fetch rather than fail the top-up.
-      user = await prisma.innouser.findFirst({ where: { email: customerEmail } });
+      user = await prisma.innouser.findFirst({ where: { email: { equals: customerEmail, mode: 'insensitive' } } });
     }
   }
   if (!user) return null;

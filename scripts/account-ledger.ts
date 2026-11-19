@@ -7,6 +7,9 @@
  * Public APIs only, no keys, no database.
  */
 
+// A module, not a global script, so its top-level names cannot collide with other scripts'.
+export {};
+
 const HIVE_API = 'https://api.hive.blog';
 const HE_HISTORY = 'https://history.hive-engine.com/accountHistory';
 

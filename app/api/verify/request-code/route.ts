@@ -83,11 +83,13 @@ export async function POST(req: NextRequest) {
         userId = userByCurrent.id;
         console.log(`[VERIFY REQUEST] Found user by current email: user_id=${userId}`);
       } else {
-        // Option B: Check email_verification history
+        // Option B: Check email_verification history. A revoked address (the user moved
+        // to another recovery email, HUB-USER-FEATURES-PLAN §2) recovers nothing.
         const verifiedRecord = await prisma.email_verification.findFirst({
           where: {
             email: sanitizedEmail,
-            verified: true
+            verified: true,
+            revoked_at: null
           },
           orderBy: {
             verified_at: 'desc' // Most recent verification

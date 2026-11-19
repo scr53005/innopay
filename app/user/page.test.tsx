@@ -35,7 +35,7 @@ beforeEach(() => {
     const url = String(input); requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (url.includes('api.hive-engine.com')) return pendingBalance ? new Promise<Response>(() => {}) : response({ result: [{ balance: '12.50' }] });
     if (url === '/api/fetch-hive-metadata') return response({ metadata: { name: 'Alice', about: '', location: '', website: '', avatarUri: '/alice.png', backgroundUri: '' } });
-    if (url.startsWith('/api/account/email?')) return emailLookupAvailable
+    if (url === '/api/account/email') return emailLookupAvailable
       ? response({ found: associatedEmail !== null, email: associatedEmail })
       : Promise.resolve({ ok: false } as Response);
     if (url === '/api/suggest-username') return response({ suggestedUsername: 'inno-test' });
@@ -88,7 +88,7 @@ describe('existing wallet on /user', () => {
   it('displays the database email when the browser has no cached email', async () => {
     localStorage.removeItem('innopay_email');
     await render();
-    expect(requests.some(request => request.url === '/api/account/email?accountName=alice')).toBe(true);
+    expect(requests.some(request => request.url === '/api/account/email' && (request.body as { account?: string })?.account === 'alice')).toBe(true);
     expect(host.textContent).toContain('alice@example.test');
     const email = [...host.querySelectorAll('p')].find(p => p.textContent === 'alice@example.test');
     expect(email?.textContent).toBe('alice@example.test');
@@ -115,11 +115,14 @@ describe('existing wallet on /user', () => {
     await render();
     expect(host.querySelector('.hub-recharge-action')?.textContent).toBe('Top up my wallet');
     expect(host.querySelector('.hub-recharge-action')?.getAttribute('href')).toBe('/#top-up');
-    expect(host.querySelector('.hub-history')?.textContent).toContain('coming soon');
+    expect(host.querySelector('.hub-history a')?.getAttribute('href')).toBe('/user/history');
+    expect(host.querySelector('.hub-history')?.textContent).toBe('Your Innopay history');
     const recharge = host.querySelector('.hub-recharge-action')!;
     expect(recharge.compareDocumentPosition(host.querySelector('.hub-history')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const email = [...host.querySelectorAll('p')].find(p => p.textContent === 'alice@example.test');
     expect(email?.textContent).toBe('alice@example.test');
+    // "No longer have access?" sits on the existing label line, not a new row (HUB-USER-FEATURES-PLAN §2).
+    expect(host.querySelector('.hub-change-email')?.getAttribute('href')).toBe('/user/email');
   });
   it('shows the saved wallet during a pending refresh and while editing the profile', async () => {
     pendingBalance = true;
@@ -144,7 +147,7 @@ describe('existing wallet on /user', () => {
     window.history.replaceState({}, '', '/user?flow=pay_with_topup&restaurant=indies&table=12');
     await render();
     expect(host.querySelector('.hub-recharge-action')).toBeNull();
-    expect(requests.some(request => request.url.startsWith('/api/account/email?'))).toBe(false);
+    expect(requests.some(request => request.url === '/api/account/email')).toBe(false);
     expect(host.textContent).toContain('Continue to payment');
     expect(host.querySelector('.mw-account')?.getAttribute('href')).toBe('/user');
     expect(host.querySelector('.hub-home-link')?.getAttribute('href')).toBe('/?flow=pay_with_topup&restaurant=indies&table=12');

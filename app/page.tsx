@@ -13,6 +13,7 @@ import { useBalance } from '@/hooks/useBalance';
 import { useRubisBalance } from '@/hooks/useRubisBalance';
 import { useIsDevHost } from '@/hooks/useIsDevHost';
 import { clearSavedWallet, walletImportMessages } from '@/lib/wallet-import';
+import { fetchOwnAccountEmail } from '@/lib/account-email-client';
 
 import ForgetWalletButton from '@/app/components/ForgetWalletButton';
 
@@ -525,19 +526,10 @@ function TopUpContent() {
       // Fetch email for existing accounts to pre-fill Stripe form
       let userEmail: string | undefined;
       if (hasAccount && accountName) {
-        try {
-          const emailResponse = await fetch(`/api/account/email?accountName=${accountName}`);
-          if (emailResponse.ok) {
-            const emailData = await emailResponse.json();
-            if (emailData.found && emailData.email) {
-              userEmail = emailData.email;
-              console.log('[LANDING] Found email for pre-fill:', userEmail);
-            }
-          }
-        } catch (emailError) {
-          console.warn('[LANDING] Failed to fetch email for pre-fill:', emailError);
-          // Continue without email pre-fill
-        }
+        // Signed lookup (the endpoint no longer answers by name alone). null = continue
+        // without pre-fill, as before.
+        const lookup = await fetchOwnAccountEmail(accountName, localStorage.getItem('innopay_activePrivate'));
+        if (lookup?.email) userEmail = lookup.email;
       }
 
       // Order parameters, if the URL carries any (read from the URL)

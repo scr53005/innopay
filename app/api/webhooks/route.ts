@@ -11,6 +11,7 @@ import { sendCredentialEmail } from '@/services/credential-email';
 // Import email templates and Resend for refund notifications
 import { Resend } from 'resend';
 import { buildRefundEmail } from '@/lib/email-templates';
+import { normalizeEmail } from '@/lib/email-normalize';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -402,7 +403,8 @@ async function handleTopup(session: Stripe.Checkout.Session) {
 
   const { accountName, orderAmountEuro, orderMemo, table, restaurantAccount, restaurantId } = session.metadata!;
   const amountEuro = (session.amount_total || 0) / 100;
-  const customerEmail = session.customer_details?.email;
+  // Stored lowercased: every recovery lookup lowercases (lib/email-normalize.ts).
+  const customerEmail = normalizeEmail(session.customer_details?.email);
   const orderCost = orderAmountEuro ? parseFloat(orderAmountEuro) : 0;
   const isFlow7 = orderCost > 0 && orderMemo;
 
@@ -1014,7 +1016,8 @@ async function handleAccountCreation(session: Stripe.Checkout.Session) {
 
   const { accountName, orderAmountEuro, orderMemo, mockAccountCreation, restaurantAccount } = session.metadata!;
   const amountEuro = (session.amount_total || 0) / 100;
-  const customerEmail = session.customer_details?.email;
+  // Stored lowercased: every recovery lookup lowercases (lib/email-normalize.ts).
+  const customerEmail = normalizeEmail(session.customer_details?.email);
   const orderCost = orderAmountEuro ? parseFloat(orderAmountEuro) : 0;
   const isMockMode = mockAccountCreation === 'true';
   const flow = session.metadata?.flow;
@@ -1428,7 +1431,8 @@ async function handleMockAccountCreation(
 async function handleLegacyFlow(session: Stripe.Checkout.Session) {
   console.log(`[LEGACY] Processing legacy checkout: ${session.id}`);
 
-  const customerEmail = session.customer_details?.email;
+  // Stored lowercased: every recovery lookup lowercases (lib/email-normalize.ts).
+  const customerEmail = normalizeEmail(session.customer_details?.email);
   const amountInEuro = (session.amount_total || 0) / 100;
 
   if (!customerEmail) {

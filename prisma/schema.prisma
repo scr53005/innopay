@@ -27,6 +27,7 @@ model innouser {
   bonus               bonus[]
   walletuser          walletuser[]
   email_verification  email_verification[]
+  email_change        email_change[]
 }
 
 model topup {
@@ -265,11 +266,34 @@ model email_verification {
   verified    Boolean   @default(false)
   verified_at DateTime?
   ip_address  String?   @db.VarChar(45)
+  // 'recovery' (import by email, /api/verify/*) | 'email-change' (/api/email-change/*).
+  // A pending code of one purpose must never be consumed by the other flow.
+  purpose     String    @default("recovery") @db.VarChar(16)
+  // Set when the user moves to another recovery address: this row's email then no longer
+  // recovers anything through the verification-history path (a lost address can be
+  // recycled by its provider). HUB-USER-FEATURES-PLAN §2.
+  revoked_at  DateTime?
 
   innouser    innouser  @relation(fields: [user_id], references: [id])
 
   @@index([email, verified])
   @@index([user_id, verified])
+}
+
+// One row per completed recovery-email change (HUB-USER-FEATURES-PLAN §2). Audit only.
+model email_change {
+  id           String   @id @default(cuid())
+  user_id      Int
+  account_name String   @db.VarChar(16)
+  old_email    String   @db.VarChar(255)
+  new_email    String   @db.VarChar(255)
+  method       String   @db.VarChar(16) // 'signed' (wallet on the device) | 'support' (operator, later)
+  ip_address   String?  @db.VarChar(45)
+  created_at   DateTime @default(now())
+
+  innouser     innouser @relation(fields: [user_id], references: [id])
+
+  @@index([user_id])
 }
 
 model spoke {

@@ -8,6 +8,9 @@ import confetti from 'canvas-confetti';
 import Image from 'next/image';
 import { PrivateKey } from '@hiveio/dhive';
 import { newOrderAuthNonce, signOrderAuth } from '@/lib/order-payment-auth';
+import { fetchOwnAccountEmail } from '@/lib/account-email-client';
+import { historyMessages } from '@/lib/history/messages';
+import { emailChangeMessages } from '@/lib/email-change-messages';
 import WalletHubHeader from '@/app/components/WalletHubHeader';
 import WalletHubFrame from '@/app/components/WalletHubFrame';
 import HubMiniWallet from '@/app/components/HubMiniWallet';
@@ -155,7 +158,6 @@ const translations = {
     orderAmount: "Montant de la commande:",
     topupRequired: "Rechargement requis:",
     continueButton: "Continuer",
-    historyButton: "Votre historique Innopay (bientôt)"
   },
   en: {
     // Account creation form
@@ -197,7 +199,6 @@ const translations = {
     orderAmount: "Order amount:",
     topupRequired: "Top-up required:",
     continueButton: "Continue",
-    historyButton: "Your Innopay history (coming soon)"
   },
   de: {
     // Account creation form
@@ -239,7 +240,6 @@ const translations = {
     orderAmount: "Bestellbetrag:",
     topupRequired: "Aufladung erforderlich:",
     continueButton: "Fortsetzen",
-    historyButton: "Ihre Innopay-Historie (bald verfügbar)"
   },
   lb: {
     // Account creation form
@@ -281,7 +281,6 @@ const translations = {
     orderAmount: "Bestellmontant:",
     topupRequired: "Oplueden néideg:",
     continueButton: "Weidermachen",
-    historyButton: "Är Innopay Geschicht (geschwënn)"
   }
 };
 
@@ -336,14 +335,12 @@ export default function HiveAccountCreationPage() {
   useEffect(() => {
     if (!displayedAccountName || hasRestaurantContext(navigationSearch)) return;
     let current = true;
-    fetch(`/api/account/email?accountName=${encodeURIComponent(displayedAccountName)}`)
-      .then(response => response.ok ? response.json() : null)
-      .then(data => {
-        if (!current || !data || typeof data.found !== 'boolean') return;
-        const email = data.found && typeof data.email === 'string' && data.email.trim() ? data.email.trim() : undefined;
-        setExistingAccount(account => account?.accountName === displayedAccountName && account.email !== email ? { ...account, email } : account);
-      })
-      .catch(() => { /* Preserve the cached display if the account service is unavailable. */ });
+    // Signed lookup; null (no key, service down) preserves the cached display.
+    fetchOwnAccountEmail(displayedAccountName, localStorage.getItem('innopay_activePrivate')).then(lookup => {
+      if (!current || !lookup) return;
+      const email = lookup.email;
+      setExistingAccount(account => account?.accountName === displayedAccountName && account.email !== email ? { ...account, email } : account);
+    });
     return () => { current = false; };
   }, [displayedAccountName, navigationSearch]);
 
@@ -2329,7 +2326,11 @@ export default function HiveAccountCreationPage() {
                   {existingAccount?.email && (
                     <>
                       <p className="text-xs text-blue-800 mb-0.5">
-                        {translations[language].registeredWith}
+                        {translations[language].registeredWith}{' '}
+                        {/* Lost access to that mailbox? HUB-USER-FEATURES-PLAN §2 (A1). */}
+                        <a href="/user/email" className="hub-change-email underline whitespace-nowrap">
+                          {emailChangeMessages[language].entryLink}
+                        </a>
                       </p>
                       <p className="font-mono text-lg text-blue-900 break-all mb-2">
                         {existingAccount.email}
@@ -2435,9 +2436,9 @@ export default function HiveAccountCreationPage() {
                   <ForgetWalletButton onForget={forgetWallet} language={language} />
                 </div>
                 <div className="hub-history">
-                  <button type="button" aria-disabled="true" className="w-full rounded-lg bg-gray-100 text-gray-600 text-sm px-4 py-2.5 cursor-default">
-                    {translations[language].historyButton}
-                  </button>
+                  <a href="/user/history" className="block w-full text-center rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm px-4 py-2.5">
+                    {historyMessages[language].entryLink}
+                  </a>
                 </div>
               </>
             ) : (
